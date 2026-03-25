@@ -330,11 +330,11 @@ function parseAmount(value: unknown) {
 }
 
 function formatCurrency(value: number | null | undefined) {
-  if (value === null || value === undefined || value === "") return "";
+  if (value === null || value === undefined) return "";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-  }).format(Number(value));
+  }).format(value);
 }
 
 async function syncInvoiceFromUpload(invoice: string, type: string) {
