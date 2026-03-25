@@ -81,7 +81,7 @@ function normalizeDocDate(raw: string) {
 function parseMetadataFromText(text: string) {
   const normalizedText = text
     .replace(/\u00a0/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[ \t]+/g, " ")
     .trim();
 
   const lowerText = normalizedText.toLowerCase();
@@ -136,21 +136,14 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  const invoicePatterns = isStrictWMInvoice
-    ? [
-        /Invoice\s+no\.?\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
-        /Invoice\s+number\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
-        /Invoice\s*#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
-        /Invoice#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
-      ]
-    : [
-        /Invoice\s+Number\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
-        /Invoice\s*#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
-        /Invoice#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
-        /Invoice\s+No\.?\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
-      ];
+  // 1) Strong direct invoice match first
+  const strongInvoicePatterns = [
+    /\b(CN\d{9,})\b/i,
+    /\b(CS\d{6,})\b/i,
+    /\b([A-Z]{1,6}\d{6,})\b/,
+  ];
 
-  for (const pattern of invoicePatterns) {
+  for (const pattern of strongInvoicePatterns) {
     const match = normalizedText.match(pattern);
     if (match?.[1]) {
       invoice = match[1].trim();
@@ -158,10 +151,27 @@ function parseMetadataFromText(text: string) {
     }
   }
 
+  // 2) Label-based match, including line-broken layouts
   if (invoice === "Unknown") {
-    const fallbackInvoice = normalizedText.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{2,})\b/);
-    if (fallbackInvoice?.[1]) {
-      invoice = fallbackInvoice[1];
+    const invoicePatterns = [
+      /Invoice\s*(?:Number|No\.?|#)?\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
+      /Invoice\s*(?:Number|No\.?|#)?\s*\n\s*([A-Z0-9.\-\/]+)/i,
+    ];
+
+    for (const pattern of invoicePatterns) {
+      const match = text.match(pattern);
+      if (match?.[1] && !/^invoice$/i.test(match[1].trim())) {
+        invoice = match[1].trim();
+        break;
+      }
+    }
+  }
+
+  // 3) Last fallback
+  if (invoice === "Unknown") {
+    const fallbackInvoice = normalizedText.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{5,})\b/);
+    if (fallbackInvoice?.[1] && !/^invoice$/i.test(fallbackInvoice[1].trim())) {
+      invoice = fallbackInvoice[1].trim();
     }
   }
 
