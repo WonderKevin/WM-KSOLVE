@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ChevronDown,
   ChevronRight,
@@ -10,9 +11,11 @@ import {
   Upload,
   BadgeDollarSign,
   Menu,
+  LogOut,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/lib/supabase/client";
 import DashboardView from "@/components/Views/DashboardView";
 import BrokerCommissionView from "@/components/Views/BrokerCommissionView";
 import AccountingSummaryView from "@/components/Views/AccountingSummaryView";
@@ -108,6 +111,9 @@ function SidebarItem({
 }
 
 export default function WMKsolveApp() {
+  const router = useRouter();
+
+  const [checkingSession, setCheckingSession] = useState(true);
   const [activeKey, setActiveKey] = useState("dashboard");
   const [openGroups, setOpenGroups] = useState({
     accounting: false,
@@ -115,6 +121,52 @@ export default function WMKsolveApp() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [invoiceUploadSignal, setInvoiceUploadSignal] = useState(0);
   const [documentUploadSignal, setDocumentUploadSignal] = useState(0);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const checkSession = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      if (!session) {
+        router.replace("/login");
+        return;
+      }
+
+      setCheckingSession(false);
+    };
+
+    checkSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        router.replace("/login");
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [router]);
+
+  const handleLogout = async () => {
+    try {
+      setLoggingOut(true);
+      await supabase.auth.signOut();
+      router.replace("/login");
+      router.refresh();
+    } finally {
+      setLoggingOut(false);
+    }
+  };
 
   const titleMap: Record<string, string> = {
     dashboard: "Dashboard",
@@ -145,6 +197,16 @@ export default function WMKsolveApp() {
         return <DashboardView />;
     }
   };
+
+  if (checkingSession) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
+        <div className="rounded-3xl border border-slate-200 bg-white px-6 py-4 text-sm text-slate-500 shadow-sm">
+          Checking session...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-slate-100">
@@ -199,36 +261,49 @@ export default function WMKsolveApp() {
               </div>
             </div>
 
-            {activeKey === "invoices" && (
-              <div className="flex items-center gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="rounded-2xl border-slate-200"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setInvoiceUploadSignal((prev) => prev + 1);
-                  }}
-                >
-                  <Upload className="mr-2 h-4 w-4" />
-                  Upload Ksolve Invoices
-                </Button>
+            <div className="flex items-center gap-3">
+              {activeKey === "invoices" && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-2xl border-slate-200"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setInvoiceUploadSignal((prev) => prev + 1);
+                    }}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload Ksolve Invoices
+                  </Button>
 
-                <Button
-                  type="button"
-                  className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setDocumentUploadSignal((prev) => prev + 1);
-                  }}
-                >
-                  <Upload className="mr-2 h-4 w-4" />
-                  Upload Files
-                </Button>
-              </div>
-            )}
+                  <Button
+                    type="button"
+                    className="rounded-2xl bg-slate-900 hover:bg-slate-800"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDocumentUploadSignal((prev) => prev + 1);
+                    }}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload Files
+                  </Button>
+                </>
+              )}
+
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-2xl border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                onClick={handleLogout}
+                disabled={loggingOut}
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                {loggingOut ? "Logging out..." : "Logout"}
+              </Button>
+            </div>
           </div>
         </div>
 

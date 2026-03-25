@@ -29,12 +29,12 @@ type CheckGroup = {
 };
 
 function formatCurrency(value: number | null | undefined) {
-  if (value === null || value === undefined) return "";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-  }).format(Number(value));
-}
+    if (value == null) return "";
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+    }).format(value);
+  }
 
 function groupByCheck(rows: InvoiceRecord[]): CheckGroup[] {
   const map = new Map<string, CheckGroup>();
