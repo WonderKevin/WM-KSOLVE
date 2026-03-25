@@ -1,0 +1,997 @@
+"use client";
+
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Search, Trash2, FileText, XCircle, FileSpreadsheet } from "lucide-react";
+import { createWorker } from "tesseract.js";
+import * as XLSX from "xlsx";
+
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { supabase } from "@/lib/supabase/client";
+
+type UploadRecord = {
+  id: number;
+  created_at: string;
+  file_name: string;
+  file_path: string;
+  file_type: string | null;
+  category: string | null;
+  invoice: string | null;
+  pdf_date: string | null;
+};
+
+type InvoiceRecord = {
+  id: number;
+  created_at: string;
+  month: string | null;
+  check_date: string | null;
+  check_number: string | null;
+  check_amt: number | null;
+  invoice_number: string | null;
+  invoice_amt: number | null;
+  dc_name: string | null;
+  status: string | null;
+  type: string | null;
+  doc_status: boolean | null;
+};
+
+type ToastType = "success" | "error" | "info";
+
+const DOCUMENT_BUCKET = "document-uploads";
+
+function normalizeType(raw: string) {
+  const cleaned = raw.replace(/\s+/g, " ").trim().toLowerCase();
+
+  if (/customer\s+spoils\s+allowance/i.test(cleaned)) return "Customer Spoils Allowance";
+  if (/customer\s+spoilage\s+natural/i.test(cleaned)) return "Customer Spoils Allowance";
+  if (/customer\s+spoilage/i.test(cleaned)) return "Customer Spoils Allowance";
+
+  if (/pass\s+thru\s+deduction/i.test(cleaned) || /pass\s+through\s+deduction/i.test(cleaned)) {
+    return "Pass Thru Deduction";
+  }
+
+  if (/new\s+item\s+setup\s+fee/i.test(cleaned) || /new\s+item\s+set\s*up\s+fee/i.test(cleaned)) {
+    return "New Item Setup Fee";
+  }
+
+  if (/new\s+item\s+setup/i.test(cleaned) || /new\s+item\s+set\s*up/i.test(cleaned)) {
+    return "New Item Setup";
+  }
+
+  if (/intro\s+allowance\s+audit/i.test(cleaned)) return "Intro Allowance Audit";
+  if (/introductory\s+fee/i.test(cleaned)) return "Introductory Fee";
+
+  if (/wm\s+invoice/i.test(cleaned)) return "WM Invoice";
+
+  return raw.replace(/\s+/g, " ").trim() || "Unknown";
+}
+
+function normalizeDocDate(raw: string) {
+  const cleaned = raw.replace(/\s+/g, "").trim();
+  const match = cleaned.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (!match) return raw.trim();
+
+  let [, mm, dd, yyyy] = match;
+  if (yyyy.length === 2) yyyy = `20${yyyy}`;
+
+  return `${mm.padStart(2, "0")}/${dd.padStart(2, "0")}/${yyyy}`;
+}
+
+function parseMetadataFromText(text: string) {
+  const normalizedText = text.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  const lowerText = normalizedText.toLowerCase();
+
+  let invoice = "Unknown";
+  let category = "Unknown";
+  let pdf_date = "Unknown";
+
+  const isStrictWMInvoice =
+    /wonder\s+monday/i.test(lowerText) &&
+    /invoice\s+details/i.test(lowerText) &&
+    /invoice\s+no\.?/i.test(lowerText) &&
+    /invoice\s+date/i.test(lowerText) &&
+    /ship\s+date/i.test(lowerText) &&
+    /bill\s+to/i.test(lowerText) &&
+    /ship\s+to/i.test(lowerText);
+
+  if (isStrictWMInvoice) {
+    category = "WM Invoice";
+  } else {
+    const knownTypeMatchers = [
+      { pattern: /customer\s+spoils\s+allowance/i, value: "Customer Spoils Allowance" },
+      { pattern: /customer\s+spoilage\s+natural/i, value: "Customer Spoils Allowance" },
+      { pattern: /customer\s+spoilage/i, value: "Customer Spoils Allowance" },
+      { pattern: /pass\s+thru\s+deduction/i, value: "Pass Thru Deduction" },
+      { pattern: /pass\s+through\s+deduction/i, value: "Pass Thru Deduction" },
+      { pattern: /new\s+item\s+setup\s+fee/i, value: "New Item Setup Fee" },
+      { pattern: /new\s+item\s+set\s*up\s+fee/i, value: "New Item Setup Fee" },
+      { pattern: /new\s+item\s+setup/i, value: "New Item Setup" },
+      { pattern: /new\s+item\s+set\s*up/i, value: "New Item Setup" },
+      { pattern: /intro\s+allowance\s+audit/i, value: "Intro Allowance Audit" },
+      { pattern: /introductory\s+fee/i, value: "Introductory Fee" },
+    ];
+
+    for (const matcher of knownTypeMatchers) {
+      if (matcher.pattern.test(lowerText)) {
+        category = matcher.value;
+        break;
+      }
+    }
+
+    if (category === "Unknown") {
+      const typeMatch = normalizedText.match(
+        /(?:Type|Description|Category)\s*[:\-]?\s*([A-Za-z][A-Za-z\s]{3,100})/i
+      );
+      if (typeMatch?.[1]) {
+        category = normalizeType(typeMatch[1]);
+      }
+    }
+  }
+
+  const invoicePatterns = isStrictWMInvoice
+    ? [
+        /Invoice\s+no\.?\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
+        /Invoice\s+number\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
+        /Invoice\s*#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
+        /Invoice#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
+      ]
+    : [
+        /Invoice\s+Number\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
+        /Invoice\s*#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
+        /Invoice#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
+        /Invoice\s+No\.?\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
+      ];
+
+  for (const pattern of invoicePatterns) {
+    const match = normalizedText.match(pattern);
+    if (match?.[1]) {
+      invoice = match[1].trim();
+      break;
+    }
+  }
+
+  if (invoice === "Unknown") {
+    const fallbackInvoice = normalizedText.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{2,})\b/);
+    if (fallbackInvoice?.[1]) {
+      invoice = fallbackInvoice[1];
+    }
+  }
+
+  const datePatterns = [
+    /Invoice\s+date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+    /Date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+    /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/,
+    /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2})\b/,
+  ];
+
+  for (const pattern of datePatterns) {
+    const match = normalizedText.match(pattern);
+    if (match?.[1]) {
+      pdf_date = normalizeDocDate(match[1]);
+      break;
+    }
+  }
+
+  return { category, invoice, pdf_date };
+}
+
+async function extractTextWithPdfJs(file: File) {
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url
+  ).toString();
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+  let fullText = "";
+
+  for (let pageNum = 1; pageNum <= Math.min(pdf.numPages, 3); pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items.map((item: any) => ("str" in item ? item.str : "")).join(" ");
+    fullText += ` ${pageText}`;
+  }
+
+  return { pdf, fullText: fullText.trim() };
+}
+
+async function extractTextWithOcr(pdf: any) {
+  const worker = await createWorker("eng");
+  let fullText = "";
+
+  try {
+    for (let pageNum = 1; pageNum <= Math.min(pdf.numPages, 3); pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 2.0 });
+
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      if (!context) continue;
+
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({
+        canvasContext: context,
+        viewport,
+      }).promise;
+
+      const imageDataUrl = canvas.toDataURL("image/png");
+      const result = await worker.recognize(imageDataUrl);
+      fullText += ` ${result.data.text}`;
+    }
+  } finally {
+    await worker.terminate();
+  }
+
+  return fullText.trim();
+}
+
+async function extractPdfMetadata(file: File) {
+  const { pdf, fullText } = await extractTextWithPdfJs(file);
+  let parsed = parseMetadataFromText(fullText);
+
+  const enoughText =
+    parsed.category !== "Unknown" || parsed.invoice !== "Unknown" || parsed.pdf_date !== "Unknown";
+
+  if (!enoughText) {
+    const ocrText = await extractTextWithOcr(pdf);
+    parsed = parseMetadataFromText(ocrText);
+  }
+
+  return parsed;
+}
+
+async function extractExcelMetadata(file: File) {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
+
+  let fullText = "";
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<any[]>(sheet, {
+      header: 1,
+      raw: false,
+      defval: "",
+    });
+
+    const sheetText = rows
+      .flat()
+      .map((cell) => String(cell || "").trim())
+      .filter(Boolean)
+      .join(" ");
+
+    fullText += ` ${sheetText}`;
+  }
+
+  return parseMetadataFromText(fullText);
+}
+
+async function extractDocumentMetadata(file: File): Promise<{
+  category: string;
+  invoice: string;
+  pdf_date: string;
+  file_type: "pdf" | "excel";
+}> {
+  const lowerName = file.name.toLowerCase();
+
+  if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
+    const parsed = await extractExcelMetadata(file);
+    return { ...parsed, file_type: "excel" };
+  }
+
+  const parsed = await extractPdfMetadata(file);
+  return { ...parsed, file_type: "pdf" };
+}
+
+function toMonthName(value: unknown) {
+  if (value === null || value === undefined || value === "") return "";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-US", { month: "long" });
+}
+
+function normalizeExcelDate(value: unknown) {
+  if (typeof value === "number") {
+    const jsDate = XLSX.SSF.parse_date_code(value);
+    if (!jsDate) return "";
+    const mm = String(jsDate.m).padStart(2, "0");
+    const dd = String(jsDate.d).padStart(2, "0");
+    const yyyy = String(jsDate.y);
+    return `${mm}/${dd}/${yyyy}`;
+  }
+
+  if (!value) return "";
+
+  const str = String(value).trim();
+  const date = new Date(str);
+  if (!Number.isNaN(date.getTime())) {
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    const yyyy = String(date.getFullYear());
+    return `${mm}/${dd}/${yyyy}`;
+  }
+
+  return str;
+}
+
+function parseAmount(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return value;
+
+  const cleaned = String(value).replace(/[$,]/g, "").trim();
+  const num = Number(cleaned);
+  return Number.isNaN(num) ? null : num;
+}
+
+function formatCurrency(value: number | null | undefined) {
+  if (value === null || value === undefined || value === "") return "";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(Number(value));
+}
+
+async function syncInvoiceFromUpload(invoice: string, type: string) {
+  if (!invoice || invoice === "Unknown") return;
+
+  await supabase
+    .from("invoices")
+    .update({
+      type: type === "Unknown" ? "" : type,
+      doc_status: true,
+    })
+    .eq("invoice_number", invoice);
+}
+
+export default function InvoicesView({
+  invoiceUploadSignal,
+  documentUploadSignal,
+}: {
+  invoiceUploadSignal: number;
+  documentUploadSignal: number;
+}) {
+  const [rows, setRows] = useState<InvoiceRecord[]>([]);
+  const [uploads, setUploads] = useState<UploadRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState<{ show: boolean; text: string; type: ToastType }>({
+    show: false,
+    text: "",
+    type: "success",
+  });
+  const [searchTerm, setSearchTerm] = useState("");
+  const [monthFilter, setMonthFilter] = useState("Month");
+  const [documentFilter, setDocumentFilter] = useState("Documents");
+  const [deleteMonth, setDeleteMonth] = useState("Delete Month");
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+
+  const invoiceInputRef = useRef<HTMLInputElement | null>(null);
+  const documentInputRef = useRef<HTMLInputElement | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastInvoiceUploadSignalRef = useRef(0);
+  const lastDocumentUploadSignalRef = useRef(0);
+
+  const showToast = (text: string, type: ToastType = "success") => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+
+    setToast({ show: true, text, type });
+
+    toastTimerRef.current = setTimeout(() => {
+      setToast((prev) => ({ ...prev, show: false }));
+    }, 2500);
+  };
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+
+      const [{ data: invoiceData, error: invoiceError }, { data: uploadData, error: uploadError }] =
+        await Promise.all([
+          supabase.from("invoices").select("*").order("check_date", { ascending: false }),
+          supabase.from("uploads").select("*"),
+        ]);
+
+      if (invoiceError) throw invoiceError;
+      if (uploadError) throw uploadError;
+
+      setRows(invoiceData || []);
+      setUploads(uploadData || []);
+    } catch (error: any) {
+      showToast(error.message || "Failed to load invoices.", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (invoiceUploadSignal > 0 && invoiceUploadSignal !== lastInvoiceUploadSignalRef.current) {
+      lastInvoiceUploadSignalRef.current = invoiceUploadSignal;
+      invoiceInputRef.current?.click();
+    }
+  }, [invoiceUploadSignal]);
+
+  useEffect(() => {
+    if (documentUploadSignal > 0 && documentUploadSignal !== lastDocumentUploadSignalRef.current) {
+      lastDocumentUploadSignalRef.current = documentUploadSignal;
+      documentInputRef.current?.click();
+    }
+  }, [documentUploadSignal]);
+
+  const uploadMap = useMemo(() => {
+    const map = new Map<string, UploadRecord>();
+    for (const upload of uploads) {
+      if (upload.invoice) map.set(upload.invoice, upload);
+    }
+    return map;
+  }, [uploads]);
+
+  const monthOptions = useMemo(() => {
+    return Array.from(new Set(rows.map((r) => r.month || ""))).filter(Boolean);
+  }, [rows]);
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      const search = searchTerm.toLowerCase();
+      const hasDocument = !!(row.invoice_number && uploadMap.has(row.invoice_number));
+      const liveType = row.invoice_number ? uploadMap.get(row.invoice_number)?.category || "" : "";
+
+      const matchesMonth = monthFilter === "Month" || row.month === monthFilter;
+
+      const matchesDocument =
+        documentFilter === "Documents" ||
+        (documentFilter === "With Document" && hasDocument) ||
+        (documentFilter === "Without Document" && !hasDocument);
+
+      const matchesSearch =
+        (row.invoice_number || "").toLowerCase().includes(search) ||
+        (row.dc_name || "").toLowerCase().includes(search) ||
+        liveType.toLowerCase().includes(search) ||
+        (row.check_number || "").toLowerCase().includes(search) ||
+        String(row.check_amt ?? "").toLowerCase().includes(search) ||
+        (row.status || "").toLowerCase().includes(search);
+
+      return matchesMonth && matchesDocument && matchesSearch;
+    });
+  }, [rows, searchTerm, monthFilter, documentFilter, uploadMap]);
+
+  const openDocumentByInvoice = async (invoiceNumber: string | null) => {
+    if (!invoiceNumber) return;
+
+    const uploadRow = uploadMap.get(invoiceNumber);
+    if (!uploadRow?.file_path) return;
+
+    const { data, error } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .createSignedUrl(uploadRow.file_path, 60);
+
+    if (!error && data?.signedUrl) {
+      window.open(data.signedUrl, "_blank");
+    } else {
+      console.error("Open document error:", error);
+      showToast("Unable to open file.", "error");
+    }
+  };
+
+  const handleInvoiceExcelUpload = async (file: File) => {
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+
+      const mappedRows = json.map((row) => {
+        const checkDate = normalizeExcelDate(row["Check Date"]);
+        const invoiceNumber = String(row["Invoice #"] || "").trim();
+        const matchedUpload = uploadMap.get(invoiceNumber);
+
+        return {
+          month: toMonthName(checkDate),
+          check_date: checkDate,
+          check_number: String(row["Check #"] || "").trim(),
+          check_amt:
+            parseAmount(row["Check Amt"]) ??
+            parseAmount(row["Check Amount"]) ??
+            parseAmount(row["Check Amt "]) ??
+            null,
+          invoice_number: invoiceNumber,
+          invoice_amt: parseAmount(row["Invoice Amt"]) ?? 0,
+          dc_name: String(row["DC Name"] || "").trim(),
+          status: String(row["Status"] || "").trim(),
+          type: matchedUpload?.category || "",
+          doc_status: !!matchedUpload,
+        };
+      });
+
+      for (const row of mappedRows) {
+        if (!row.invoice_number) continue;
+
+        const { error } = await supabase.from("invoices").upsert(row, { onConflict: "invoice_number" });
+        if (error) throw error;
+      }
+
+      showToast("Invoice file uploaded successfully.", "success");
+      await loadData();
+    } catch (error: any) {
+      console.error("Invoice upload error:", error);
+      showToast(error.message || "Invoice upload failed.", "error");
+    }
+  };
+
+  const handleInvoiceExcelChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (!selectedFile) return;
+
+    const confirmed = window.confirm("Are you sure you want to upload this file?");
+    if (!confirmed) {
+      if (invoiceInputRef.current) {
+        invoiceInputRef.current.value = "";
+      }
+      return;
+    }
+
+    await handleInvoiceExcelUpload(selectedFile);
+
+    if (invoiceInputRef.current) {
+      invoiceInputRef.current.value = "";
+    }
+  };
+
+  const uploadNewDocument = async (
+    file: File,
+    metadata: {
+      category: string;
+      invoice: string;
+      pdf_date: string;
+      file_type: "pdf" | "excel";
+    }
+  ) => {
+    const cleanName = file.name.replace(/\s+/g, "-");
+    const filePath = `${Date.now()}-${cleanName}`;
+
+    const contentType =
+      metadata.file_type === "excel"
+        ? file.name.toLowerCase().endsWith(".xls")
+          ? "application/vnd.ms-excel"
+          : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        : "application/pdf";
+
+    const { error: storageError } = await supabase.storage.from(DOCUMENT_BUCKET).upload(filePath, file, {
+      cacheControl: "3600",
+      upsert: false,
+      contentType,
+    });
+
+    if (storageError) {
+      console.error("Storage upload error:", storageError);
+      throw new Error(`${file.name}: ${storageError.message || "upload failed."}`);
+    }
+
+    const { error: dbError } = await supabase.from("uploads").insert({
+      file_name: file.name,
+      file_path: filePath,
+      file_type: metadata.file_type,
+      category: metadata.category,
+      invoice: metadata.invoice,
+      pdf_date: metadata.pdf_date,
+    });
+
+    if (dbError) {
+      console.error("Uploads table insert error:", dbError);
+      throw new Error(`${file.name}: ${dbError.message || "database save failed."}`);
+    }
+
+    await syncInvoiceFromUpload(metadata.invoice, metadata.category);
+  };
+
+  const replaceExistingDocument = async (
+    existingUpload: UploadRecord,
+    file: File,
+    metadata: {
+      category: string;
+      invoice: string;
+      pdf_date: string;
+      file_type: "pdf" | "excel";
+    }
+  ) => {
+    const confirmReplace = window.confirm(
+      `A document already exists for invoice ${metadata.invoice}. Do you want to replace it with ${file.name}?`
+    );
+
+    if (!confirmReplace) {
+      return { skipped: true };
+    }
+
+    if (existingUpload.file_path) {
+      const { error: removeError } = await supabase.storage.from(DOCUMENT_BUCKET).remove([existingUpload.file_path]);
+
+      if (removeError) {
+        console.error("Storage remove error:", removeError);
+      }
+    }
+
+    const cleanName = file.name.replace(/\s+/g, "-");
+    const filePath = `${Date.now()}-${cleanName}`;
+
+    const contentType =
+      metadata.file_type === "excel"
+        ? file.name.toLowerCase().endsWith(".xls")
+          ? "application/vnd.ms-excel"
+          : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        : "application/pdf";
+
+    const { error: storageError } = await supabase.storage.from(DOCUMENT_BUCKET).upload(filePath, file, {
+      cacheControl: "3600",
+      upsert: false,
+      contentType,
+    });
+
+    if (storageError) {
+      console.error("Storage replace upload error:", storageError);
+      throw new Error(`${file.name}: ${storageError.message || "upload failed."}`);
+    }
+
+    const { error: dbError } = await supabase
+      .from("uploads")
+      .update({
+        file_name: file.name,
+        file_path: filePath,
+        file_type: metadata.file_type,
+        category: metadata.category,
+        invoice: metadata.invoice,
+        pdf_date: metadata.pdf_date,
+      })
+      .eq("id", existingUpload.id);
+
+    if (dbError) {
+      console.error("Uploads table update error:", dbError);
+      throw new Error(`${file.name}: ${dbError.message || "database update failed."}`);
+    }
+
+    await syncInvoiceFromUpload(metadata.invoice, metadata.category);
+
+    return { replaced: true };
+  };
+
+  const handleDocumentChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    if (selectedFiles.length === 0) return;
+
+    const confirmed = window.confirm(
+      selectedFiles.length === 1
+        ? "Are you sure you want to upload this file?"
+        : `Are you sure you want to upload ${selectedFiles.length} files?`
+    );
+
+    if (!confirmed) {
+      if (documentInputRef.current) {
+        documentInputRef.current.value = "";
+      }
+      return;
+    }
+
+    try {
+      let successCount = 0;
+      let replaceCount = 0;
+      let skippedCount = 0;
+
+      for (const file of selectedFiles) {
+        const metadata = await extractDocumentMetadata(file);
+
+        if (metadata.invoice === "Unknown") {
+          showToast(`${file.name}: invoice reference not found.`, "error");
+          skippedCount++;
+          continue;
+        }
+
+        const { data: invoiceMatch, error: invoiceMatchError } = await supabase
+          .from("invoices")
+          .select("id")
+          .eq("invoice_number", metadata.invoice)
+          .limit(1);
+
+        if (invoiceMatchError) {
+          console.error("Invoice match lookup error:", invoiceMatchError);
+          showToast(`${file.name}: invoice lookup failed.`, "error");
+          skippedCount++;
+          continue;
+        }
+
+        if (!invoiceMatch || invoiceMatch.length === 0) {
+          showToast(`${file.name}: invoice ${metadata.invoice} is not in the invoices file.`, "error");
+          skippedCount++;
+          continue;
+        }
+
+        const { data: dup, error: dupError } = await supabase
+          .from("uploads")
+          .select("*")
+          .eq("invoice", metadata.invoice)
+          .limit(1);
+
+        if (dupError) {
+          console.error("Duplicate lookup error:", dupError);
+          showToast(`${file.name}: failed checking existing file.`, "error");
+          skippedCount++;
+          continue;
+        }
+
+        const existingUpload = dup && dup.length > 0 ? dup[0] : null;
+
+        if (existingUpload) {
+          const result = await replaceExistingDocument(existingUpload, file, metadata);
+          if (result.skipped) {
+            skippedCount++;
+            continue;
+          }
+          replaceCount++;
+          continue;
+        }
+
+        await uploadNewDocument(file, metadata);
+        successCount++;
+      }
+
+      await loadData();
+
+      if (successCount > 0 && replaceCount === 0 && skippedCount === 0) {
+        showToast("Uploaded successfully.", "success");
+      } else if (successCount > 0 || replaceCount > 0) {
+        showToast(`${successCount} uploaded, ${replaceCount} replaced, ${skippedCount} skipped.`, "success");
+      }
+    } catch (error: any) {
+      console.error("Document upload error:", error);
+      showToast(error.message || "File upload failed.", "error");
+    } finally {
+      if (documentInputRef.current) {
+        documentInputRef.current.value = "";
+      }
+    }
+  };
+
+  const toggleSelectOne = (id: number) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedIds.length === 0 && deleteMonth === "Delete Month") {
+      showToast("No rows selected.", "info");
+      return;
+    }
+
+    const confirmed = window.confirm("Are you sure you want to delete the data?");
+    if (!confirmed) return;
+
+    try {
+      if (selectedIds.length > 0) {
+        const { error } = await supabase.from("invoices").delete().in("id", selectedIds);
+        if (error) throw error;
+      } else if (deleteMonth !== "Delete Month") {
+        const { error } = await supabase.from("invoices").delete().eq("month", deleteMonth);
+        if (error) throw error;
+      }
+
+      setSelectedIds([]);
+      setDeleteMonth("Delete Month");
+      showToast("Selected rows deleted.", "success");
+      await loadData();
+    } catch (error: any) {
+      console.error("Delete error:", error);
+      showToast(error.message || "Delete failed.", "error");
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <input
+        ref={invoiceInputRef}
+        type="file"
+        accept=".xlsx,.xls"
+        hidden
+        onChange={handleInvoiceExcelChange}
+      />
+
+      <input
+        ref={documentInputRef}
+        type="file"
+        accept="application/pdf,.xlsx,.xls"
+        multiple
+        hidden
+        onChange={handleDocumentChange}
+      />
+
+      {toast.show && (
+        <div className="fixed right-6 top-6 z-[100]">
+          <div
+            className={`rounded-2xl border px-4 py-3 text-sm shadow-lg ${
+              toast.type === "success"
+                ? "border-green-200 bg-green-50 text-green-700"
+                : toast.type === "error"
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-slate-200 bg-slate-50 text-slate-700"
+            }`}
+          >
+            {toast.text}
+          </div>
+        </div>
+      )}
+
+      <div className="sticky top-0 z-40 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
+        <Card className="rounded-3xl">
+          <CardContent className="space-y-4 pt-6">
+            <div className={`grid gap-3 ${selectMode ? "md:grid-cols-6" : "md:grid-cols-5"}`}>
+              <div className="relative md:col-span-2">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  placeholder="Search invoice, DC, status, type..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+
+              <select
+                value={monthFilter}
+                onChange={(e) => setMonthFilter(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                <option value="Month">Month</option>
+                {monthOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={documentFilter}
+                onChange={(e) => setDocumentFilter(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                <option value="Documents">Documents</option>
+                <option value="With Document">With Document</option>
+                <option value="Without Document">Without Document</option>
+              </select>
+
+              {selectMode && (
+                <select
+                  value={deleteMonth}
+                  onChange={(e) => setDeleteMonth(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="Delete Month">Delete Month</option>
+                  {monthOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant={selectMode ? "default" : "outline"}
+                  onClick={() => {
+                    setSelectMode((prev) => {
+                      const next = !prev;
+                      if (!next) {
+                        setSelectedIds([]);
+                        setDeleteMonth("Delete Month");
+                      }
+                      return next;
+                    });
+                  }}
+                  className="flex-1"
+                >
+                  Select
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={handleDeleteSelected}
+                  disabled={!selectMode}
+                  className="flex-1"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="rounded-3xl">
+        <CardContent className="pt-6">
+          {loading ? (
+            <p className="text-sm text-slate-500">Loading invoices...</p>
+          ) : filteredRows.length === 0 ? (
+            <p className="text-sm text-slate-500">No invoices found.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border">
+              <table className="min-w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-100">
+                  <tr>
+                    {selectMode && <th className="px-4 py-3 text-left font-semibold"></th>}
+                    <th className="px-4 py-3 text-left font-semibold">Month</th>
+                    <th className="px-4 py-3 text-left font-semibold">Check Date</th>
+                    <th className="px-4 py-3 text-left font-semibold">Check #</th>
+                    <th className="px-4 py-3 text-left font-semibold">Check Amt</th>
+                    <th className="px-4 py-3 text-left font-semibold">Invoice #</th>
+                    <th className="px-4 py-3 text-left font-semibold">Invoice Amt</th>
+                    <th className="px-4 py-3 text-left font-semibold">DC Name</th>
+                    <th className="px-4 py-3 text-left font-semibold">Status</th>
+                    <th className="px-4 py-3 text-left font-semibold">Type</th>
+                    <th className="px-4 py-3 text-left font-semibold">Documents</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRows.map((row) => {
+                    const uploadRow = row.invoice_number ? uploadMap.get(row.invoice_number) : undefined;
+                    const hasDocument = !!uploadRow;
+
+                    return (
+                      <tr key={row.id} className="border-t">
+                        {selectMode && (
+                          <td className="px-4 py-3">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.includes(row.id)}
+                              onChange={() => toggleSelectOne(row.id)}
+                            />
+                          </td>
+                        )}
+                        <td className="px-4 py-3">{row.month || ""}</td>
+                        <td className="px-4 py-3">{row.check_date || ""}</td>
+                        <td className="px-4 py-3">{row.check_number || ""}</td>
+                        <td className="px-4 py-3">{formatCurrency(row.check_amt)}</td>
+                        <td className="px-4 py-3">{row.invoice_number || ""}</td>
+                        <td className="px-4 py-3">{formatCurrency(row.invoice_amt)}</td>
+                        <td className="px-4 py-3">{row.dc_name || ""}</td>
+                        <td className="px-4 py-3">{row.status || ""}</td>
+                        <td className="px-4 py-3">{uploadRow?.category || ""}</td>
+                        <td className="px-4 py-3">
+                          {hasDocument ? (
+                            <button
+                              type="button"
+                              onClick={() => openDocumentByInvoice(row.invoice_number)}
+                              className="text-red-600 hover:text-red-700"
+                              title={uploadRow?.file_type === "excel" ? "Open Excel" : "Open PDF"}
+                            >
+                              {uploadRow?.file_type === "excel" ? (
+                                <FileSpreadsheet className="h-5 w-5" />
+                              ) : (
+                                <FileText className="h-5 w-5" />
+                              )}
+                            </button>
+                          ) : (
+                            <XCircle className="h-5 w-5 text-red-600" />
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
