@@ -79,7 +79,11 @@ function normalizeDocDate(raw: string) {
 }
 
 function parseMetadataFromText(text: string) {
-  const normalizedText = text.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  const normalizedText = text
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
   const lowerText = normalizedText.toLowerCase();
 
   let invoice = "Unknown";
@@ -102,12 +106,15 @@ function parseMetadataFromText(text: string) {
       { pattern: /customer\s+spoils\s+allowance/i, value: "Customer Spoils Allowance" },
       { pattern: /customer\s+spoilage\s+natural/i, value: "Customer Spoils Allowance" },
       { pattern: /customer\s+spoilage/i, value: "Customer Spoils Allowance" },
+
       { pattern: /pass\s+thru\s+deduction/i, value: "Pass Thru Deduction" },
       { pattern: /pass\s+through\s+deduction/i, value: "Pass Thru Deduction" },
+
       { pattern: /new\s+item\s+setup\s+fee/i, value: "New Item Setup Fee" },
       { pattern: /new\s+item\s+set\s*up\s+fee/i, value: "New Item Setup Fee" },
       { pattern: /new\s+item\s+setup/i, value: "New Item Setup" },
       { pattern: /new\s+item\s+set\s*up/i, value: "New Item Setup" },
+
       { pattern: /intro\s+allowance\s+audit/i, value: "Intro Allowance Audit" },
       { pattern: /introductory\s+fee/i, value: "Introductory Fee" },
     ];
@@ -192,8 +199,10 @@ async function extractTextWithPdfJs(file: File) {
   for (let pageNum = 1; pageNum <= Math.min(pdf.numPages, 3); pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
-    const pageText = textContent.items.map((item: any) => ("str" in item ? item.str : "")).join(" ");
-    fullText += ` ${pageText}`;
+    const pageText = textContent.items
+      .map((item: any) => ("str" in item ? item.str : ""))
+      .join(" ");
+    fullText += " " + pageText;
   }
 
   return { pdf, fullText: fullText.trim() };
@@ -222,7 +231,7 @@ async function extractTextWithOcr(pdf: any) {
 
       const imageDataUrl = canvas.toDataURL("image/png");
       const result = await worker.recognize(imageDataUrl);
-      fullText += ` ${result.data.text}`;
+      fullText += " " + result.data.text;
     }
   } finally {
     await worker.terminate();
@@ -266,7 +275,7 @@ async function extractExcelMetadata(file: File) {
       .filter(Boolean)
       .join(" ");
 
-    fullText += ` ${sheetText}`;
+    fullText += " " + sheetText;
   }
 
   return parseMetadataFromText(fullText);
@@ -340,13 +349,17 @@ function formatCurrency(value: number | null | undefined) {
 async function syncInvoiceFromUpload(invoice: string, type: string) {
   if (!invoice || invoice === "Unknown") return;
 
-  await supabase
+  const { error } = await supabase
     .from("invoices")
     .update({
       type: type === "Unknown" ? "" : type,
       doc_status: true,
     })
     .eq("invoice_number", invoice);
+
+  if (error) {
+    throw new Error(`Failed to sync invoice ${invoice}: ${error.message}`);
+  }
 }
 
 export default function InvoicesView({
@@ -417,14 +430,20 @@ export default function InvoicesView({
   }, []);
 
   useEffect(() => {
-    if (invoiceUploadSignal > 0 && invoiceUploadSignal !== lastInvoiceUploadSignalRef.current) {
+    if (
+      invoiceUploadSignal > 0 &&
+      invoiceUploadSignal !== lastInvoiceUploadSignalRef.current
+    ) {
       lastInvoiceUploadSignalRef.current = invoiceUploadSignal;
       invoiceInputRef.current?.click();
     }
   }, [invoiceUploadSignal]);
 
   useEffect(() => {
-    if (documentUploadSignal > 0 && documentUploadSignal !== lastDocumentUploadSignalRef.current) {
+    if (
+      documentUploadSignal > 0 &&
+      documentUploadSignal !== lastDocumentUploadSignalRef.current
+    ) {
       lastDocumentUploadSignalRef.current = documentUploadSignal;
       documentInputRef.current?.click();
     }
@@ -446,7 +465,9 @@ export default function InvoicesView({
     return rows.filter((row) => {
       const search = searchTerm.toLowerCase();
       const hasDocument = !!(row.invoice_number && uploadMap.has(row.invoice_number));
-      const liveType = row.invoice_number ? uploadMap.get(row.invoice_number)?.category || "" : "";
+      const liveType = row.invoice_number
+        ? uploadMap.get(row.invoice_number)?.category || row.type || ""
+        : row.type || "";
 
       const matchesMonth = monthFilter === "Month" || row.month === monthFilter;
 
@@ -569,11 +590,13 @@ export default function InvoicesView({
           : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         : "application/pdf";
 
-    const { error: storageError } = await supabase.storage.from(DOCUMENT_BUCKET).upload(filePath, file, {
-      cacheControl: "3600",
-      upsert: false,
-      contentType,
-    });
+    const { error: storageError } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType,
+      });
 
     if (storageError) {
       console.error("Storage upload error:", storageError);
@@ -616,7 +639,9 @@ export default function InvoicesView({
     }
 
     if (existingUpload.file_path) {
-      const { error: removeError } = await supabase.storage.from(DOCUMENT_BUCKET).remove([existingUpload.file_path]);
+      const { error: removeError } = await supabase.storage
+        .from(DOCUMENT_BUCKET)
+        .remove([existingUpload.file_path]);
 
       if (removeError) {
         console.error("Storage remove error:", removeError);
@@ -633,11 +658,13 @@ export default function InvoicesView({
           : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         : "application/pdf";
 
-    const { error: storageError } = await supabase.storage.from(DOCUMENT_BUCKET).upload(filePath, file, {
-      cacheControl: "3600",
-      upsert: false,
-      contentType,
-    });
+    const { error: storageError } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType,
+      });
 
     if (storageError) {
       console.error("Storage replace upload error:", storageError);
@@ -763,7 +790,9 @@ export default function InvoicesView({
   };
 
   const toggleSelectOne = (id: number) => {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
   };
 
   const handleDeleteSelected = async () => {
@@ -964,7 +993,7 @@ export default function InvoicesView({
                         <td className="px-4 py-3">{formatCurrency(row.invoice_amt)}</td>
                         <td className="px-4 py-3">{row.dc_name || ""}</td>
                         <td className="px-4 py-3">{row.status || ""}</td>
-                        <td className="px-4 py-3">{uploadRow?.category || ""}</td>
+                        <td className="px-4 py-3">{uploadRow?.category || row.type || ""}</td>
                         <td className="px-4 py-3">
                           {hasDocument ? (
                             <button
