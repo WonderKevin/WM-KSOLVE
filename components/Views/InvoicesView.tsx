@@ -1,7 +1,14 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Search, Trash2, FileText, XCircle, FileSpreadsheet } from "lucide-react";
+import {
+  Search,
+  Trash2,
+  FileText,
+  XCircle,
+  FileSpreadsheet,
+  Bell,
+} from "lucide-react";
 import { createWorker } from "tesseract.js";
 import * as XLSX from "xlsx";
 
@@ -39,6 +46,8 @@ type InvoiceRecord = {
 type ToastType = "success" | "error" | "info";
 
 const DOCUMENT_BUCKET = "document-uploads";
+const FILTER_STICKY_TOP = 0;
+const TABLE_HEADER_STICKY_TOP = 124;
 
 function normalizeType(raw: string) {
   const cleaned = raw.replace(/\s+/g, " ").trim().toLowerCase();
@@ -79,11 +88,7 @@ function normalizeDocDate(raw: string) {
 }
 
 function parseMetadataFromText(text: string) {
-  const normalizedText = text
-    .replace(/\u00a0/g, " ")
-    .replace(/[ \t]+/g, " ")
-    .trim();
-
+  const normalizedText = text.replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ").trim();
   const lowerText = normalizedText.toLowerCase();
 
   let invoice = "Unknown";
@@ -106,15 +111,12 @@ function parseMetadataFromText(text: string) {
       { pattern: /customer\s+spoils\s+allowance/i, value: "Customer Spoils Allowance" },
       { pattern: /customer\s+spoilage\s+natural/i, value: "Customer Spoils Allowance" },
       { pattern: /customer\s+spoilage/i, value: "Customer Spoils Allowance" },
-
       { pattern: /pass\s+thru\s+deduction/i, value: "Pass Thru Deduction" },
       { pattern: /pass\s+through\s+deduction/i, value: "Pass Thru Deduction" },
-
       { pattern: /new\s+item\s+setup\s+fee/i, value: "New Item Setup Fee" },
       { pattern: /new\s+item\s+set\s*up\s+fee/i, value: "New Item Setup Fee" },
       { pattern: /new\s+item\s+setup/i, value: "New Item Setup" },
       { pattern: /new\s+item\s+set\s*up/i, value: "New Item Setup" },
-
       { pattern: /intro\s+allowance\s+audit/i, value: "Intro Allowance Audit" },
       { pattern: /introductory\s+fee/i, value: "Introductory Fee" },
     ];
@@ -136,11 +138,7 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  const strongInvoicePatterns = [
-    /\b(CN\d{9,})\b/i,
-    /\b(CS\d{6,})\b/i,
-    /\b([A-Z]{1,6}\d{6,})\b/,
-  ];
+  const strongInvoicePatterns = [/\b(CN\d{9,})\b/i, /\b(CS\d{6,})\b/i, /\b([A-Z]{1,6}\d{6,})\b/];
 
   for (const pattern of strongInvoicePatterns) {
     const match = normalizedText.match(pattern);
@@ -206,9 +204,7 @@ async function extractTextWithPdfJs(file: File) {
   for (let pageNum = 1; pageNum <= Math.min(pdf.numPages, 3); pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item: any) => ("str" in item ? item.str : ""))
-      .join(" ");
+    const pageText = textContent.items.map((item: any) => ("str" in item ? item.str : "")).join(" ");
     fullText += " " + pageText;
   }
 
@@ -391,9 +387,11 @@ export default function InvoicesView({
   const [deleteMonth, setDeleteMonth] = useState("Delete Month");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [showNotification, setShowNotification] = useState(false);
 
   const invoiceInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
+  const notificationRef = useRef<HTMLDivElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastInvoiceUploadSignalRef = useRef(0);
   const lastDocumentUploadSignalRef = useRef(0);
@@ -438,24 +436,29 @@ export default function InvoicesView({
   }, []);
 
   useEffect(() => {
-    if (
-      invoiceUploadSignal > 0 &&
-      invoiceUploadSignal !== lastInvoiceUploadSignalRef.current
-    ) {
+    if (invoiceUploadSignal > 0 && invoiceUploadSignal !== lastInvoiceUploadSignalRef.current) {
       lastInvoiceUploadSignalRef.current = invoiceUploadSignal;
       invoiceInputRef.current?.click();
     }
   }, [invoiceUploadSignal]);
 
   useEffect(() => {
-    if (
-      documentUploadSignal > 0 &&
-      documentUploadSignal !== lastDocumentUploadSignalRef.current
-    ) {
+    if (documentUploadSignal > 0 && documentUploadSignal !== lastDocumentUploadSignalRef.current) {
       lastDocumentUploadSignalRef.current = documentUploadSignal;
       documentInputRef.current?.click();
     }
   }, [documentUploadSignal]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (notificationRef.current && !notificationRef.current.contains(event.target as Node)) {
+        setShowNotification(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const uploadMap = useMemo(() => {
     const map = new Map<string, UploadRecord>();
@@ -484,6 +487,15 @@ export default function InvoicesView({
 
     return Array.from(values).sort((a, b) => a.localeCompare(b));
   }, [rows, uploadMap]);
+
+  const invoicesWithoutDocuments = useMemo(() => {
+    return rows.filter((row) => {
+      if (!row.invoice_number) return false;
+      return !uploadMap.has(row.invoice_number);
+    });
+  }, [rows, uploadMap]);
+
+  const invoicesWithoutDocumentsCount = invoicesWithoutDocuments.length;
 
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
@@ -579,9 +591,7 @@ export default function InvoicesView({
       if (existingError) throw existingError;
 
       const existingSet = new Set(
-        (existingInvoices || [])
-          .map((item) => item.invoice_number)
-          .filter(Boolean)
+        (existingInvoices || []).map((item) => item.invoice_number).filter(Boolean)
       );
 
       const newRows = mappedRows.filter((row) => !existingSet.has(row.invoice_number));
@@ -645,13 +655,11 @@ export default function InvoicesView({
           : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         : "application/pdf";
 
-    const { error: storageError } = await supabase.storage
-      .from(DOCUMENT_BUCKET)
-      .upload(filePath, file, {
-        cacheControl: "3600",
-        upsert: false,
-        contentType,
-      });
+    const { error: storageError } = await supabase.storage.from(DOCUMENT_BUCKET).upload(filePath, file, {
+      cacheControl: "3600",
+      upsert: false,
+      contentType,
+    });
 
     if (storageError) {
       console.error("Storage upload error:", storageError);
@@ -694,9 +702,7 @@ export default function InvoicesView({
     }
 
     if (existingUpload.file_path) {
-      const { error: removeError } = await supabase.storage
-        .from(DOCUMENT_BUCKET)
-        .remove([existingUpload.file_path]);
+      const { error: removeError } = await supabase.storage.from(DOCUMENT_BUCKET).remove([existingUpload.file_path]);
 
       if (removeError) {
         console.error("Storage remove error:", removeError);
@@ -713,13 +719,11 @@ export default function InvoicesView({
           : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         : "application/pdf";
 
-    const { error: storageError } = await supabase.storage
-      .from(DOCUMENT_BUCKET)
-      .upload(filePath, file, {
-        cacheControl: "3600",
-        upsert: false,
-        contentType,
-      });
+    const { error: storageError } = await supabase.storage.from(DOCUMENT_BUCKET).upload(filePath, file, {
+      cacheControl: "3600",
+      upsert: false,
+      contentType,
+    });
 
     if (storageError) {
       console.error("Storage replace upload error:", storageError);
@@ -845,9 +849,7 @@ export default function InvoicesView({
   };
 
   const toggleSelectOne = (id: number) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
   const handleDeleteSelected = async () => {
@@ -913,7 +915,10 @@ export default function InvoicesView({
         </div>
       )}
 
-      <div className="sticky top-0 z-40 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
+      <div
+        className="sticky z-40 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80"
+        style={{ top: FILTER_STICKY_TOP }}
+      >
         <Card className="rounded-3xl">
           <CardContent className="space-y-4 pt-6">
             <div className={`grid gap-3 ${selectMode ? "md:grid-cols-7" : "md:grid-cols-6"}`}>
@@ -1013,6 +1018,37 @@ export default function InvoicesView({
         </Card>
       </div>
 
+      <div className="flex items-center justify-end gap-3">
+        <div className="relative" ref={notificationRef}>
+          <button
+            type="button"
+            onClick={() => setShowNotification((prev) => !prev)}
+            className="relative inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50"
+            title="Invoices without documents"
+          >
+            <Bell className="h-5 w-5" />
+            {invoicesWithoutDocumentsCount > 0 && (
+              <span className="absolute -right-1 -top-1 min-w-[20px] rounded-full bg-red-500 px-1.5 py-0.5 text-center text-[11px] font-semibold leading-none text-white">
+                {invoicesWithoutDocumentsCount}
+              </span>
+            )}
+          </button>
+
+          {showNotification && (
+            <div className="absolute right-0 z-50 mt-2 w-72 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+              <p className="text-sm font-semibold text-slate-900">Missing documents</p>
+              <p className="mt-1 text-sm text-slate-600">
+                No. of Invoices without documents:{" "}
+                <span className="font-semibold text-red-600">{invoicesWithoutDocumentsCount}</span>
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                Counts invoices with no uploaded PDF or Excel file.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
       <Card className="rounded-3xl">
         <CardContent className="pt-6">
           {loading ? (
@@ -1022,7 +1058,10 @@ export default function InvoicesView({
           ) : (
             <div className="overflow-x-auto rounded-2xl border">
               <table className="min-w-full text-sm">
-                <thead className="sticky top-0 z-10 bg-slate-100">
+                <thead
+                  className="sticky z-30 bg-slate-100 shadow-sm"
+                  style={{ top: TABLE_HEADER_STICKY_TOP }}
+                >
                   <tr>
                     {selectMode && <th className="px-4 py-3 text-left font-semibold"></th>}
                     <th className="px-4 py-3 text-left font-semibold">Month</th>
