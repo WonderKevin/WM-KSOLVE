@@ -1,14 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Search,
-  Trash2,
-  FileText,
-  XCircle,
-  FileSpreadsheet,
-  Bell,
-} from "lucide-react";
+import { Search, Trash2, FileText, XCircle, FileSpreadsheet } from "lucide-react";
 import { createWorker } from "tesseract.js";
 import * as XLSX from "xlsx";
 
@@ -114,7 +107,9 @@ function isBadInvoiceCandidate(value: string) {
     "unknown",
   ]);
 
-  return banned.has(v);
+  if (banned.has(v)) return true;
+
+  return false;
 }
 
 function parseMetadataFromText(text: string) {
@@ -176,6 +171,7 @@ function parseMetadataFromText(text: string) {
     }
   }
 
+  // 1) WM Invoice-specific extraction first
   if (category === "WM Invoice" || isStrictWMInvoice) {
     const wmInvoiceMatch =
       normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i) ||
@@ -197,6 +193,7 @@ function parseMetadataFromText(text: string) {
     }
   }
 
+  // 2) Strong invoice patterns for other doc types
   if (invoice === "Unknown") {
     const strongInvoicePatterns = [
       /\b(CN\d{9,})\b/i,
@@ -216,6 +213,7 @@ function parseMetadataFromText(text: string) {
     }
   }
 
+  // 3) Generic invoice label extraction
   if (invoice === "Unknown") {
     const invoicePatterns = [
       /Invoice\s*(?:Number|No\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
@@ -234,6 +232,7 @@ function parseMetadataFromText(text: string) {
     }
   }
 
+  // 4) Numeric fallback for WM Invoice only
   if (invoice === "Unknown" && (category === "WM Invoice" || /wonder\s+monday/i.test(lowerText))) {
     const wmNumericFallback =
       normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*(\d{1,10})\b/i) ||
@@ -247,6 +246,7 @@ function parseMetadataFromText(text: string) {
     }
   }
 
+  // 5) Generic broad fallback, but only if it contains at least one digit
   if (invoice === "Unknown") {
     const fallbackInvoice = normalizedText.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{1,})\b/);
     if (fallbackInvoice?.[1]) {
@@ -257,6 +257,7 @@ function parseMetadataFromText(text: string) {
     }
   }
 
+  // Generic date fallback
   if (pdf_date === "Unknown") {
     const datePatterns = [
       /Invoice\s+date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
@@ -495,14 +496,12 @@ export default function InvoicesView({
   const [deleteMonth, setDeleteMonth] = useState("Delete Month");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [showNotifications, setShowNotifications] = useState(false);
 
   const invoiceInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastInvoiceUploadSignalRef = useRef(0);
   const lastDocumentUploadSignalRef = useRef(0);
-  const notificationRef = useRef<HTMLDivElement | null>(null);
 
   const showToast = (text: string, type: ToastType = "success") => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -538,7 +537,6 @@ export default function InvoicesView({
 
   useEffect(() => {
     loadData();
-
     return () => {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     };
@@ -564,25 +562,6 @@ export default function InvoicesView({
     }
   }, [documentUploadSignal]);
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        notificationRef.current &&
-        !notificationRef.current.contains(event.target as Node)
-      ) {
-        setShowNotifications(false);
-      }
-    };
-
-    if (showNotifications) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [showNotifications]);
-
   const uploadMap = useMemo(() => {
     const map = new Map<string, UploadRecord>();
     for (const upload of uploads) {
@@ -592,16 +571,6 @@ export default function InvoicesView({
     }
     return map;
   }, [uploads]);
-
-  const missingDocRows = useMemo(() => {
-    return rows.filter((row) => {
-      const normalizedInvoice = normalizeInvoiceNumber(row.invoice_number || "");
-      if (!normalizedInvoice) return false;
-      return !uploadMap.has(normalizedInvoice);
-    });
-  }, [rows, uploadMap]);
-
-  const missingDocsCount = missingDocRows.length;
 
   const monthOptions = useMemo(() => {
     return Array.from(new Set(rows.map((r) => r.month || ""))).filter(Boolean);
@@ -1064,7 +1033,7 @@ export default function InvoicesView({
       <div className="sticky top-0 z-40 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
         <Card className="rounded-3xl">
           <CardContent className="space-y-4 pt-6">
-            <div className={`grid gap-3 ${selectMode ? "md:grid-cols-8" : "md:grid-cols-7"}`}>
+            <div className={`grid gap-3 ${selectMode ? "md:grid-cols-7" : "md:grid-cols-6"}`}>
               <div className="relative md:col-span-2">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <Input
@@ -1110,73 +1079,6 @@ export default function InvoicesView({
                 <option value="With Document">With Document</option>
                 <option value="Without Document">Without Document</option>
               </select>
-
-              <div className="relative" ref={notificationRef}>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowNotifications((prev) => !prev)}
-                  className="relative w-full rounded-xl"
-                  title="Missing document notifications"
-                >
-                  <Bell className="mr-2 h-4 w-4" />
-                  Alerts
-                  {missingDocsCount > 0 && (
-                    <span className="absolute -right-2 -top-2 inline-flex min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[11px] font-semibold text-white">
-                      {missingDocsCount > 99 ? "99+" : missingDocsCount}
-                    </span>
-                  )}
-                </Button>
-
-                {showNotifications && (
-                  <div className="absolute right-0 top-14 z-50 w-80 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
-                    <div className="mb-2 flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-slate-900">Missing Documents</h3>
-                      <button
-                        type="button"
-                        onClick={() => setShowNotifications(false)}
-                        className="text-xs text-slate-500 hover:text-slate-700"
-                      >
-                        Close
-                      </button>
-                    </div>
-
-                    <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
-                      <span className="font-semibold text-red-600">{missingDocsCount}</span>{" "}
-                      invoice{missingDocsCount === 1 ? "" : "s"} missing document
-                      {missingDocsCount === 1 ? "" : "s"}.
-                    </div>
-
-                    {missingDocRows.length > 0 ? (
-                      <div className="mt-3 max-h-64 overflow-y-auto rounded-xl border border-slate-100">
-                        {missingDocRows.slice(0, 10).map((row) => (
-                          <div
-                            key={row.id}
-                            className="border-b border-slate-100 px-3 py-2 last:border-b-0"
-                          >
-                            <div className="text-sm font-medium text-slate-900">
-                              {row.invoice_number || "Unknown invoice"}
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              {row.dc_name || "No DC"} • {row.month || "No month"}
-                            </div>
-                          </div>
-                        ))}
-
-                        {missingDocRows.length > 10 && (
-                          <div className="px-3 py-2 text-xs text-slate-500">
-                            + {missingDocRows.length - 10} more missing docs
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="mt-3 rounded-xl border border-green-100 bg-green-50 p-3 text-sm text-green-700">
-                        No missing documents.
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
 
               {selectMode && (
                 <select
