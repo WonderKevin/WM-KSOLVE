@@ -63,6 +63,7 @@ function normalizeType(raw: string) {
   if (/introductory\s+fee/i.test(cleaned)) return "Introductory Fee";
 
   if (/wm\s+invoice/i.test(cleaned)) return "WM Invoice";
+  if (/wonder\s+monday/i.test(cleaned)) return "WM Invoice";
 
   return raw.replace(/\s+/g, " ").trim() || "Unknown";
 }
@@ -78,10 +79,44 @@ function normalizeDocDate(raw: string) {
   return `${mm.padStart(2, "0")}/${dd.padStart(2, "0")}/${yyyy}`;
 }
 
+function normalizeInvoiceNumber(raw: string) {
+  return String(raw || "")
+    .replace(/\s+/g, "")
+    .replace(/[.]+$/g, "")
+    .trim()
+    .toUpperCase();
+}
+
+function isBadInvoiceCandidate(value: string) {
+  const v = normalizeInvoiceNumber(value).toLowerCase();
+
+  if (!v) return true;
+
+  const banned = new Set([
+    "invoice",
+    "wonder",
+    "wondermonday",
+    "monday",
+    "billto",
+    "shipto",
+    "details",
+    "date",
+    "invoicedate",
+    "invoiceno",
+    "number",
+    "unknown",
+  ]);
+
+  if (banned.has(v)) return true;
+
+  return false;
+}
+
 function parseMetadataFromText(text: string) {
   const normalizedText = text
     .replace(/\u00a0/g, " ")
     .replace(/[ \t]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n")
     .trim();
 
   const lowerText = normalizedText.toLowerCase();
@@ -95,7 +130,6 @@ function parseMetadataFromText(text: string) {
     /invoice\s+details/i.test(lowerText) &&
     /invoice\s+no\.?/i.test(lowerText) &&
     /invoice\s+date/i.test(lowerText) &&
-    /ship\s+date/i.test(lowerText) &&
     /bill\s+to/i.test(lowerText) &&
     /ship\s+to/i.test(lowerText);
 
@@ -117,6 +151,7 @@ function parseMetadataFromText(text: string) {
 
       { pattern: /intro\s+allowance\s+audit/i, value: "Intro Allowance Audit" },
       { pattern: /introductory\s+fee/i, value: "Introductory Fee" },
+      { pattern: /wonder\s+monday/i, value: "WM Invoice" },
     ];
 
     for (const matcher of knownTypeMatchers) {
@@ -136,54 +171,107 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  const strongInvoicePatterns = [
-    /\b(CN\d{9,})\b/i,
-    /\b(CS\d{6,})\b/i,
-    /\b([A-Z]{1,6}\d{6,})\b/,
-  ];
+  // 1) WM Invoice-specific extraction first
+  if (category === "WM Invoice" || isStrictWMInvoice) {
+    const wmInvoiceMatch =
+      normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i) ||
+      normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
 
-  for (const pattern of strongInvoicePatterns) {
-    const match = normalizedText.match(pattern);
-    if (match?.[1]) {
-      invoice = match[1].trim();
-      break;
+    if (wmInvoiceMatch?.[1]) {
+      const candidate = wmInvoiceMatch[1].trim();
+      if (!isBadInvoiceCandidate(candidate)) {
+        invoice = normalizeInvoiceNumber(candidate);
+      }
+    }
+
+    const wmDateMatch =
+      normalizedText.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
+      normalizedText.match(/ship\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+
+    if (wmDateMatch?.[1]) {
+      pdf_date = normalizeDocDate(wmDateMatch[1]);
     }
   }
 
+  // 2) Strong invoice patterns for other doc types
   if (invoice === "Unknown") {
-    const invoicePatterns = [
-      /Invoice\s*(?:Number|No\.?|#)?\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
-      /Invoice\s*(?:Number|No\.?|#)?\s*\n\s*([A-Z0-9.\-\/]+)/i,
+    const strongInvoicePatterns = [
+      /\b(CN\d{9,})\b/i,
+      /\b(CS\d{6,})\b/i,
+      /\b([A-Z]{1,6}\d{6,})\b/,
     ];
 
-    for (const pattern of invoicePatterns) {
-      const match = text.match(pattern);
-      if (match?.[1] && !/^invoice$/i.test(match[1].trim())) {
-        invoice = match[1].trim();
-        break;
+    for (const pattern of strongInvoicePatterns) {
+      const match = normalizedText.match(pattern);
+      if (match?.[1]) {
+        const candidate = match[1].trim();
+        if (!isBadInvoiceCandidate(candidate)) {
+          invoice = normalizeInvoiceNumber(candidate);
+          break;
+        }
       }
     }
   }
 
+  // 3) Generic invoice label extraction
   if (invoice === "Unknown") {
-    const fallbackInvoice = normalizedText.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{5,})\b/);
-    if (fallbackInvoice?.[1] && !/^invoice$/i.test(fallbackInvoice[1].trim())) {
-      invoice = fallbackInvoice[1].trim();
+    const invoicePatterns = [
+      /Invoice\s*(?:Number|No\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
+      /Invoice\s*(?:Number|No\.?|#)\s*\n\s*([A-Z0-9.\-\/]+)/i,
+    ];
+
+    for (const pattern of invoicePatterns) {
+      const match = normalizedText.match(pattern);
+      if (match?.[1]) {
+        const candidate = match[1].trim();
+        if (!isBadInvoiceCandidate(candidate)) {
+          invoice = normalizeInvoiceNumber(candidate);
+          break;
+        }
+      }
     }
   }
 
-  const datePatterns = [
-    /Invoice\s+date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    /Date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/,
-    /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2})\b/,
-  ];
+  // 4) Numeric fallback for WM Invoice only
+  if (invoice === "Unknown" && (category === "WM Invoice" || /wonder\s+monday/i.test(lowerText))) {
+    const wmNumericFallback =
+      normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*(\d{1,10})\b/i) ||
+      normalizedText.match(/invoice\s*#\s*[:\-]?\s*(\d{1,10})\b/i);
 
-  for (const pattern of datePatterns) {
-    const match = normalizedText.match(pattern);
-    if (match?.[1]) {
-      pdf_date = normalizeDocDate(match[1]);
-      break;
+    if (wmNumericFallback?.[1]) {
+      const candidate = wmNumericFallback[1].trim();
+      if (!isBadInvoiceCandidate(candidate)) {
+        invoice = normalizeInvoiceNumber(candidate);
+      }
+    }
+  }
+
+  // 5) Generic broad fallback, but only if it contains at least one digit
+  if (invoice === "Unknown") {
+    const fallbackInvoice = normalizedText.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{1,})\b/);
+    if (fallbackInvoice?.[1]) {
+      const candidate = fallbackInvoice[1].trim();
+      if (!isBadInvoiceCandidate(candidate)) {
+        invoice = normalizeInvoiceNumber(candidate);
+      }
+    }
+  }
+
+  // Generic date fallback
+  if (pdf_date === "Unknown") {
+    const datePatterns = [
+      /Invoice\s+date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+      /Date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+      /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/,
+      /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2})\b/,
+    ];
+
+    for (const pattern of datePatterns) {
+      const match = normalizedText.match(pattern);
+      if (match?.[1]) {
+        pdf_date = normalizeDocDate(match[1]);
+        break;
+      }
     }
   }
 
@@ -356,13 +444,30 @@ function formatCurrency(value: number | null | undefined) {
 async function syncInvoiceFromUpload(invoice: string, type: string) {
   if (!invoice || invoice === "Unknown") return;
 
+  const normalizedInvoice = normalizeInvoiceNumber(invoice);
+
+  const { data: invoiceRows, error: lookupError } = await supabase
+    .from("invoices")
+    .select("id, invoice_number")
+    .limit(5000);
+
+  if (lookupError) {
+    throw new Error(`Failed to find invoice ${invoice}: ${lookupError.message}`);
+  }
+
+  const matched = (invoiceRows || []).find(
+    (row) => normalizeInvoiceNumber(row.invoice_number || "") === normalizedInvoice
+  );
+
+  if (!matched) return;
+
   const { error } = await supabase
     .from("invoices")
     .update({
       type: type === "Unknown" ? "" : type,
       doc_status: true,
     })
-    .eq("invoice_number", invoice);
+    .eq("id", matched.id);
 
   if (error) {
     throw new Error(`Failed to sync invoice ${invoice}: ${error.message}`);
@@ -460,7 +565,9 @@ export default function InvoicesView({
   const uploadMap = useMemo(() => {
     const map = new Map<string, UploadRecord>();
     for (const upload of uploads) {
-      if (upload.invoice) map.set(upload.invoice, upload);
+      if (upload.invoice) {
+        map.set(normalizeInvoiceNumber(upload.invoice), upload);
+      }
     }
     return map;
   }, [uploads]);
@@ -473,8 +580,9 @@ export default function InvoicesView({
     const values = new Set<string>();
 
     for (const row of rows) {
-      const liveType = row.invoice_number
-        ? uploadMap.get(row.invoice_number)?.category || row.type || ""
+      const normalizedInvoice = normalizeInvoiceNumber(row.invoice_number || "");
+      const liveType = normalizedInvoice
+        ? uploadMap.get(normalizedInvoice)?.category || row.type || ""
         : row.type || "";
 
       if (liveType && liveType.trim()) {
@@ -488,9 +596,10 @@ export default function InvoicesView({
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
       const search = searchTerm.toLowerCase().trim();
-      const hasDocument = !!(row.invoice_number && uploadMap.has(row.invoice_number));
-      const liveType = row.invoice_number
-        ? uploadMap.get(row.invoice_number)?.category || row.type || ""
+      const normalizedInvoice = normalizeInvoiceNumber(row.invoice_number || "");
+      const hasDocument = !!(normalizedInvoice && uploadMap.has(normalizedInvoice));
+      const liveType = normalizedInvoice
+        ? uploadMap.get(normalizedInvoice)?.category || row.type || ""
         : row.type || "";
 
       const matchesMonth = monthFilter === "Month" || row.month === monthFilter;
@@ -517,7 +626,7 @@ export default function InvoicesView({
   const openDocumentByInvoice = async (invoiceNumber: string | null) => {
     if (!invoiceNumber) return;
 
-    const uploadRow = uploadMap.get(invoiceNumber);
+    const uploadRow = uploadMap.get(normalizeInvoiceNumber(invoiceNumber));
     if (!uploadRow?.file_path) return;
 
     const { data, error } = await supabase.storage
@@ -544,7 +653,7 @@ export default function InvoicesView({
         .map((row) => {
           const checkDate = normalizeExcelDate(row["Check Date"]);
           const invoiceNumber = String(row["Invoice #"] || "").trim();
-          const matchedUpload = uploadMap.get(invoiceNumber);
+          const matchedUpload = uploadMap.get(normalizeInvoiceNumber(invoiceNumber));
 
           return {
             month: toMonthName(checkDate),
@@ -770,29 +879,32 @@ export default function InvoicesView({
       let replaceCount = 0;
       let skippedCount = 0;
 
+      const { data: allInvoices, error: allInvoicesError } = await supabase
+        .from("invoices")
+        .select("id, invoice_number");
+
+      if (allInvoicesError) {
+        throw allInvoicesError;
+      }
+
+      const invoiceLookup = new Map<string, { id: number; invoice_number: string | null }>();
+      for (const row of allInvoices || []) {
+        invoiceLookup.set(normalizeInvoiceNumber(row.invoice_number || ""), row);
+      }
+
       for (const file of selectedFiles) {
         const metadata = await extractDocumentMetadata(file);
+        const normalizedInvoice = normalizeInvoiceNumber(metadata.invoice);
 
-        if (metadata.invoice === "Unknown") {
+        if (metadata.invoice === "Unknown" || !normalizedInvoice) {
           showToast(`${file.name}: invoice reference not found.`, "error");
           skippedCount++;
           continue;
         }
 
-        const { data: invoiceMatch, error: invoiceMatchError } = await supabase
-          .from("invoices")
-          .select("id")
-          .eq("invoice_number", metadata.invoice)
-          .limit(1);
+        const matchedInvoice = invoiceLookup.get(normalizedInvoice);
 
-        if (invoiceMatchError) {
-          console.error("Invoice match lookup error:", invoiceMatchError);
-          showToast(`${file.name}: invoice lookup failed.`, "error");
-          skippedCount++;
-          continue;
-        }
-
-        if (!invoiceMatch || invoiceMatch.length === 0) {
+        if (!matchedInvoice) {
           showToast(`${file.name}: invoice ${metadata.invoice} is not in the invoices file.`, "error");
           skippedCount++;
           continue;
@@ -801,7 +913,7 @@ export default function InvoicesView({
         const { data: dup, error: dupError } = await supabase
           .from("uploads")
           .select("*")
-          .eq("invoice", metadata.invoice)
+          .eq("invoice", matchedInvoice.invoice_number)
           .limit(1);
 
         if (dupError) {
@@ -813,8 +925,13 @@ export default function InvoicesView({
 
         const existingUpload = dup && dup.length > 0 ? dup[0] : null;
 
+        const finalMetadata = {
+          ...metadata,
+          invoice: matchedInvoice.invoice_number || metadata.invoice,
+        };
+
         if (existingUpload) {
-          const result = await replaceExistingDocument(existingUpload, file, metadata);
+          const result = await replaceExistingDocument(existingUpload, file, finalMetadata);
           if (result.skipped) {
             skippedCount++;
             continue;
@@ -823,7 +940,7 @@ export default function InvoicesView({
           continue;
         }
 
-        await uploadNewDocument(file, metadata);
+        await uploadNewDocument(file, finalMetadata);
         successCount++;
       }
 
@@ -1039,7 +1156,9 @@ export default function InvoicesView({
                 </thead>
                 <tbody>
                   {filteredRows.map((row) => {
-                    const uploadRow = row.invoice_number ? uploadMap.get(row.invoice_number) : undefined;
+                    const uploadRow = row.invoice_number
+                      ? uploadMap.get(normalizeInvoiceNumber(row.invoice_number))
+                      : undefined;
                     const hasDocument = !!uploadRow;
 
                     return (
