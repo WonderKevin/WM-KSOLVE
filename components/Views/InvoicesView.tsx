@@ -136,7 +136,6 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // 1) Strong direct invoice match first
   const strongInvoicePatterns = [
     /\b(CN\d{9,})\b/i,
     /\b(CS\d{6,})\b/i,
@@ -151,7 +150,6 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // 2) Label-based match, including line-broken layouts
   if (invoice === "Unknown") {
     const invoicePatterns = [
       /Invoice\s*(?:Number|No\.?|#)?\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
@@ -167,7 +165,6 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // 3) Last fallback
   if (invoice === "Unknown") {
     const fallbackInvoice = normalizedText.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{5,})\b/);
     if (fallbackInvoice?.[1] && !/^invoice$/i.test(fallbackInvoice[1].trim())) {
@@ -389,6 +386,7 @@ export default function InvoicesView({
   });
   const [searchTerm, setSearchTerm] = useState("");
   const [monthFilter, setMonthFilter] = useState("Month");
+  const [typeFilter, setTypeFilter] = useState("Type");
   const [documentFilter, setDocumentFilter] = useState("Documents");
   const [deleteMonth, setDeleteMonth] = useState("Delete Month");
   const [selectMode, setSelectMode] = useState(false);
@@ -471,15 +469,32 @@ export default function InvoicesView({
     return Array.from(new Set(rows.map((r) => r.month || ""))).filter(Boolean);
   }, [rows]);
 
+  const typeOptions = useMemo(() => {
+    const values = new Set<string>();
+
+    for (const row of rows) {
+      const liveType = row.invoice_number
+        ? uploadMap.get(row.invoice_number)?.category || row.type || ""
+        : row.type || "";
+
+      if (liveType && liveType.trim()) {
+        values.add(liveType.trim());
+      }
+    }
+
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  }, [rows, uploadMap]);
+
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
-      const search = searchTerm.toLowerCase();
+      const search = searchTerm.toLowerCase().trim();
       const hasDocument = !!(row.invoice_number && uploadMap.has(row.invoice_number));
       const liveType = row.invoice_number
         ? uploadMap.get(row.invoice_number)?.category || row.type || ""
         : row.type || "";
 
       const matchesMonth = monthFilter === "Month" || row.month === monthFilter;
+      const matchesType = typeFilter === "Type" || liveType === typeFilter;
 
       const matchesDocument =
         documentFilter === "Documents" ||
@@ -487,6 +502,7 @@ export default function InvoicesView({
         (documentFilter === "Without Document" && !hasDocument);
 
       const matchesSearch =
+        !search ||
         (row.invoice_number || "").toLowerCase().includes(search) ||
         (row.dc_name || "").toLowerCase().includes(search) ||
         liveType.toLowerCase().includes(search) ||
@@ -494,9 +510,9 @@ export default function InvoicesView({
         String(row.check_amt ?? "").toLowerCase().includes(search) ||
         (row.status || "").toLowerCase().includes(search);
 
-      return matchesMonth && matchesDocument && matchesSearch;
+      return matchesMonth && matchesType && matchesDocument && matchesSearch;
     });
-  }, [rows, searchTerm, monthFilter, documentFilter, uploadMap]);
+  }, [rows, searchTerm, monthFilter, typeFilter, documentFilter, uploadMap]);
 
   const openDocumentByInvoice = async (invoiceNumber: string | null) => {
     if (!invoiceNumber) return;
@@ -524,37 +540,66 @@ export default function InvoicesView({
       const sheet = workbook.Sheets[sheetName];
       const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
 
-      const mappedRows = json.map((row) => {
-        const checkDate = normalizeExcelDate(row["Check Date"]);
-        const invoiceNumber = String(row["Invoice #"] || "").trim();
-        const matchedUpload = uploadMap.get(invoiceNumber);
+      const mappedRows = json
+        .map((row) => {
+          const checkDate = normalizeExcelDate(row["Check Date"]);
+          const invoiceNumber = String(row["Invoice #"] || "").trim();
+          const matchedUpload = uploadMap.get(invoiceNumber);
 
-        return {
-          month: toMonthName(checkDate),
-          check_date: checkDate,
-          check_number: String(row["Check #"] || "").trim(),
-          check_amt:
-            parseAmount(row["Check Amt"]) ??
-            parseAmount(row["Check Amount"]) ??
-            parseAmount(row["Check Amt "]) ??
-            null,
-          invoice_number: invoiceNumber,
-          invoice_amt: parseAmount(row["Invoice Amt"]) ?? 0,
-          dc_name: String(row["DC Name"] || "").trim(),
-          status: String(row["Status"] || "").trim(),
-          type: matchedUpload?.category || "",
-          doc_status: !!matchedUpload,
-        };
-      });
+          return {
+            month: toMonthName(checkDate),
+            check_date: checkDate,
+            check_number: String(row["Check #"] || "").trim(),
+            check_amt:
+              parseAmount(row["Check Amt"]) ??
+              parseAmount(row["Check Amount"]) ??
+              parseAmount(row["Check Amt "]) ??
+              null,
+            invoice_number: invoiceNumber,
+            invoice_amt: parseAmount(row["Invoice Amt"]) ?? 0,
+            dc_name: String(row["DC Name"] || "").trim(),
+            status: String(row["Status"] || "").trim(),
+            type: matchedUpload?.category || "",
+            doc_status: !!matchedUpload,
+          };
+        })
+        .filter((row) => row.invoice_number);
 
-      for (const row of mappedRows) {
-        if (!row.invoice_number) continue;
-
-        const { error } = await supabase.from("invoices").upsert(row, { onConflict: "invoice_number" });
-        if (error) throw error;
+      if (mappedRows.length === 0) {
+        showToast("No valid invoices found in the uploaded file.", "info");
+        return;
       }
 
-      showToast("Invoice file uploaded successfully.", "success");
+      const invoiceNumbers = mappedRows.map((row) => row.invoice_number);
+      const { data: existingInvoices, error: existingError } = await supabase
+        .from("invoices")
+        .select("invoice_number")
+        .in("invoice_number", invoiceNumbers);
+
+      if (existingError) throw existingError;
+
+      const existingSet = new Set(
+        (existingInvoices || [])
+          .map((item) => item.invoice_number)
+          .filter(Boolean)
+      );
+
+      const newRows = mappedRows.filter((row) => !existingSet.has(row.invoice_number));
+
+      if (newRows.length === 0) {
+        showToast("All uploaded invoices already exist. Nothing was added.", "info");
+        return;
+      }
+
+      const { error: insertError } = await supabase.from("invoices").insert(newRows);
+      if (insertError) throw insertError;
+
+      const skippedCount = mappedRows.length - newRows.length;
+      showToast(
+        `${newRows.length} new invoice(s) added, ${skippedCount} existing invoice(s) skipped.`,
+        "success"
+      );
+
       await loadData();
     } catch (error: any) {
       console.error("Invoice upload error:", error);
@@ -871,7 +916,7 @@ export default function InvoicesView({
       <div className="sticky top-0 z-40 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
         <Card className="rounded-3xl">
           <CardContent className="space-y-4 pt-6">
-            <div className={`grid gap-3 ${selectMode ? "md:grid-cols-6" : "md:grid-cols-5"}`}>
+            <div className={`grid gap-3 ${selectMode ? "md:grid-cols-7" : "md:grid-cols-6"}`}>
               <div className="relative md:col-span-2">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <Input
@@ -889,6 +934,19 @@ export default function InvoicesView({
               >
                 <option value="Month">Month</option>
                 {monthOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                <option value="Type">Type</option>
+                {typeOptions.map((option) => (
                   <option key={option} value={option}>
                     {option}
                   </option>
