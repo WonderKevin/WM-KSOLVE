@@ -46,8 +46,7 @@ type InvoiceRecord = {
 type ToastType = "success" | "error" | "info";
 
 const DOCUMENT_BUCKET = "document-uploads";
-const FILTER_STICKY_TOP = 0;
-const TABLE_HEADER_STICKY_TOP = 124;
+const FILTER_BAR_TOP = 0;
 
 function normalizeType(raw: string) {
   const cleaned = raw.replace(/\s+/g, " ").trim().toLowerCase();
@@ -70,7 +69,6 @@ function normalizeType(raw: string) {
 
   if (/intro\s+allowance\s+audit/i.test(cleaned)) return "Intro Allowance Audit";
   if (/introductory\s+fee/i.test(cleaned)) return "Introductory Fee";
-
   if (/wm\s+invoice/i.test(cleaned)) return "WM Invoice";
 
   return raw.replace(/\s+/g, " ").trim() || "Unknown";
@@ -205,7 +203,7 @@ async function extractTextWithPdfJs(file: File) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
     const pageText = textContent.items.map((item: any) => ("str" in item ? item.str : "")).join(" ");
-    fullText += " " + pageText;
+    fullText += ` ${pageText}`;
   }
 
   return { pdf, fullText: fullText.trim() };
@@ -234,7 +232,7 @@ async function extractTextWithOcr(pdf: any) {
 
       const imageDataUrl = canvas.toDataURL("image/png");
       const result = await worker.recognize(imageDataUrl);
-      fullText += " " + result.data.text;
+      fullText += ` ${result.data.text}`;
     }
   } finally {
     await worker.terminate();
@@ -278,7 +276,7 @@ async function extractExcelMetadata(file: File) {
       .filter(Boolean)
       .join(" ");
 
-    fullText += " " + sheetText;
+    fullText += ` ${sheetText}`;
   }
 
   return parseMetadataFromText(fullText);
@@ -388,10 +386,12 @@ export default function InvoicesView({
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [showNotification, setShowNotification] = useState(false);
+  const [headerStickyTop, setHeaderStickyTop] = useState(110);
 
   const invoiceInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const notificationRef = useRef<HTMLDivElement | null>(null);
+  const stickyBarRef = useRef<HTMLDivElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastInvoiceUploadSignalRef = useRef(0);
   const lastDocumentUploadSignalRef = useRef(0);
@@ -459,6 +459,18 @@ export default function InvoicesView({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    const updateHeaderTop = () => {
+      if (!stickyBarRef.current) return;
+      const rect = stickyBarRef.current.getBoundingClientRect();
+      setHeaderStickyTop(Math.ceil(rect.height) + 8);
+    };
+
+    updateHeaderTop();
+    window.addEventListener("resize", updateHeaderTop);
+    return () => window.removeEventListener("resize", updateHeaderTop);
+  }, [selectMode]);
 
   const uploadMap = useMemo(() => {
     const map = new Map<string, UploadRecord>();
@@ -655,11 +667,13 @@ export default function InvoicesView({
           : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         : "application/pdf";
 
-    const { error: storageError } = await supabase.storage.from(DOCUMENT_BUCKET).upload(filePath, file, {
-      cacheControl: "3600",
-      upsert: false,
-      contentType,
-    });
+    const { error: storageError } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType,
+      });
 
     if (storageError) {
       console.error("Storage upload error:", storageError);
@@ -702,7 +716,9 @@ export default function InvoicesView({
     }
 
     if (existingUpload.file_path) {
-      const { error: removeError } = await supabase.storage.from(DOCUMENT_BUCKET).remove([existingUpload.file_path]);
+      const { error: removeError } = await supabase.storage
+        .from(DOCUMENT_BUCKET)
+        .remove([existingUpload.file_path]);
 
       if (removeError) {
         console.error("Storage remove error:", removeError);
@@ -719,11 +735,13 @@ export default function InvoicesView({
           : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         : "application/pdf";
 
-    const { error: storageError } = await supabase.storage.from(DOCUMENT_BUCKET).upload(filePath, file, {
-      cacheControl: "3600",
-      upsert: false,
-      contentType,
-    });
+    const { error: storageError } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType,
+      });
 
     if (storageError) {
       console.error("Storage replace upload error:", storageError);
@@ -915,9 +933,58 @@ export default function InvoicesView({
         </div>
       )}
 
+      <div className="flex items-center justify-end gap-3">
+        <div className="relative" ref={notificationRef}>
+          <button
+            type="button"
+            onClick={() => setShowNotification((prev) => !prev)}
+            className="relative inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50"
+            title="Invoices without documents"
+          >
+            <Bell className="h-5 w-5" />
+            {invoicesWithoutDocumentsCount > 0 && (
+              <span className="absolute -right-1 -top-1 min-w-[20px] rounded-full bg-red-500 px-1.5 py-0.5 text-center text-[11px] font-semibold leading-none text-white">
+                {invoicesWithoutDocumentsCount}
+              </span>
+            )}
+          </button>
+
+          {showNotification && (
+            <div className="absolute right-0 z-50 mt-2 w-72 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+              <p className="text-sm font-semibold text-slate-900">Missing documents</p>
+              <p className="mt-1 text-sm text-slate-600">
+                No. of Invoices without documents:{" "}
+                <span className="font-semibold text-red-600">{invoicesWithoutDocumentsCount}</span>
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                Counts invoices with no uploaded PDF or Excel file.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => invoiceInputRef.current?.click()}
+          className="rounded-full"
+        >
+          Upload Ksolve Invoices
+        </Button>
+
+        <Button
+          type="button"
+          onClick={() => documentInputRef.current?.click()}
+          className="rounded-full"
+        >
+          Upload Files
+        </Button>
+      </div>
+
       <div
+        ref={stickyBarRef}
         className="sticky z-40 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80"
-        style={{ top: FILTER_STICKY_TOP }}
+        style={{ top: FILTER_BAR_TOP }}
       >
         <Card className="rounded-3xl">
           <CardContent className="space-y-4 pt-6">
@@ -1018,37 +1085,6 @@ export default function InvoicesView({
         </Card>
       </div>
 
-      <div className="flex items-center justify-end gap-3">
-        <div className="relative" ref={notificationRef}>
-          <button
-            type="button"
-            onClick={() => setShowNotification((prev) => !prev)}
-            className="relative inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50"
-            title="Invoices without documents"
-          >
-            <Bell className="h-5 w-5" />
-            {invoicesWithoutDocumentsCount > 0 && (
-              <span className="absolute -right-1 -top-1 min-w-[20px] rounded-full bg-red-500 px-1.5 py-0.5 text-center text-[11px] font-semibold leading-none text-white">
-                {invoicesWithoutDocumentsCount}
-              </span>
-            )}
-          </button>
-
-          {showNotification && (
-            <div className="absolute right-0 z-50 mt-2 w-72 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
-              <p className="text-sm font-semibold text-slate-900">Missing documents</p>
-              <p className="mt-1 text-sm text-slate-600">
-                No. of Invoices without documents:{" "}
-                <span className="font-semibold text-red-600">{invoicesWithoutDocumentsCount}</span>
-              </p>
-              <p className="mt-2 text-xs text-slate-500">
-                Counts invoices with no uploaded PDF or Excel file.
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
       <Card className="rounded-3xl">
         <CardContent className="pt-6">
           {loading ? (
@@ -1060,20 +1096,22 @@ export default function InvoicesView({
               <table className="min-w-full text-sm">
                 <thead
                   className="sticky z-30 bg-slate-100 shadow-sm"
-                  style={{ top: TABLE_HEADER_STICKY_TOP }}
+                  style={{ top: headerStickyTop }}
                 >
                   <tr>
-                    {selectMode && <th className="px-4 py-3 text-left font-semibold"></th>}
-                    <th className="px-4 py-3 text-left font-semibold">Month</th>
-                    <th className="px-4 py-3 text-left font-semibold">Check Date</th>
-                    <th className="px-4 py-3 text-left font-semibold">Check #</th>
-                    <th className="px-4 py-3 text-left font-semibold">Check Amt</th>
-                    <th className="px-4 py-3 text-left font-semibold">Invoice #</th>
-                    <th className="px-4 py-3 text-left font-semibold">Invoice Amt</th>
-                    <th className="px-4 py-3 text-left font-semibold">DC Name</th>
-                    <th className="px-4 py-3 text-left font-semibold">Status</th>
-                    <th className="px-4 py-3 text-left font-semibold">Type</th>
-                    <th className="px-4 py-3 text-left font-semibold">Documents</th>
+                    {selectMode && (
+                      <th className="bg-slate-100 px-4 py-3 text-left font-semibold"></th>
+                    )}
+                    <th className="bg-slate-100 px-4 py-3 text-left font-semibold">Month</th>
+                    <th className="bg-slate-100 px-4 py-3 text-left font-semibold">Check Date</th>
+                    <th className="bg-slate-100 px-4 py-3 text-left font-semibold">Check #</th>
+                    <th className="bg-slate-100 px-4 py-3 text-left font-semibold">Check Amt</th>
+                    <th className="bg-slate-100 px-4 py-3 text-left font-semibold">Invoice #</th>
+                    <th className="bg-slate-100 px-4 py-3 text-left font-semibold">Invoice Amt</th>
+                    <th className="bg-slate-100 px-4 py-3 text-left font-semibold">DC Name</th>
+                    <th className="bg-slate-100 px-4 py-3 text-left font-semibold">Status</th>
+                    <th className="bg-slate-100 px-4 py-3 text-left font-semibold">Type</th>
+                    <th className="bg-slate-100 px-4 py-3 text-left font-semibold">Documents</th>
                   </tr>
                 </thead>
                 <tbody>
