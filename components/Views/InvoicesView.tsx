@@ -111,9 +111,7 @@ function isBadInvoiceCandidate(value: string) {
     "unknown",
   ]);
 
-  if (banned.has(v)) return true;
-
-  return false;
+  return banned.has(v);
 }
 
 function parseMetadataFromText(text: string) {
@@ -601,6 +599,14 @@ export default function InvoicesView({
     }
     return map;
   }, [uploads]);
+
+  const withoutDocumentCount = useMemo(() => {
+    return rows.filter((row) => {
+      const normalizedInvoice = normalizeInvoiceNumber(row.invoice_number || "");
+      if (!normalizedInvoice) return false;
+      return !uploadMap.has(normalizedInvoice);
+    }).length;
+  }, [rows, uploadMap]);
 
   const monthOptions = useMemo(() => {
     return Array.from(new Set(rows.map((r) => r.month || ""))).filter(Boolean);
@@ -1100,15 +1106,28 @@ export default function InvoicesView({
                 ))}
               </select>
 
-              <select
-                value={documentFilter}
-                onChange={(e) => setDocumentFilter(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-              >
-                <option value="Documents">Documents</option>
-                <option value="With Document">With Document</option>
-                <option value="Without Document">Without Document</option>
-              </select>
+              <div className="relative">
+                <select
+                  value={documentFilter}
+                  onChange={(e) => setDocumentFilter(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 text-sm"
+                >
+                  <option value="Documents">Documents</option>
+                  <option value="With Document">With Document</option>
+                  <option value="Without Document">Without Document</option>
+                </select>
+
+                {withoutDocumentCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setDocumentFilter("Without Document")}
+                    className="absolute right-8 top-1/2 -translate-y-1/2 rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-red-600"
+                    title={`Show ${withoutDocumentCount} invoices without document`}
+                  >
+                    {withoutDocumentCount > 99 ? "99+" : withoutDocumentCount}
+                  </button>
+                )}
+              </div>
 
               {selectMode && (
                 <select
