@@ -51,6 +51,10 @@ function normalizeType(raw: string) {
     return "Pass Thru Deduction";
   }
 
+  if (/fresh\s+thyme\s+ppf/i.test(cleaned)) {
+    return "Pass Thru Deduction";
+  }
+
   if (/new\s+item\s+setup\s+fee/i.test(cleaned) || /new\s+item\s+set\s*up\s+fee/i.test(cleaned)) {
     return "New Item Setup Fee";
   }
@@ -133,8 +137,17 @@ function parseMetadataFromText(text: string) {
     /bill\s+to/i.test(lowerText) &&
     /ship\s+to/i.test(lowerText);
 
+  const isFreshThymePpf =
+    /fresh\s+thyme\s+ppf/i.test(lowerText) ||
+    (/special\s+payee\s+number/i.test(lowerText) &&
+      /master\s+reference\s+no/i.test(lowerText) &&
+      /po\s*#/i.test(lowerText) &&
+      /wonder\s+monday/i.test(lowerText));
+
   if (isStrictWMInvoice) {
     category = "WM Invoice";
+  } else if (isFreshThymePpf) {
+    category = "Pass Thru Deduction";
   } else {
     const knownTypeMatchers = [
       { pattern: /customer\s+spoils\s+allowance/i, value: "Customer Spoils Allowance" },
@@ -143,6 +156,7 @@ function parseMetadataFromText(text: string) {
 
       { pattern: /pass\s+thru\s+deduction/i, value: "Pass Thru Deduction" },
       { pattern: /pass\s+through\s+deduction/i, value: "Pass Thru Deduction" },
+      { pattern: /fresh\s+thyme\s+ppf/i, value: "Pass Thru Deduction" },
 
       { pattern: /new\s+item\s+setup\s+fee/i, value: "New Item Setup Fee" },
       { pattern: /new\s+item\s+set\s*up\s+fee/i, value: "New Item Setup Fee" },
@@ -171,7 +185,6 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // 1) WM Invoice-specific extraction first
   if (category === "WM Invoice" || isStrictWMInvoice) {
     const wmInvoiceMatch =
       normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i) ||
@@ -193,7 +206,28 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // 2) Strong invoice patterns for other doc types
+  if (invoice === "Unknown" && category === "Pass Thru Deduction") {
+    const passThruInvoiceMatch =
+      normalizedText.match(/invoice\s*number\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i) ||
+      normalizedText.match(/invoice\s*number\s*\n\s*([A-Z0-9.\-\/]+)/i) ||
+      normalizedText.match(/invoice\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
+
+    if (passThruInvoiceMatch?.[1]) {
+      const candidate = passThruInvoiceMatch[1].trim();
+      if (!isBadInvoiceCandidate(candidate)) {
+        invoice = normalizeInvoiceNumber(candidate);
+      }
+    }
+
+    const passThruDateMatch =
+      normalizedText.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
+      normalizedText.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+
+    if (passThruDateMatch?.[1]) {
+      pdf_date = normalizeDocDate(passThruDateMatch[1]);
+    }
+  }
+
   if (invoice === "Unknown") {
     const strongInvoicePatterns = [
       /\b(CN\d{9,})\b/i,
@@ -213,7 +247,6 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // 3) Generic invoice label extraction
   if (invoice === "Unknown") {
     const invoicePatterns = [
       /Invoice\s*(?:Number|No\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
@@ -232,7 +265,6 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // 4) Numeric fallback for WM Invoice only
   if (invoice === "Unknown" && (category === "WM Invoice" || /wonder\s+monday/i.test(lowerText))) {
     const wmNumericFallback =
       normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*(\d{1,10})\b/i) ||
@@ -246,7 +278,6 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // 5) Generic broad fallback, but only if it contains at least one digit
   if (invoice === "Unknown") {
     const fallbackInvoice = normalizedText.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{1,})\b/);
     if (fallbackInvoice?.[1]) {
@@ -257,7 +288,6 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // Generic date fallback
   if (pdf_date === "Unknown") {
     const datePatterns = [
       /Invoice\s+date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
