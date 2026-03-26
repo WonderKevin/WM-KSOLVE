@@ -1107,15 +1107,17 @@ export default function InvoicesView({
               </select>
 
               <div className="relative">
-                <select
-                  value={documentFilter}
-                  onChange={(e) => setDocumentFilter(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 text-sm"
-                >
-                  <option value="Documents">Documents</option>
-                  <option value="With Document">With Document</option>
-                  <option value="Without Document">Without Document</option>
-                </select>
+              <select
+  value={documentFilter}
+  onChange={(e) => setDocumentFilter(e.target.value)}
+  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 text-sm"
+>
+  <option value="Documents">Documents</option>
+  <option value="With Document">With Document</option>
+  <option value="Without Document">
+    Without Document{withoutDocumentCount > 0 ? ` (${withoutDocumentCount})` : ""}
+  </option>
+</select>
 
                 {withoutDocumentCount > 0 && (
                   <button
