@@ -38,12 +38,23 @@ type InvoiceRecord = {
 
 type ToastType = "success" | "error" | "info";
 
+type BrokerDatasetRow = {
+  month: string;
+  invoice: string;
+  invoice_date: string | null;
+  type: string;
+  upc: string;
+  item: string;
+  cust_name: string;
+  amt: number;
+};
+
 const DOCUMENT_BUCKET = "document-uploads";
 
 function normalizeType(raw: string) {
   const cleaned = raw.replace(/\s+/g, " ").trim().toLowerCase();
 
-  if (/\$\s*1\s*promotion/i.test(cleaned) || /1\s*dollar\s*promotion/i.test(cleaned)) {
+  if (/\$\s*1\s*promotion/i.test(cleaned) || /\b1\s*dollar\s*promotion\b/i.test(cleaned)) {
     return "$1 Promotion";
   }
 
@@ -169,16 +180,13 @@ function parseMetadataFromText(text: string) {
       { pattern: /customer\s+spoils\s+allowance/i, value: "Customer Spoils Allowance" },
       { pattern: /customer\s+spoilage\s+natural/i, value: "Customer Spoils Allowance" },
       { pattern: /customer\s+spoilage/i, value: "Customer Spoils Allowance" },
-
       { pattern: /pass\s+thru\s+deduction/i, value: "Pass Thru Deduction" },
       { pattern: /pass\s+through\s+deduction/i, value: "Pass Thru Deduction" },
       { pattern: /fresh\s+thyme\s+ppf/i, value: "Pass Thru Deduction" },
-
       { pattern: /new\s+item\s+setup\s+fee/i, value: "New Item Setup Fee" },
       { pattern: /new\s+item\s+set\s*up\s+fee/i, value: "New Item Setup Fee" },
       { pattern: /new\s+item\s+setup/i, value: "New Item Setup" },
       { pattern: /new\s+item\s+set\s*up/i, value: "New Item Setup" },
-
       { pattern: /intro\s+allowance\s+audit/i, value: "Intro Allowance Audit" },
       { pattern: /introductory\s+fee/i, value: "Introductory Fee" },
       { pattern: /wonder\s+monday/i, value: "WM Invoice" },
@@ -203,7 +211,6 @@ function parseMetadataFromText(text: string) {
 
   if (category === "$1 Promotion" || isDollarPromotion) {
     const promoInvoiceMatch = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
-
     if (promoInvoiceMatch?.[1]) {
       const candidate = promoInvoiceMatch[1].trim();
       if (!isBadInvoiceCandidate(candidate)) {
@@ -212,8 +219,8 @@ function parseMetadataFromText(text: string) {
     }
 
     const promoDateMatch =
-      normalizedText.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
-      normalizedText.match(/date\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+      normalizedText.match(/\bdate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i) ||
+      normalizedText.match(/\bdate\b\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i);
 
     if (promoDateMatch?.[1]) {
       pdf_date = normalizeDocDate(promoDateMatch[1]);
@@ -251,8 +258,8 @@ function parseMetadataFromText(text: string) {
     }
 
     const promoDateFallback =
-      normalizedText.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
-      normalizedText.match(/date\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+      normalizedText.match(/\bdate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i) ||
+      normalizedText.match(/\bdate\b\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i);
 
     if (promoDateFallback?.[1]) {
       pdf_date = normalizeDocDate(promoDateFallback[1]);
@@ -282,11 +289,7 @@ function parseMetadataFromText(text: string) {
   }
 
   if (invoice === "Unknown") {
-    const strongInvoicePatterns = [
-      /\b(CN\d{9,})\b/i,
-      /\b(CS\d{6,})\b/i,
-      /\b([A-Z]{1,6}\d{6,})\b/,
-    ];
+    const strongInvoicePatterns = [/\b(CN\d{9,})\b/i, /\b(CS\d{6,})\b/i, /\b([A-Z]{1,6}\d{6,})\b/];
 
     for (const pattern of strongInvoicePatterns) {
       const match = normalizedText.match(pattern);
@@ -343,7 +346,7 @@ function parseMetadataFromText(text: string) {
 
   if (pdf_date === "Unknown") {
     const datePatterns = [
-      /Date\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+      /\bDate\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i,
       /Invoice\s+date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
       /Date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
       /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/,
@@ -375,13 +378,15 @@ async function extractTextWithPdfJs(file: File) {
 
   let fullText = "";
 
-  for (let pageNum = 1; pageNum <= Math.min(pdf.numPages, 3); pageNum++) {
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
+
     const pageText = textContent.items
       .map((item: any) => ("str" in item ? item.str : ""))
-      .join(" ");
-    fullText += " " + pageText;
+      .join("\n");
+
+    fullText += `\n${pageText}\n`;
   }
 
   return { pdf, fullText: fullText.trim() };
@@ -410,7 +415,7 @@ async function extractTextWithOcr(pdf: any) {
 
       const imageDataUrl = canvas.toDataURL("image/png");
       const result = await worker.recognize(imageDataUrl);
-      fullText += " " + result.data.text;
+      fullText += `\n${result.data.text}\n`;
     }
   } finally {
     await worker.terminate();
@@ -525,6 +530,117 @@ function formatCurrency(value: number | null | undefined) {
   }).format(value);
 }
 
+function parseIsoDateFromMmDdYyyy(value: string | null | undefined) {
+  if (!value || value === "Unknown") return null;
+  const match = String(value).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return null;
+
+  const [, mm, dd, yyyy] = match;
+  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+}
+
+function formatMonthLabelFromDate(value: string | null | undefined) {
+  const iso = parseIsoDateFromMmDdYyyy(value);
+  if (!iso) return "";
+  const date = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-US", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function parseDetailRowsFromText(text: string): Array<{
+  upc: string;
+  item: string;
+  cust_name: string;
+  amt: number;
+}> {
+  const rows: Array<{
+    upc: string;
+    item: string;
+    cust_name: string;
+    amt: number;
+  }> = [];
+
+  const normalized = text
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\r/g, "\n");
+
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    const match = line.match(
+      /^(\d{11,14})\s+(.+?)\s+([A-Z0-9&.,'()\-\/ ]+)\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s+([A-Z0-9\-]+)\s+(\d+)\s+\d+%\s+\$?([\d,]+\.\d{2})$/i
+    );
+
+    if (!match) continue;
+
+    rows.push({
+      upc: match[1].trim(),
+      item: match[2].trim(),
+      cust_name: match[3].trim(),
+      amt: Number(match[7].replace(/,/g, "")),
+    });
+  }
+
+  return rows;
+}
+
+async function replaceDatasetRowsForInvoice(
+  invoice: string,
+  type: string,
+  pdfDate: string,
+  file: File
+) {
+  const normalizedInvoice = normalizeInvoiceNumber(invoice);
+  if (!normalizedInvoice) return 0;
+
+  const { fullText } = await extractTextWithPdfJs(file);
+  let detailRows = parseDetailRowsFromText(fullText);
+
+  if (detailRows.length === 0) {
+    return 0;
+  }
+
+  const invoiceDateIso = parseIsoDateFromMmDdYyyy(pdfDate);
+  const monthLabel = formatMonthLabelFromDate(pdfDate);
+
+  const inserts: BrokerDatasetRow[] = detailRows.map((row) => ({
+    month: monthLabel,
+    invoice: normalizedInvoice,
+    invoice_date: invoiceDateIso,
+    type: type === "Unknown" ? "" : type,
+    upc: row.upc,
+    item: row.item,
+    cust_name: row.cust_name,
+    amt: row.amt,
+  }));
+
+  const { error: deleteError } = await supabase
+    .from("broker_commission_datasets")
+    .delete()
+    .eq("invoice", normalizedInvoice);
+
+  if (deleteError) {
+    throw new Error(`Failed clearing existing dataset rows: ${deleteError.message}`);
+  }
+
+  const { error: insertError } = await supabase
+    .from("broker_commission_datasets")
+    .insert(inserts);
+
+  if (insertError) {
+    throw new Error(`Failed saving dataset rows: ${insertError.message}`);
+  }
+
+  return inserts.length;
+}
+
 async function syncInvoiceFromUpload(invoice: string, type: string) {
   if (!invoice || invoice === "Unknown") return;
 
@@ -627,20 +743,14 @@ export default function InvoicesView({
   }, []);
 
   useEffect(() => {
-    if (
-      invoiceUploadSignal > 0 &&
-      invoiceUploadSignal !== lastInvoiceUploadSignalRef.current
-    ) {
+    if (invoiceUploadSignal > 0 && invoiceUploadSignal !== lastInvoiceUploadSignalRef.current) {
       lastInvoiceUploadSignalRef.current = invoiceUploadSignal;
       invoiceInputRef.current?.click();
     }
   }, [invoiceUploadSignal]);
 
   useEffect(() => {
-    if (
-      documentUploadSignal > 0 &&
-      documentUploadSignal !== lastDocumentUploadSignalRef.current
-    ) {
+    if (documentUploadSignal > 0 && documentUploadSignal !== lastDocumentUploadSignalRef.current) {
       lastDocumentUploadSignalRef.current = documentUploadSignal;
       documentInputRef.current?.click();
     }
@@ -780,9 +890,7 @@ export default function InvoicesView({
       if (existingError) throw existingError;
 
       const existingSet = new Set(
-        (existingInvoices || [])
-          .map((item) => item.invoice_number)
-          .filter(Boolean)
+        (existingInvoices || []).map((item) => item.invoice_number).filter(Boolean)
       );
 
       const newRows = mappedRows.filter((row) => !existingSet.has(row.invoice_number));
@@ -970,6 +1078,7 @@ export default function InvoicesView({
       let successCount = 0;
       let replaceCount = 0;
       let skippedCount = 0;
+      let datasetRowCount = 0;
 
       const { data: allInvoices, error: allInvoicesError } = await supabase
         .from("invoices")
@@ -1028,20 +1137,43 @@ export default function InvoicesView({
             skippedCount++;
             continue;
           }
+
+          if (finalMetadata.file_type === "pdf") {
+            const inserted = await replaceDatasetRowsForInvoice(
+              finalMetadata.invoice,
+              finalMetadata.category,
+              finalMetadata.pdf_date,
+              file
+            );
+            datasetRowCount += inserted;
+          }
+
           replaceCount++;
           continue;
         }
 
         await uploadNewDocument(file, finalMetadata);
+
+        if (finalMetadata.file_type === "pdf") {
+          const inserted = await replaceDatasetRowsForInvoice(
+            finalMetadata.invoice,
+            finalMetadata.category,
+            finalMetadata.pdf_date,
+            file
+          );
+          datasetRowCount += inserted;
+        }
+
         successCount++;
       }
 
       await loadData();
 
-      if (successCount > 0 && replaceCount === 0 && skippedCount === 0) {
-        showToast("Uploaded successfully.", "success");
-      } else if (successCount > 0 || replaceCount > 0) {
-        showToast(`${successCount} uploaded, ${replaceCount} replaced, ${skippedCount} skipped.`, "success");
+      if (successCount > 0 || replaceCount > 0) {
+        showToast(
+          `${successCount} uploaded, ${replaceCount} replaced, ${skippedCount} skipped, ${datasetRowCount} dataset rows saved.`,
+          "success"
+        );
       }
     } catch (error: any) {
       console.error("Document upload error:", error);
@@ -1054,9 +1186,7 @@ export default function InvoicesView({
   };
 
   const toggleSelectOne = (id: number) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
   const handleDeleteSelected = async () => {
@@ -1163,17 +1293,17 @@ export default function InvoicesView({
               </select>
 
               <div className="relative">
-              <select
-  value={documentFilter}
-  onChange={(e) => setDocumentFilter(e.target.value)}
-  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 text-sm"
->
-  <option value="Documents">Documents</option>
-  <option value="With Document">With Document</option>
-  <option value="Without Document">
-    Without Document{withoutDocumentCount > 0 ? ` (${withoutDocumentCount})` : ""}
-  </option>
-</select>
+                <select
+                  value={documentFilter}
+                  onChange={(e) => setDocumentFilter(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 text-sm"
+                >
+                  <option value="Documents">Documents</option>
+                  <option value="With Document">With Document</option>
+                  <option value="Without Document">
+                    Without Document{withoutDocumentCount > 0 ? ` (${withoutDocumentCount})` : ""}
+                  </option>
+                </select>
 
                 {withoutDocumentCount > 0 && (
                   <button
