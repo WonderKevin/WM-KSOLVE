@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
 import DashboardView from "@/components/Views/DashboardView";
 import BrokerCommissionView from "@/components/Views/BrokerCommissionView";
+import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDataSetsView";
 import AccountingSummaryView from "@/components/Views/AccountingSummaryView";
 import CheckDetailsView from "@/components/Views/CheckDetailsView";
 import InvoicesView from "@/components/Views/InvoicesView";
@@ -124,7 +125,7 @@ export default function WMKsolveApp() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [activeKey, setActiveKey] = useState("dashboard");
   const [openGroups, setOpenGroups] = useState({
-    "broker-commission": false,
+    "broker-commission": true,
     accounting: false,
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -193,7 +194,7 @@ export default function WMKsolveApp() {
       case "broker-commission-summary":
         return <BrokerCommissionView />;
       case "broker-commission-data-sets":
-        return <div>Data Sets View</div>;
+        return <BrokerCommissionDataSetsView />;
       case "accounting-summary":
         return <AccountingSummaryView />;
       case "accounting-check-details":
