@@ -24,7 +24,15 @@ import InvoicesView from "@/components/Views/InvoicesView";
 
 const sidebarItems = [
   { label: "Dashboard", icon: LayoutDashboard, key: "dashboard" },
-  { label: "Broker Commission", icon: Receipt, key: "broker-commission" },
+  {
+    label: "Broker Commission",
+    icon: Receipt,
+    key: "broker-commission",
+    children: [
+      { label: "Broker Commission Summary", key: "broker-commission-summary" },
+      { label: "Data Sets", key: "broker-commission-data-sets" },
+    ],
+  },
   {
     label: "Accounting",
     icon: BadgeDollarSign,
@@ -116,6 +124,7 @@ export default function WMKsolveApp() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [activeKey, setActiveKey] = useState("dashboard");
   const [openGroups, setOpenGroups] = useState({
+    "broker-commission": false,
     accounting: false,
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -170,7 +179,8 @@ export default function WMKsolveApp() {
 
   const titleMap: Record<string, string> = {
     dashboard: "Dashboard",
-    "broker-commission": "Broker Commission",
+    "broker-commission-summary": "Broker Commission Summary",
+    "broker-commission-data-sets": "Data Sets",
     "accounting-summary": "Summary",
     "accounting-check-details": "Check Details",
     invoices: "Invoices",
@@ -180,8 +190,10 @@ export default function WMKsolveApp() {
     switch (activeKey) {
       case "dashboard":
         return <DashboardView />;
-      case "broker-commission":
+      case "broker-commission-summary":
         return <BrokerCommissionView />;
+      case "broker-commission-data-sets":
+        return <div>Data Sets View</div>;
       case "accounting-summary":
         return <AccountingSummaryView />;
       case "accounting-check-details":
