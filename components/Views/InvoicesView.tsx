@@ -43,6 +43,14 @@ const DOCUMENT_BUCKET = "document-uploads";
 function normalizeType(raw: string) {
   const cleaned = raw.replace(/\s+/g, " ").trim().toLowerCase();
 
+  if (/\$\s*1\s*promotion/i.test(cleaned) || /1\s*dollar\s*promotion/i.test(cleaned)) {
+    return "$1 Promotion";
+  }
+
+  if (/distributor\s+charge/i.test(cleaned)) {
+    return "$1 Promotion";
+  }
+
   if (/customer\s+spoils\s+allowance/i.test(cleaned)) return "Customer Spoils Allowance";
   if (/customer\s+spoilage\s+natural/i.test(cleaned)) return "Customer Spoils Allowance";
   if (/customer\s+spoilage/i.test(cleaned)) return "Customer Spoils Allowance";
@@ -135,6 +143,11 @@ function parseMetadataFromText(text: string) {
     /bill\s+to/i.test(lowerText) &&
     /ship\s+to/i.test(lowerText);
 
+  const isDollarPromotion =
+    /distributor\s+charge/i.test(lowerText) &&
+    /received\s+by\s+customer/i.test(lowerText) &&
+    /invoice\s*#\s*[a-z0-9-]+/i.test(normalizedText);
+
   const isFreshThymePpf =
     /fresh\s+thyme\s+ppf/i.test(lowerText) ||
     (/special\s+payee\s+number/i.test(lowerText) &&
@@ -142,12 +155,17 @@ function parseMetadataFromText(text: string) {
       /po\s*#/i.test(lowerText) &&
       /wonder\s+monday/i.test(lowerText));
 
-  if (isStrictWMInvoice) {
+  if (isDollarPromotion) {
+    category = "$1 Promotion";
+  } else if (isStrictWMInvoice) {
     category = "WM Invoice";
   } else if (isFreshThymePpf) {
     category = "Pass Thru Deduction";
   } else {
     const knownTypeMatchers = [
+      { pattern: /\$\s*1\s*promotion/i, value: "$1 Promotion" },
+      { pattern: /\b1\s*dollar\s*promotion\b/i, value: "$1 Promotion" },
+      { pattern: /distributor\s+charge/i, value: "$1 Promotion" },
       { pattern: /customer\s+spoils\s+allowance/i, value: "Customer Spoils Allowance" },
       { pattern: /customer\s+spoilage\s+natural/i, value: "Customer Spoils Allowance" },
       { pattern: /customer\s+spoilage/i, value: "Customer Spoils Allowance" },
@@ -183,6 +201,25 @@ function parseMetadataFromText(text: string) {
     }
   }
 
+  if (category === "$1 Promotion" || isDollarPromotion) {
+    const promoInvoiceMatch = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
+
+    if (promoInvoiceMatch?.[1]) {
+      const candidate = promoInvoiceMatch[1].trim();
+      if (!isBadInvoiceCandidate(candidate)) {
+        invoice = normalizeInvoiceNumber(candidate);
+      }
+    }
+
+    const promoDateMatch =
+      normalizedText.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
+      normalizedText.match(/date\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+
+    if (promoDateMatch?.[1]) {
+      pdf_date = normalizeDocDate(promoDateMatch[1]);
+    }
+  }
+
   if (category === "WM Invoice" || isStrictWMInvoice) {
     const wmInvoiceMatch =
       normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i) ||
@@ -201,6 +238,24 @@ function parseMetadataFromText(text: string) {
 
     if (wmDateMatch?.[1]) {
       pdf_date = normalizeDocDate(wmDateMatch[1]);
+    }
+  }
+
+  if (invoice === "Unknown" && category === "$1 Promotion") {
+    const promoInvoiceFallback = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
+    if (promoInvoiceFallback?.[1]) {
+      const candidate = promoInvoiceFallback[1].trim();
+      if (!isBadInvoiceCandidate(candidate)) {
+        invoice = normalizeInvoiceNumber(candidate);
+      }
+    }
+
+    const promoDateFallback =
+      normalizedText.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
+      normalizedText.match(/date\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+
+    if (promoDateFallback?.[1]) {
+      pdf_date = normalizeDocDate(promoDateFallback[1]);
     }
   }
 
@@ -288,6 +343,7 @@ function parseMetadataFromText(text: string) {
 
   if (pdf_date === "Unknown") {
     const datePatterns = [
+      /Date\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
       /Invoice\s+date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
       /Date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
       /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/,
