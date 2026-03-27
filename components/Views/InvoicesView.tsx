@@ -573,18 +573,63 @@ function parseDetailRowsFromText(text: string): Array<{
     .map((line) => line.trim())
     .filter(Boolean);
 
-  for (const line of lines) {
-    const match = line.match(
-      /^(\d{11,14})\s+(.+?)\s+([A-Z0-9&.,'()\-\/ ]+)\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s+([A-Z0-9\-]+)\s+(\d+)\s+\d+%\s+\$?([\d,]+\.\d{2})$/i
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Must start with UPC
+    if (!/^\d{11,14}\b/.test(line)) continue;
+
+    // Try current line + next few lines because PDF text is often broken apart
+    const block = [lines[i], lines[i + 1], lines[i + 2], lines[i + 3]]
+      .filter(Boolean)
+      .join(" ");
+
+    const amountMatch = block.match(/\$?([\d,]+\.\d{2})\s*$/);
+    const dateMatch = block.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/);
+
+    if (!amountMatch || !dateMatch) continue;
+
+    const upcMatch = block.match(/^(\d{11,14})\s+/);
+    if (!upcMatch) continue;
+
+    const upc = upcMatch[1];
+    const amount = Number(amountMatch[1].replace(/,/g, ""));
+    const dateText = dateMatch[0];
+
+    const beforeDate = block.split(dateText)[0].trim();
+    const afterUpc = beforeDate.replace(new RegExp(`^${upc}\\s+`), "").trim();
+
+    // Try to split item and customer by common customer pattern
+    let item = "";
+    let cust_name = "";
+
+    const customerMatch = afterUpc.match(
+      /\b([A-Z]{2,5}\s+[A-Z]{2,5}\s+\d{2,5},\s+[A-Z .'-]+)\b/i
     );
 
-    if (!match) continue;
+    if (customerMatch) {
+      cust_name = customerMatch[1].trim();
+      item = afterUpc.replace(customerMatch[1], "").trim();
+    } else {
+      // fallback: split near the end before date
+      const parts = afterUpc.split(/\s{2,}/).filter(Boolean);
+      if (parts.length >= 2) {
+        item = parts.slice(0, -1).join(" ").trim();
+        cust_name = parts[parts.length - 1].trim();
+      } else {
+        // fallback if no customer pattern found
+        item = afterUpc.trim();
+        cust_name = "";
+      }
+    }
+
+    if (!item) continue;
 
     rows.push({
-      upc: match[1].trim(),
-      item: match[2].trim(),
-      cust_name: match[3].trim(),
-      amt: Number(match[7].replace(/,/g, "")),
+      upc,
+      item,
+      cust_name,
+      amt: amount,
     });
   }
 
@@ -601,7 +646,10 @@ async function replaceDatasetRowsForInvoice(
   if (!normalizedInvoice) return 0;
 
   const { fullText } = await extractTextWithPdfJs(file);
+  console.log("FULL PDF TEXT:", fullText);
+
   const detailRows = parseDetailRowsFromText(fullText);
+  console.log("PARSED DETAIL ROWS:", detailRows);
 
   if (detailRows.length === 0) {
     return 0;
@@ -610,7 +658,7 @@ async function replaceDatasetRowsForInvoice(
   const invoiceDateIso = parseIsoDateFromMmDdYyyy(pdfDate);
   const monthLabel = formatMonthLabelFromDate(pdfDate);
 
-  const inserts: BrokerDatasetRow[] = detailRows.map((row) => ({
+  const inserts = detailRows.map((row) => ({
     month: monthLabel,
     invoice: normalizedInvoice,
     invoice_date: invoiceDateIso,
@@ -621,14 +669,10 @@ async function replaceDatasetRowsForInvoice(
     amt: row.amt,
   }));
 
-  const { error: deleteError } = await supabase
+  await supabase
     .from("broker_commission_datasets")
     .delete()
     .eq("invoice", normalizedInvoice);
-
-  if (deleteError) {
-    throw new Error(`Failed clearing existing dataset rows: ${deleteError.message}`);
-  }
 
   const { error: insertError } = await supabase
     .from("broker_commission_datasets")
