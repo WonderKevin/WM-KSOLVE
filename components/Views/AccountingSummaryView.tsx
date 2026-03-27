@@ -230,7 +230,7 @@ export default function AccountingSummaryView() {
           <div>
             <h2 className="text-xl font-semibold text-slate-900">Accounting Summary</h2>
             <p className="text-sm text-slate-500">
-              Summary by type from invoices, with WM Invoice shown first.
+              Summary by type from invoices.
             </p>
           </div>
 

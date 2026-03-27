@@ -584,8 +584,8 @@ export default function InvoicesView({
   const invoiceInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastInvoiceUploadSignalRef = useRef(0);
-  const lastDocumentUploadSignalRef = useRef(0);
+  const lastInvoiceUploadSignalRef = useRef(invoiceUploadSignal);
+  const lastDocumentUploadSignalRef = useRef(documentUploadSignal);
 
   const showToast = (text: string, type: ToastType = "success") => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
