@@ -125,7 +125,7 @@ export default function WMKsolveApp() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [activeKey, setActiveKey] = useState("dashboard");
   const [openGroups, setOpenGroups] = useState({
-    "broker-commission": true,
+    "broker-commission": false,
     accounting: false,
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);

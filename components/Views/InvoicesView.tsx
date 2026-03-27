@@ -601,7 +601,7 @@ async function replaceDatasetRowsForInvoice(
   if (!normalizedInvoice) return 0;
 
   const { fullText } = await extractTextWithPdfJs(file);
-  let detailRows = parseDetailRowsFromText(fullText);
+  const detailRows = parseDetailRowsFromText(fullText);
 
   if (detailRows.length === 0) {
     return 0;
@@ -1169,7 +1169,7 @@ export default function InvoicesView({
 
       await loadData();
 
-      if (successCount > 0 || replaceCount > 0) {
+      if (successCount > 0 || replaceCount > 0 || skippedCount > 0) {
         showToast(
           `${successCount} uploaded, ${replaceCount} replaced, ${skippedCount} skipped, ${datasetRowCount} dataset rows saved.`,
           "success"
