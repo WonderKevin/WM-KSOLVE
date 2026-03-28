@@ -146,7 +146,7 @@ function normalizeExcelDate(value: unknown) {
 }
 
 // ---------------------------------------------------------------------------
-// Metadata extraction from PDF text
+// Metadata extraction
 // ---------------------------------------------------------------------------
 function parseMetadataFromText(text: string) {
   const normalizedText = text
@@ -156,7 +156,6 @@ function parseMetadataFromText(text: string) {
     .trim();
 
   const lowerText = normalizedText.toLowerCase();
-
   let invoice = "Unknown";
   let category = "Unknown";
   let pdf_date = "Unknown";
@@ -181,27 +180,21 @@ function parseMetadataFromText(text: string) {
       /po\s*#/i.test(lowerText) &&
       /wonder\s+monday/i.test(lowerText));
 
-  // WM Invoice PDF (Wonder Monday invoice to KeHE DC)
   const isWMInvoicePdf =
     /wonder\s*monday/i.test(lowerText) &&
     /ship\s+to/i.test(lowerText) &&
     /kehe\s+distributors/i.test(lowerText) &&
     /invoice\s+no/i.test(lowerText);
 
-  // Fresh Thyme SAS Chargeback PDF
   const isFreshThymeSas =
     /fresh\s+thyme\s+sas/i.test(lowerText) &&
     /chargeback/i.test(lowerText);
 
   if (isDollarPromotion) {
     category = "$1 Promotion";
-  } else if (isStrictWMInvoice) {
+  } else if (isStrictWMInvoice || isWMInvoicePdf) {
     category = "WM Invoice";
-  } else if (isFreshThymePpf) {
-    category = "Pass Thru Deduction";
-  } else if (isWMInvoicePdf) {
-    category = "WM Invoice";
-  } else if (isFreshThymeSas) {
+  } else if (isFreshThymePpf || isFreshThymeSas) {
     category = "Pass Thru Deduction";
   } else {
     const knownTypeMatchers = [
@@ -233,16 +226,7 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // Invoice number extraction
-  if (category === "$1 Promotion" || isDollarPromotion) {
-    const m = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
-    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
-    const d =
-      normalizedText.match(/\bdate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i) ||
-      normalizedText.match(/\bdate\b\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i);
-    if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
-  }
-
+  // Invoice number + date extraction
   if (category === "WM Invoice" || isStrictWMInvoice || isWMInvoicePdf) {
     const m =
       normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i) ||
@@ -254,8 +238,8 @@ function parseMetadataFromText(text: string) {
     if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
-  if (invoice === "Unknown" && category === "$1 Promotion") {
-    const m = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
+  if (category === "$1 Promotion" || isDollarPromotion) {
+    const m = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
     if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
     const d =
       normalizedText.match(/\bdate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i) ||
@@ -263,23 +247,14 @@ function parseMetadataFromText(text: string) {
     if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
-  if (invoice === "Unknown" && category === "Pass Thru Deduction") {
+  if (invoice === "Unknown" && (category === "Pass Thru Deduction" || isFreshThymeSas)) {
     const m =
-      normalizedText.match(/invoice\s*number\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i) ||
-      normalizedText.match(/invoice\s*number\s*\n\s*([A-Z0-9.\-\/]+)/i) ||
-      normalizedText.match(/invoice\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
+      normalizedText.match(/invoice\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i) ||
+      normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
     if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
     const d =
       normalizedText.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
       normalizedText.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
-    if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
-  }
-
-  // Fresh Thyme SAS: invoice # from header
-  if (isFreshThymeSas && invoice === "Unknown") {
-    const m = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
-    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
-    const d = normalizedText.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
     if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
@@ -385,9 +360,6 @@ async function extractPdfMetadata(file: File) {
   return parsed;
 }
 
-// ---------------------------------------------------------------------------
-// Excel metadata extraction
-// ---------------------------------------------------------------------------
 async function extractExcelMetadata(file: File) {
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
@@ -411,7 +383,7 @@ async function extractDocumentMetadata(file: File): Promise<{
 }
 
 // ---------------------------------------------------------------------------
-// Product list lookup — fetches all rows once, returns Map<upc, item_description>
+// Product list lookup
 // ---------------------------------------------------------------------------
 async function fetchProductLookup(): Promise<Map<string, string>> {
   const { data, error } = await supabase.from("product_list").select("upc, item_description");
@@ -424,14 +396,11 @@ async function fetchProductLookup(): Promise<Map<string, string>> {
 }
 
 // ---------------------------------------------------------------------------
-// Invoice type lookup — get type from invoices table by invoice number
+// Invoice type lookup from invoices table
 // ---------------------------------------------------------------------------
 async function fetchInvoiceType(invoiceNumber: string): Promise<string> {
   const normalized = normalizeInvoiceNumber(invoiceNumber);
-  const { data, error } = await supabase
-    .from("invoices")
-    .select("type, invoice_number")
-    .limit(5000);
+  const { data, error } = await supabase.from("invoices").select("type, invoice_number").limit(5000);
   if (error) return "";
   const matched = (data || []).find(
     (row) => normalizeInvoiceNumber(row.invoice_number || "") === normalized
@@ -441,9 +410,8 @@ async function fetchInvoiceType(invoiceNumber: string): Promise<string> {
 
 // ---------------------------------------------------------------------------
 // FORMAT 1: KeHE Spoils PDF
-// pdfjs emits one field per line in this fixed order per row:
-//   i+0 UPC (12 digits), i+1 ITEM, i+2 BRAND (skip), i+3 CUST NAME,
-//   i+4 DATE (skip), i+5 INV# (skip), i+6 QTY (skip), i+7 PCT% (skip), i+8 AMT
+// pdfjs emits one field per line:
+//   i+0 UPC (12 digits), i+1 ITEM, i+2 BRAND (skip), i+3 CUST, i+8 AMT
 // ---------------------------------------------------------------------------
 function parseSpoilsPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
@@ -458,15 +426,12 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
   for (let i = 0; i < lines.length; i++) {
     if (SKIP_RE.test(lines[i])) continue;
     if (!UPC_RE.test(lines[i])) continue;
-
-    const upc    = lines[i]     ?? "";
+    const upc    = lines[i];
     const item   = lines[i + 1] ?? "";
     const cust   = lines[i + 3] ?? "";
     const amtRaw = lines[i + 8] ?? "";
-
     const amtMatch = amtRaw.match(AMT_RE);
     if (!amtMatch) continue;
-
     rows.push({ upc, item, cust_name: cust, amt: parseFloat(amtMatch[1]) });
   }
   return rows;
@@ -474,9 +439,7 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
 
 // ---------------------------------------------------------------------------
 // FORMAT 2: Fresh Thyme SAS Chargeback PDF
-// Item rows start with a 12-digit UPC. EP FEE distributed by qty ratio.
-// Columns per row (space-separated on one line):
-//   <UPC> <BRAND> <ITEM DESC...> <SIZE> <UOM> <QTY> <TOTAL>
+// Item rows start with 12-digit UPC. EP FEE distributed by qty.
 // ---------------------------------------------------------------------------
 function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
@@ -484,64 +447,49 @@ function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
     .replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ")
     .split("\n").map((l) => l.trim()).filter(Boolean);
 
-  // Match item rows: start with 12-digit UPC, end with dollar amount
-  const ROW_RE = /^(\d{12})\s+.+\s+(\d+)\s+\$(\d*\.\d{2})\s*$/;
-  const AMT_RE = /\$(\d*\.\d{2})/;
-
-  // Find EP FEE line
   let epFee = 0;
   for (const line of lines) {
     if (/ep\s*fee/i.test(line)) {
-      const m = line.match(AMT_RE);
+      const m = line.match(/\$(\d*\.\d{2})/);
       if (m) epFee = parseFloat(m[1]);
     }
   }
 
-  // Parse item rows
-  const rawRows: Array<{ upc: string; item: string; qty: number; amt: number }> = [];
+  const rawRows: Array<{ upc: string; qty: number; amt: number }> = [];
   for (const line of lines) {
     if (!/^\d{12}\b/.test(line)) continue;
     if (/ep\s*fee|chargeback|invoice\s+total|sub\s*total/i.test(line)) continue;
-
     const upcMatch = line.match(/^(\d{12})/);
     if (!upcMatch) continue;
-
     const amtMatch = line.match(/\$(\d*\.\d{2})\s*$/);
     if (!amtMatch) continue;
-
-    // Extract qty — second-to-last number before the amount
     const withoutUpc = line.slice(12).trim();
     const numbers = withoutUpc.match(/\b(\d+)\b/g) || [];
     const qty = numbers.length >= 1 ? parseInt(numbers[numbers.length - 1]) : 1;
-
-    rawRows.push({
-      upc: upcMatch[1],
-      item: "", // will be replaced by product_list lookup
-      qty,
-      amt: parseFloat(amtMatch[1]),
-    });
+    rawRows.push({ upc: upcMatch[1], qty, amt: parseFloat(amtMatch[1]) });
   }
 
   if (rawRows.length === 0) return rows;
-
-  // Distribute EP FEE by qty ratio
   const totalQty = rawRows.reduce((sum, r) => sum + r.qty, 0);
   for (const r of rawRows) {
     const epShare = totalQty > 0 ? (r.qty / totalQty) * epFee : 0;
-    rows.push({
-      upc: r.upc,
-      item: r.item,
-      cust_name: "",
-      amt: Math.round((r.amt + epShare) * 100) / 100,
-    });
+    rows.push({ upc: r.upc, item: "", cust_name: "", amt: Math.round((r.amt + epShare) * 100) / 100 });
   }
   return rows;
 }
 
 // ---------------------------------------------------------------------------
 // FORMAT 3: WM Invoice PDF (Wonder Monday → KeHE DC)
-// SKU is the UPC. Customer = first line below "Ship to".
-// MA 2% row distributed by qty ratio across all other rows.
+//
+// Actual pdfjs line structure (confirmed from Invoice_1761):
+//   "# Product or service SKU Description Qty Rate Amount"  ← header, skip
+//   "1. Key Lime Pie Cheesecake (High"                      ← product name part 1
+//   "Protein) (12/cs)"                                      ← product name part 2
+//   "HP-KEYL-134 110 $39.12 $4,303.20"                     ← SKU + qty + rate + amount
+//   "2. MA 2% KeHE MA 2% 1 −$86.06 −$86.06"               ← MA row, distribute
+//
+// Strategy: scan for lines that match "SKU qty $rate $amount" pattern.
+// MA 2% is on its own combined line — capture and distribute.
 // ---------------------------------------------------------------------------
 function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
@@ -552,55 +500,46 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   // Extract customer: first non-empty line after "Ship to"
   let customer = "";
   for (let i = 0; i < lines.length; i++) {
-    if (/^ship\s+to/i.test(lines[i])) {
+    if (/^ship\s+to$/i.test(lines[i])) {
       customer = lines[i + 1] ?? "";
       break;
     }
   }
 
-  // Find MA 2% amount and item rows
+  // MA 2% amount (negative)
   let maAmount = 0;
-  const rawRows: Array<{ upc: string; item: string; qty: number; amt: number }> = [];
-
-  // Item row pattern: starts with a number (row #), has SKU, qty, rate, amount
-  // e.g. "1. Classic Plain Cheesecake ... HP-CLAS-135 110 $36.12 $3,973.20"
-  const AMT_RE = /\$([\d,]+\.\d{2})\s*$/;
-
   for (const line of lines) {
-    // MA 2% row — capture its amount (may be negative)
     if (/ma\s*2%/i.test(line)) {
-      const m = line.match(/\-?\$?([\d,]+\.\d{2})/);
-      if (m) {
-        maAmount = -Math.abs(parseFloat(m[1].replace(/,/g, "")));
-      }
-      continue;
+      // Match negative amounts like −$86.06 or -$86.06
+      const m = line.match(/[\u2212\-]\$?([\d,]+\.\d{2})/);
+      if (m) maAmount = -Math.abs(parseFloat(m[1].replace(/,/g, "")));
     }
-
-    // Skip totals / headers
-    if (/^(total|sub\s*total|note|ship\s+date|invoice|terms|due\s+date|bill\s+to|ship\s+to)/i.test(line)) continue;
-
-    // Item rows: contain a SKU-like pattern (letters-letters-digits) and end with amount
-    const skuMatch = line.match(/\b([A-Z]{2,4}-[A-Z]{2,6}-\d{2,4})\b/);
-    const amtMatch = line.match(AMT_RE);
-    if (!skuMatch || !amtMatch) continue;
-
-    // Extract qty — number before rate
-    const qtyMatch = line.match(/\b(\d+)\s+\$[\d,]+\.\d{2}\s+\$/);
-    const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1;
-    const amt = parseFloat(amtMatch[1].replace(/,/g, ""));
-
-    rawRows.push({ upc: skuMatch[1], item: "", qty, amt });
   }
+
+  // SKU data lines: "HP-KEYL-134 110 $39.12 $4,303.20"
+  // Pattern: SKU (letters-letters-digits) followed by qty and two amounts
+  const SKU_LINE_RE = /^([A-Z]{2,6}-[A-Z]{2,8}-\d{2,4})\s+(\d+)\s+[\u2212\-]?\$[\d,]+\.\d{2}\s+[\u2212\-]?\$([\d,]+\.\d{2})\s*$/;
+
+  const rawRows: Array<{ upc: string; qty: number; amt: number }> = [];
+  for (const line of lines) {
+    const m = line.match(SKU_LINE_RE);
+    if (!m) continue;
+    const sku = m[1];
+    const qty = parseInt(m[2]);
+    const amt = parseFloat(m[3].replace(/,/g, ""));
+    rawRows.push({ upc: sku, qty, amt });
+  }
+
+  console.log("[WMInvoice] customer:", customer, "| maAmount:", maAmount, "| rawRows:", rawRows);
 
   if (rawRows.length === 0) return rows;
 
-  // Distribute MA 2% by qty ratio
   const totalQty = rawRows.reduce((sum, r) => sum + r.qty, 0);
   for (const r of rawRows) {
     const maShare = totalQty > 0 ? (r.qty / totalQty) * maAmount : 0;
     rows.push({
       upc: r.upc,
-      item: r.item,
+      item: "",
       cust_name: customer,
       amt: Math.round((r.amt + maShare) * 100) / 100,
     });
@@ -610,52 +549,38 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
 
 // ---------------------------------------------------------------------------
 // FORMAT 4: Excel — Product Details sheet
-// Handles three sub-formats based on available columns:
-//   A) Has CUSTOMER NAME → use it
-//   B) Has DIVISION → use it
-//   C) Has KeHE DC only → format as "DC {value}"
-// Amount columns by priority: SCANNED SALES @ COST → Bill Amount
+// Customer priority: CUSTOMER NAME → DIVISION → DC {KeHE DC}
+// Amount priority:   SCANNED SALES @ COST → Bill Amount
 // ---------------------------------------------------------------------------
 function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
   const rows: DatasetRow[] = [];
   const workbook = XLSX.read(buffer, { type: "array" });
-
   const sheetName = workbook.SheetNames.find((n) => /product\s*details/i.test(n));
   if (!sheetName) return rows;
 
   const sheet = workbook.Sheets[sheetName];
   const json = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: "" });
-
   if (json.length === 0) return rows;
 
-  // Detect columns from first row keys
   const keys = Object.keys(json[0]);
-  const hasCustomerName = keys.some((k) => /customer\s*name/i.test(k));
-  const hasDivision = keys.some((k) => /^division$/i.test(k));
-  const hasKeheDc = keys.some((k) => /kehe\s*dc/i.test(k));
-  const hasScannedSales = keys.some((k) => /scanned\s*sales/i.test(k));
-  const hasBillAmount = keys.some((k) => /bill\s*amount/i.test(k));
-
   const customerNameKey = keys.find((k) => /customer\s*name/i.test(k)) ?? "";
-  const divisionKey = keys.find((k) => /^division$/i.test(k)) ?? "";
-  const keheDcKey = keys.find((k) => /kehe\s*dc/i.test(k)) ?? "";
-  const amountKey =
+  const divisionKey     = keys.find((k) => /^division$/i.test(k)) ?? "";
+  const keheDcKey       = keys.find((k) => /kehe\s*dc/i.test(k)) ?? "";
+  const amountKey       =
     keys.find((k) => /scanned\s*sales/i.test(k)) ??
-    keys.find((k) => /bill\s*amount/i.test(k)) ??
-    "";
-  const upcKey = keys.find((k) => /^upc$/i.test(k)) ?? "";
+    keys.find((k) => /bill\s*amount/i.test(k)) ?? "";
+  const upcKey          = keys.find((k) => /^upc$/i.test(k)) ?? "";
 
   for (const row of json) {
     const upc = String(row[upcKey] || "").trim();
     if (!upc || !/^\d{10,14}$/.test(upc)) continue;
 
-    // Customer priority: CUSTOMER NAME → DIVISION → DC {KeHE DC}
     let cust = "";
-    if (hasCustomerName && row[customerNameKey]) {
+    if (customerNameKey && row[customerNameKey]) {
       cust = String(row[customerNameKey]).trim();
-    } else if (hasDivision && row[divisionKey]) {
+    } else if (divisionKey && row[divisionKey]) {
       cust = String(row[divisionKey]).trim();
-    } else if (hasKeheDc && row[keheDcKey]) {
+    } else if (keheDcKey && row[keheDcKey]) {
       cust = `DC ${String(row[keheDcKey]).trim()}`;
     }
 
@@ -668,16 +593,15 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
 }
 
 // ---------------------------------------------------------------------------
-// Detect file format and parse detail rows
+// Detect format and parse rows
+// For Excel: parse directly from buffer (no pdfjs).
+// For PDF: use fullText to detect format, then parse accordingly.
 // ---------------------------------------------------------------------------
-async function parseDetailRows(
-  file: File,
-  fullText: string
-): Promise<DatasetRow[]> {
+async function parseDetailRows(file: File, fullText: string): Promise<DatasetRow[]> {
   const lowerText = fullText.toLowerCase();
   const lowerName = file.name.toLowerCase();
 
-  // Excel formats
+  // Excel — parse from buffer directly, never touch pdfjs
   if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
     const buffer = await file.arrayBuffer();
     return parseExcelProductDetailsRows(buffer);
@@ -688,7 +612,7 @@ async function parseDetailRows(
     return parseFreshThymeSasPdfRows(fullText);
   }
 
-  // WM Invoice PDF (Wonder Monday to KeHE)
+  // WM Invoice PDF
   if (
     /wonder\s*monday/i.test(lowerText) &&
     /ship\s+to/i.test(lowerText) &&
@@ -703,7 +627,7 @@ async function parseDetailRows(
 }
 
 // ---------------------------------------------------------------------------
-// Save dataset rows — with product_list lookup and invoice type from DB
+// Save dataset rows
 // ---------------------------------------------------------------------------
 async function replaceDatasetRowsForInvoice(
   invoice: string,
@@ -713,15 +637,23 @@ async function replaceDatasetRowsForInvoice(
   const normalizedInvoice = normalizeInvoiceNumber(invoice);
   if (!normalizedInvoice) return 0;
 
-  const { fullText } = await extractTextWithPdfJs(file);
-  console.log("FULL PDF TEXT:", fullText);
+  const lowerName = file.name.toLowerCase();
+  const isExcel = lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls");
 
-  const detailRows = await parseDetailRows(file, fullText);
+  // For Excel: parse rows directly. For PDF: extract text first.
+  let detailRows: DatasetRow[] = [];
+  if (isExcel) {
+    const buffer = await file.arrayBuffer();
+    detailRows = parseExcelProductDetailsRows(buffer);
+  } else {
+    const { fullText } = await extractTextWithPdfJs(file);
+    console.log("FULL PDF TEXT:", fullText);
+    detailRows = await parseDetailRows(file, fullText);
+  }
+
   console.log("PARSED DETAIL ROWS:", detailRows);
-
   if (detailRows.length === 0) return 0;
 
-  // Fetch product_list and invoice type in parallel
   const [productLookup, invoiceType] = await Promise.all([
     fetchProductLookup(),
     fetchInvoiceType(normalizedInvoice),
@@ -733,19 +665,16 @@ async function replaceDatasetRowsForInvoice(
   const invoiceDateIso = parseIsoDateFromMmDdYyyy(pdfDate);
   const monthLabel = formatMonthLabelFromDate(pdfDate);
 
-  const inserts = detailRows.map((row) => {
-    const standardizedItem = productLookup.get(row.upc) || row.item;
-    return {
-      month: monthLabel,
-      invoice: normalizedInvoice,
-      invoice_date: invoiceDateIso,
-      type: invoiceType,
-      upc: row.upc,
-      item: standardizedItem,
-      cust_name: row.cust_name,
-      amt: row.amt,
-    };
-  });
+  const inserts = detailRows.map((row) => ({
+    month: monthLabel,
+    invoice: normalizedInvoice,
+    invoice_date: invoiceDateIso,
+    type: invoiceType,
+    upc: row.upc,
+    item: productLookup.get(row.upc) || row.item,
+    cust_name: row.cust_name,
+    amt: row.amt,
+  }));
 
   await supabase.from("broker_commission_datasets").delete().eq("invoice", normalizedInvoice);
   const { error: insertError } = await supabase.from("broker_commission_datasets").insert(inserts);
@@ -757,18 +686,18 @@ async function replaceDatasetRowsForInvoice(
 async function syncInvoiceFromUpload(invoice: string, type: string) {
   if (!invoice || invoice === "Unknown") return;
   const normalizedInvoice = normalizeInvoiceNumber(invoice);
-  const { data: invoiceRows, error: lookupError } = await supabase
+  const { data: invoiceRows, error } = await supabase
     .from("invoices").select("id, invoice_number").limit(5000);
-  if (lookupError) throw new Error(`Failed to find invoice ${invoice}: ${lookupError.message}`);
+  if (error) throw new Error(`Failed to find invoice ${invoice}: ${error.message}`);
   const matched = (invoiceRows || []).find(
     (row) => normalizeInvoiceNumber(row.invoice_number || "") === normalizedInvoice
   );
   if (!matched) return;
-  const { error } = await supabase
+  const { error: ue } = await supabase
     .from("invoices")
     .update({ type: type === "Unknown" ? "" : type, doc_status: true })
     .eq("id", matched.id);
-  if (error) throw new Error(`Failed to sync invoice ${invoice}: ${error.message}`);
+  if (ue) throw new Error(`Failed to sync invoice ${invoice}: ${ue.message}`);
 }
 
 // ---------------------------------------------------------------------------
