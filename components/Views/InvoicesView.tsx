@@ -423,7 +423,7 @@ function parseDetailRowsFromText(text: string): Array<{
   console.log("[parseDetailRows] total lines:", lines.length);
 
   // Matches $0.82, $.82, $1.23, $24.60 at end of block
-  const AMT_RE = /\$(\d*\.\d{2})\s*$/;
+  const AMT_RE = /\$(\d*\.\d{2})/;
   // Per-row date: MM/DD/YYYY
   const DATE_RE = /\b\d{1,2}\/\d{1,2}\/\d{4}\b/;
   // UPC starts line: 12 digits (KeHE standard)
