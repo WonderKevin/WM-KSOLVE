@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, X, Pencil, Trash2 } from "lucide-react";
+import { MoreHorizontal, Plus, Search, Trash2, X, Pencil } from "lucide-react";
 
 import { supabase } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -239,27 +239,36 @@ export default function ProductListView() {
                       <td className="px-4 py-3 text-slate-700">{item.upc}</td>
                       <td className="px-4 py-3 text-slate-700">{item.item_description}</td>
                       <td className="px-4 py-3">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="rounded-xl"
-                            onClick={() => handleOpenEditModal(item)}
-                          >
-                            <Pencil className="mr-2 h-4 w-4" />
-                            Edit
-                          </Button>
+                        <div className="flex justify-end">
+                          <div className="group relative inline-block">
+                            <button
+                              type="button"
+                              className="rounded-xl p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                            >
+                              <MoreHorizontal className="h-5 w-5" />
+                            </button>
 
-                          <Button
-                            type="button"
-                            variant="destructive"
-                            className="rounded-xl"
-                            onClick={() => handleDeleteItem(item)}
-                            disabled={deletingId === item.id}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            {deletingId === item.id ? "Deleting..." : "Delete"}
-                          </Button>
+                            <div className="invisible absolute right-0 top-full z-20 mt-2 w-40 rounded-2xl border border-slate-200 bg-white p-2 opacity-0 shadow-lg transition-all group-hover:visible group-hover:opacity-100">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditModal(item)}
+                                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-slate-700 transition hover:bg-slate-100"
+                              >
+                                <Pencil className="h-4 w-4" />
+                                Edit
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteItem(item)}
+                                disabled={deletingId === item.id}
+                                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-red-600 transition hover:bg-red-50 disabled:opacity-50"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                {deletingId === item.id ? "Deleting..." : "Delete"}
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </td>
                     </tr>
