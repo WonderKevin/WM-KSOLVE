@@ -24,6 +24,7 @@ import CheckDetailsView from "@/components/Views/CheckDetailsView";
 import InvoicesView from "@/components/Views/InvoicesView";
 import ProductListView from "@/components/Views/ProductListView";
 import LocationsView from "@/components/Views/LocationsView";
+import DeductionTypesView from "@/components/Views/DeductionTypesView";
 
 const sidebarItems = [
   { label: "Dashboard", icon: LayoutDashboard, key: "dashboard" },
@@ -53,6 +54,7 @@ const sidebarItems = [
     children: [
       { label: "Product List", key: "database-product-list" },
       { label: "Locations", key: "database-locations" },
+      { label: "Deduction Type", key: "database-deduction-type" },
     ],
   },
 ];
@@ -199,6 +201,7 @@ export default function WMKsolveApp() {
     invoices: "Invoices",
     "database-product-list": "Product List",
     "database-locations": "Locations",
+    "database-deduction-type": "Deduction Type",
   };
 
   const renderContent = () => {
@@ -224,6 +227,8 @@ export default function WMKsolveApp() {
         return <ProductListView />;
       case "database-locations":
         return <LocationsView />;
+      case "database-deduction-type":
+        return <DeductionTypesView />;
       default:
         return <DashboardView />;
     }
