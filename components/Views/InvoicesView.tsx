@@ -303,26 +303,53 @@ function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
 }
 
 // FORMAT 3: WM Invoice PDF
+// pdfjs splits each text span onto its own line. SKU line confirmed:
+//   "HP-KEYL-134 110 $39.12 $4,303.20"  (may be split further by pdfjs)
+// We join up to 5 lines into a block to catch any splits.
 function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
   const lines = text.replace(/\u00a0/g," ").replace(/\r/g,"\n").replace(/[ \t]+/g," ").split("\n").map(l=>l.trim()).filter(Boolean);
+  console.log("[WMInvoice] total lines:", lines.length, "| lines:", JSON.stringify(lines));
+
+  // Customer: first non-header line after "Ship to"
   let customer="";
   for (let i=0;i<lines.length;i++) {
     if (/^ship\s+to/i.test(lines[i])) {
-      for (let j=i+1;j<Math.min(i+4,lines.length);j++) {
+      for (let j=i+1;j<Math.min(i+5,lines.length);j++) {
         const c=lines[j].trim();
-        if (c&&!/^(bill\s+to|ship\s+to|shipping|invoice)/i.test(c)) { customer=c; break; }
+        if (c&&!/^(bill\s+to|ship\s+to|shipping|invoice|note)/i.test(c)) { customer=c; break; }
       }
       break;
     }
   }
+
+  // MA 2% — unicode minus (−) or regular minus
   let maAmount=0;
-  for (const l of lines) { if (/ma\s*2%/i.test(l)) { const m=l.match(/[\u2212\-]\$?([\d,]+\.\d{2})/); if (m) maAmount=-Math.abs(parseFloat(m[1].replace(/,/g,""))); } }
-  const merged=lines.map((_,i)=>lines.slice(i,i+3).join(" "));
-  const SKU_RE=/^([A-Z]{2,6}-[A-Z]{2,8}-\d{2,4})\s+(\d+)\s+[\u2212\-]?\$[\d,]+\.\d{2}\s+[\u2212\-]?\$([\d,]+\.\d{2})/;
+  for (const l of lines) {
+    if (/ma\s*2%/i.test(l)) {
+      const m=l.match(/[\u2212\-]\$?([\d,]+\.\d{2})/);
+      if (m) { maAmount=-Math.abs(parseFloat(m[1].replace(/,/g,""))); }
+    }
+  }
+
+  // Build merged blocks of up to 5 lines to catch pdfjs splits
+  const merged=lines.map((_,i)=>lines.slice(i,i+5).join(" "));
+
+  // Match: SKU qty $rate $amount — amounts may have commas, $ may be split
+  // Also handles case where $ is a separate token: "HP-KEYL-134 110 $ 39.12 $ 4,303.20"
+  const SKU_RE=/\b([A-Z]{2,6}-[A-Z]{2,8}-\d{2,4})\s+(\d+)\s+[\u2212\-]?\$\s*[\d,]+\.\d{2}\s+[\u2212\-]?\$\s*([\d,]+\.\d{2})/;
+
   const raw: Array<{upc:string;qty:number;amt:number}> = [];
   const seen=new Set<string>();
-  for (const b of merged) { const m=b.match(SKU_RE); if (!m||seen.has(m[1])) continue; seen.add(m[1]); raw.push({ upc:m[1], qty:parseInt(m[2]), amt:parseFloat(m[3].replace(/,/g,"")) }); }
+  for (const b of merged) {
+    const m=b.match(SKU_RE);
+    if (!m||seen.has(m[1])) continue;
+    seen.add(m[1]);
+    raw.push({ upc:m[1], qty:parseInt(m[2]), amt:parseFloat(m[3].replace(/,/g,"")) });
+  }
+
+  console.log("[WMInvoice] customer:", customer, "| maAmount:", maAmount, "| raw:", JSON.stringify(raw));
+
   if (!raw.length) return rows;
   const tq=raw.reduce((s,r)=>s+r.qty,0);
   for (const r of raw) rows.push({ upc:r.upc, item:"", cust_name:customer, amt:Math.round((r.amt+(tq>0?r.qty/tq*maAmount:0))*100)/100 });
@@ -330,22 +357,48 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
 }
 
 // FORMAT 4: $1 Promotion PDF (Distributor Charge)
-// Structure: SOLD TO: <customer> blocks, UPC rows with EXT-COST as last number
+// pdfjs may split "SOLD TO:" and the customer name onto separate lines.
+// UPC rows end with EXT-COST (last dollar amount on the line/block).
 function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
   const lines = text.replace(/\u00a0/g," ").replace(/\r/g,"\n").replace(/[ \t]+/g," ").split("\n").map(l=>l.trim()).filter(Boolean);
+  console.log("[DollarPromo] total lines:", lines.length, "| lines:", JSON.stringify(lines));
+
   let currentCustomer="";
-  for (const line of lines) {
-    const soldTo=line.match(/sold\s+to:\s*(.+)/i);
-    if (soldTo) { currentCustomer=soldTo[1].trim(); continue; }
+
+  for (let i=0;i<lines.length;i++) {
+    const line=lines[i];
+
+    // "SOLD TO:  QFC 101, BELFAIR" — customer on same line
+    const soldToInline=line.match(/sold\s+to:\s*(.+)/i);
+    if (soldToInline&&soldToInline[1].trim()) {
+      currentCustomer=soldToInline[1].trim();
+      continue;
+    }
+
+    // "SOLD TO:" alone — customer is on the next non-empty line
+    if (/^sold\s+to:\s*$/i.test(line)) {
+      for (let j=i+1;j<Math.min(i+4,lines.length);j++) {
+        const next=lines[j].trim();
+        if (next&&!/^\d{6,}/.test(next)) { currentCustomer=next; break; }
+      }
+      continue;
+    }
+
+    // UPC row: starts with 12-digit UPC
     if (!/^\d{12}\b/.test(line)) continue;
     const upcMatch=line.match(/^(\d{12})/);
     if (!upcMatch) continue;
-    const amtMatch=line.match(/([\d,]+\.\d{2})\s*$/);
+
+    // EXT-COST: last number on the line or in block of next 3 lines
+    const block=lines.slice(i,i+4).join(" ");
+    const amtMatch=block.match(/([\d,]+\.\d{2})\s*$/);
     if (!amtMatch) continue;
+
     rows.push({ upc:upcMatch[1], item:"", cust_name:currentCustomer, amt:parseFloat(amtMatch[1].replace(/,/g,"")) });
   }
-  console.log("[DollarPromo] rows:", rows);
+
+  console.log("[DollarPromo] rows:", JSON.stringify(rows));
   return rows;
 }
 
