@@ -38,8 +38,18 @@ type InvoiceRecord = {
 
 type ToastType = "success" | "error" | "info";
 
+type DatasetRow = {
+  upc: string;
+  item: string;
+  cust_name: string;
+  amt: number;
+};
+
 const DOCUMENT_BUCKET = "document-uploads";
 
+// ---------------------------------------------------------------------------
+// Utility helpers
+// ---------------------------------------------------------------------------
 function normalizeType(raw: string) {
   const cleaned = raw.replace(/\s+/g, " ").trim().toLowerCase();
   if (/\$\s*1\s*promotion/i.test(cleaned) || /\b1\s*dollar\s*promotion\b/i.test(cleaned)) return "$1 Promotion";
@@ -85,6 +95,59 @@ function isBadInvoiceCandidate(value: string) {
   return banned.has(v);
 }
 
+function parseAmount(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return value;
+  const num = Number(String(value).replace(/[$,]/g, "").trim());
+  return Number.isNaN(num) ? null : num;
+}
+
+function formatCurrency(value: number | null | undefined) {
+  if (value === null || value === undefined) return "";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
+}
+
+function parseIsoDateFromMmDdYyyy(value: string | null | undefined) {
+  if (!value || value === "Unknown") return null;
+  const match = String(value).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return null;
+  const [, mm, dd, yyyy] = match;
+  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+}
+
+function formatMonthLabelFromDate(value: string | null | undefined) {
+  const iso = parseIsoDateFromMmDdYyyy(value);
+  if (!iso) return "";
+  const date = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-US", { month: "short", year: "numeric" });
+}
+
+function toMonthName(value: unknown) {
+  if (value === null || value === undefined || value === "") return "";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-US", { month: "long" });
+}
+
+function normalizeExcelDate(value: unknown) {
+  if (typeof value === "number") {
+    const jsDate = XLSX.SSF.parse_date_code(value);
+    if (!jsDate) return "";
+    return `${String(jsDate.m).padStart(2, "0")}/${String(jsDate.d).padStart(2, "0")}/${jsDate.y}`;
+  }
+  if (!value) return "";
+  const str = String(value).trim();
+  const date = new Date(str);
+  if (!Number.isNaN(date.getTime())) {
+    return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}/${date.getFullYear()}`;
+  }
+  return str;
+}
+
+// ---------------------------------------------------------------------------
+// Metadata extraction from PDF text
+// ---------------------------------------------------------------------------
 function parseMetadataFromText(text: string) {
   const normalizedText = text
     .replace(/\u00a0/g, " ")
@@ -118,11 +181,27 @@ function parseMetadataFromText(text: string) {
       /po\s*#/i.test(lowerText) &&
       /wonder\s+monday/i.test(lowerText));
 
+  // WM Invoice PDF (Wonder Monday invoice to KeHE DC)
+  const isWMInvoicePdf =
+    /wonder\s*monday/i.test(lowerText) &&
+    /ship\s+to/i.test(lowerText) &&
+    /kehe\s+distributors/i.test(lowerText) &&
+    /invoice\s+no/i.test(lowerText);
+
+  // Fresh Thyme SAS Chargeback PDF
+  const isFreshThymeSas =
+    /fresh\s+thyme\s+sas/i.test(lowerText) &&
+    /chargeback/i.test(lowerText);
+
   if (isDollarPromotion) {
     category = "$1 Promotion";
   } else if (isStrictWMInvoice) {
     category = "WM Invoice";
   } else if (isFreshThymePpf) {
+    category = "Pass Thru Deduction";
+  } else if (isWMInvoicePdf) {
+    category = "WM Invoice";
+  } else if (isFreshThymeSas) {
     category = "Pass Thru Deduction";
   } else {
     const knownTypeMatchers = [
@@ -154,6 +233,7 @@ function parseMetadataFromText(text: string) {
     }
   }
 
+  // Invoice number extraction
   if (category === "$1 Promotion" || isDollarPromotion) {
     const m = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
     if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
@@ -163,7 +243,7 @@ function parseMetadataFromText(text: string) {
     if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
-  if (category === "WM Invoice" || isStrictWMInvoice) {
+  if (category === "WM Invoice" || isStrictWMInvoice || isWMInvoicePdf) {
     const m =
       normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i) ||
       normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
@@ -192,6 +272,14 @@ function parseMetadataFromText(text: string) {
     const d =
       normalizedText.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
       normalizedText.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+    if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
+  }
+
+  // Fresh Thyme SAS: invoice # from header
+  if (isFreshThymeSas && invoice === "Unknown") {
+    const m = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    const d = normalizedText.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
     if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
@@ -240,6 +328,9 @@ function parseMetadataFromText(text: string) {
   return { category, invoice, pdf_date };
 }
 
+// ---------------------------------------------------------------------------
+// PDF extraction helpers
+// ---------------------------------------------------------------------------
 async function extractTextWithPdfJs(file: File) {
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -294,6 +385,9 @@ async function extractPdfMetadata(file: File) {
   return parsed;
 }
 
+// ---------------------------------------------------------------------------
+// Excel metadata extraction
+// ---------------------------------------------------------------------------
 async function extractExcelMetadata(file: File) {
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
@@ -316,86 +410,46 @@ async function extractDocumentMetadata(file: File): Promise<{
   return { ...(await extractPdfMetadata(file)), file_type: "pdf" };
 }
 
-function toMonthName(value: unknown) {
-  if (value === null || value === undefined || value === "") return "";
-  const date = new Date(String(value));
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("en-US", { month: "long" });
-}
-
-function normalizeExcelDate(value: unknown) {
-  if (typeof value === "number") {
-    const jsDate = XLSX.SSF.parse_date_code(value);
-    if (!jsDate) return "";
-    return `${String(jsDate.m).padStart(2, "0")}/${String(jsDate.d).padStart(2, "0")}/${jsDate.y}`;
+// ---------------------------------------------------------------------------
+// Product list lookup — fetches all rows once, returns Map<upc, item_description>
+// ---------------------------------------------------------------------------
+async function fetchProductLookup(): Promise<Map<string, string>> {
+  const { data, error } = await supabase.from("product_list").select("upc, item_description");
+  if (error) { console.error("Failed to load product_list:", error.message); return new Map(); }
+  const map = new Map<string, string>();
+  for (const row of data ?? []) {
+    if (row.upc) map.set(String(row.upc).trim(), row.item_description ?? "");
   }
-  if (!value) return "";
-  const str = String(value).trim();
-  const date = new Date(str);
-  if (!Number.isNaN(date.getTime())) {
-    return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}/${date.getFullYear()}`;
-  }
-  return str;
-}
-
-function parseAmount(value: unknown) {
-  if (value === null || value === undefined || value === "") return null;
-  if (typeof value === "number") return value;
-  const num = Number(String(value).replace(/[$,]/g, "").trim());
-  return Number.isNaN(num) ? null : num;
-}
-
-function formatCurrency(value: number | null | undefined) {
-  if (value === null || value === undefined) return "";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
-}
-
-function parseIsoDateFromMmDdYyyy(value: string | null | undefined) {
-  if (!value || value === "Unknown") return null;
-  const match = String(value).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!match) return null;
-  const [, mm, dd, yyyy] = match;
-  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
-}
-
-function formatMonthLabelFromDate(value: string | null | undefined) {
-  const iso = parseIsoDateFromMmDdYyyy(value);
-  if (!iso) return "";
-  const date = new Date(`${iso}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("en-US", { month: "short", year: "numeric" });
+  return map;
 }
 
 // ---------------------------------------------------------------------------
-// parseDetailRowsFromText
-//
-// pdfjs-dist emits each PDF text item on its own line.
-// KeHE Spoils PDF columns appear in this fixed order per row:
-//
-//   i+0  UPC       (12 digits)
-//   i+1  ITEM      (raw PDF description — will be replaced by product_list lookup)
-//   i+2  BRAND     (e.g. WONDR — skipped)
-//   i+3  CUST NAME (e.g. KROGER 587, DALLAS)
-//   i+4  DATE      (MM/DD/YYYY — skipped)
-//   i+5  INV #     (skipped)
-//   i+6  QTY       (skipped)
-//   i+7  PCT%      (skipped)
-//   i+8  AMOUNT    (e.g. $.82)
+// Invoice type lookup — get type from invoices table by invoice number
 // ---------------------------------------------------------------------------
-function parseDetailRowsFromText(text: string): Array<{
-  upc: string; item: string; cust_name: string; amt: number;
-}> {
-  const rows: Array<{ upc: string; item: string; cust_name: string; amt: number }> = [];
+async function fetchInvoiceType(invoiceNumber: string): Promise<string> {
+  const normalized = normalizeInvoiceNumber(invoiceNumber);
+  const { data, error } = await supabase
+    .from("invoices")
+    .select("type, invoice_number")
+    .limit(5000);
+  if (error) return "";
+  const matched = (data || []).find(
+    (row) => normalizeInvoiceNumber(row.invoice_number || "") === normalized
+  );
+  return matched?.type || "";
+}
 
+// ---------------------------------------------------------------------------
+// FORMAT 1: KeHE Spoils PDF
+// pdfjs emits one field per line in this fixed order per row:
+//   i+0 UPC (12 digits), i+1 ITEM, i+2 BRAND (skip), i+3 CUST NAME,
+//   i+4 DATE (skip), i+5 INV# (skip), i+6 QTY (skip), i+7 PCT% (skip), i+8 AMT
+// ---------------------------------------------------------------------------
+function parseSpoilsPdfRows(text: string): DatasetRow[] {
+  const rows: DatasetRow[] = [];
   const lines = text
-    .replace(/\u00a0/g, " ")
-    .replace(/\r/g, "\n")
-    .replace(/[ \t]+/g, " ")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  console.log("[parseDetailRows] total lines:", lines.length);
+    .replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ")
+    .split("\n").map((l) => l.trim()).filter(Boolean);
 
   const UPC_RE = /^(\d{12})$/;
   const AMT_RE = /^\$(\d*\.\d{2})$/;
@@ -405,53 +459,254 @@ function parseDetailRowsFromText(text: string): Array<{
     if (SKIP_RE.test(lines[i])) continue;
     if (!UPC_RE.test(lines[i])) continue;
 
-    const upc    = lines[i]     ?? "";  // i+0: UPC
-    const item   = lines[i + 1] ?? "";  // i+1: ITEM (raw — overridden by product_list below)
-    // i+2: BRAND — skip
-    const cust   = lines[i + 3] ?? "";  // i+3: CUST NAME
-    // i+4–i+7: DATE, INV#, QTY, PCT% — skip
-    const amtRaw = lines[i + 8] ?? "";  // i+8: AMOUNT
+    const upc    = lines[i]     ?? "";
+    const item   = lines[i + 1] ?? "";
+    const cust   = lines[i + 3] ?? "";
+    const amtRaw = lines[i + 8] ?? "";
 
     const amtMatch = amtRaw.match(AMT_RE);
-    if (!amtMatch) {
-      console.log("[parseDetailRows] skipped — no amount at i+8:", amtRaw, "| lines:", lines.slice(i, i + 9).join(" | "));
-      continue;
-    }
+    if (!amtMatch) continue;
 
-    const amt = parseFloat(amtMatch[1]);
-    console.log("[parseDetailRows] row:", { upc, item, cust_name: cust, amt });
-    rows.push({ upc, item, cust_name: cust, amt });
+    rows.push({ upc, item, cust_name: cust, amt: parseFloat(amtMatch[1]) });
   }
-
-  console.log("[parseDetailRows] total rows parsed:", rows.length);
   return rows;
 }
 
 // ---------------------------------------------------------------------------
-// fetchProductLookup
-// Loads all rows from product_list and returns a Map<upc, item_description>.
-// UPC keys are normalized (trimmed, no leading zeros stripped) for safe lookup.
+// FORMAT 2: Fresh Thyme SAS Chargeback PDF
+// Item rows start with a 12-digit UPC. EP FEE distributed by qty ratio.
+// Columns per row (space-separated on one line):
+//   <UPC> <BRAND> <ITEM DESC...> <SIZE> <UOM> <QTY> <TOTAL>
 // ---------------------------------------------------------------------------
-async function fetchProductLookup(): Promise<Map<string, string>> {
-  const { data, error } = await supabase
-    .from("product_list")
-    .select("upc, item_description");
+function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
+  const rows: DatasetRow[] = [];
+  const lines = text
+    .replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ")
+    .split("\n").map((l) => l.trim()).filter(Boolean);
 
-  if (error) {
-    console.error("Failed to load product_list:", error.message);
-    return new Map();
+  // Match item rows: start with 12-digit UPC, end with dollar amount
+  const ROW_RE = /^(\d{12})\s+.+\s+(\d+)\s+\$(\d*\.\d{2})\s*$/;
+  const AMT_RE = /\$(\d*\.\d{2})/;
+
+  // Find EP FEE line
+  let epFee = 0;
+  for (const line of lines) {
+    if (/ep\s*fee/i.test(line)) {
+      const m = line.match(AMT_RE);
+      if (m) epFee = parseFloat(m[1]);
+    }
   }
 
-  const map = new Map<string, string>();
-  for (const row of data ?? []) {
-    if (row.upc) map.set(String(row.upc).trim(), row.item_description ?? "");
+  // Parse item rows
+  const rawRows: Array<{ upc: string; item: string; qty: number; amt: number }> = [];
+  for (const line of lines) {
+    if (!/^\d{12}\b/.test(line)) continue;
+    if (/ep\s*fee|chargeback|invoice\s+total|sub\s*total/i.test(line)) continue;
+
+    const upcMatch = line.match(/^(\d{12})/);
+    if (!upcMatch) continue;
+
+    const amtMatch = line.match(/\$(\d*\.\d{2})\s*$/);
+    if (!amtMatch) continue;
+
+    // Extract qty — second-to-last number before the amount
+    const withoutUpc = line.slice(12).trim();
+    const numbers = withoutUpc.match(/\b(\d+)\b/g) || [];
+    const qty = numbers.length >= 1 ? parseInt(numbers[numbers.length - 1]) : 1;
+
+    rawRows.push({
+      upc: upcMatch[1],
+      item: "", // will be replaced by product_list lookup
+      qty,
+      amt: parseFloat(amtMatch[1]),
+    });
   }
-  return map;
+
+  if (rawRows.length === 0) return rows;
+
+  // Distribute EP FEE by qty ratio
+  const totalQty = rawRows.reduce((sum, r) => sum + r.qty, 0);
+  for (const r of rawRows) {
+    const epShare = totalQty > 0 ? (r.qty / totalQty) * epFee : 0;
+    rows.push({
+      upc: r.upc,
+      item: r.item,
+      cust_name: "",
+      amt: Math.round((r.amt + epShare) * 100) / 100,
+    });
+  }
+  return rows;
 }
 
+// ---------------------------------------------------------------------------
+// FORMAT 3: WM Invoice PDF (Wonder Monday → KeHE DC)
+// SKU is the UPC. Customer = first line below "Ship to".
+// MA 2% row distributed by qty ratio across all other rows.
+// ---------------------------------------------------------------------------
+function parseWMInvoicePdfRows(text: string): DatasetRow[] {
+  const rows: DatasetRow[] = [];
+  const lines = text
+    .replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ")
+    .split("\n").map((l) => l.trim()).filter(Boolean);
+
+  // Extract customer: first non-empty line after "Ship to"
+  let customer = "";
+  for (let i = 0; i < lines.length; i++) {
+    if (/^ship\s+to/i.test(lines[i])) {
+      customer = lines[i + 1] ?? "";
+      break;
+    }
+  }
+
+  // Find MA 2% amount and item rows
+  let maAmount = 0;
+  const rawRows: Array<{ upc: string; item: string; qty: number; amt: number }> = [];
+
+  // Item row pattern: starts with a number (row #), has SKU, qty, rate, amount
+  // e.g. "1. Classic Plain Cheesecake ... HP-CLAS-135 110 $36.12 $3,973.20"
+  const AMT_RE = /\$([\d,]+\.\d{2})\s*$/;
+
+  for (const line of lines) {
+    // MA 2% row — capture its amount (may be negative)
+    if (/ma\s*2%/i.test(line)) {
+      const m = line.match(/\-?\$?([\d,]+\.\d{2})/);
+      if (m) {
+        maAmount = -Math.abs(parseFloat(m[1].replace(/,/g, "")));
+      }
+      continue;
+    }
+
+    // Skip totals / headers
+    if (/^(total|sub\s*total|note|ship\s+date|invoice|terms|due\s+date|bill\s+to|ship\s+to)/i.test(line)) continue;
+
+    // Item rows: contain a SKU-like pattern (letters-letters-digits) and end with amount
+    const skuMatch = line.match(/\b([A-Z]{2,4}-[A-Z]{2,6}-\d{2,4})\b/);
+    const amtMatch = line.match(AMT_RE);
+    if (!skuMatch || !amtMatch) continue;
+
+    // Extract qty — number before rate
+    const qtyMatch = line.match(/\b(\d+)\s+\$[\d,]+\.\d{2}\s+\$/);
+    const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1;
+    const amt = parseFloat(amtMatch[1].replace(/,/g, ""));
+
+    rawRows.push({ upc: skuMatch[1], item: "", qty, amt });
+  }
+
+  if (rawRows.length === 0) return rows;
+
+  // Distribute MA 2% by qty ratio
+  const totalQty = rawRows.reduce((sum, r) => sum + r.qty, 0);
+  for (const r of rawRows) {
+    const maShare = totalQty > 0 ? (r.qty / totalQty) * maAmount : 0;
+    rows.push({
+      upc: r.upc,
+      item: r.item,
+      cust_name: customer,
+      amt: Math.round((r.amt + maShare) * 100) / 100,
+    });
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// FORMAT 4: Excel — Product Details sheet
+// Handles three sub-formats based on available columns:
+//   A) Has CUSTOMER NAME → use it
+//   B) Has DIVISION → use it
+//   C) Has KeHE DC only → format as "DC {value}"
+// Amount columns by priority: SCANNED SALES @ COST → Bill Amount
+// ---------------------------------------------------------------------------
+function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
+  const rows: DatasetRow[] = [];
+  const workbook = XLSX.read(buffer, { type: "array" });
+
+  const sheetName = workbook.SheetNames.find((n) => /product\s*details/i.test(n));
+  if (!sheetName) return rows;
+
+  const sheet = workbook.Sheets[sheetName];
+  const json = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: "" });
+
+  if (json.length === 0) return rows;
+
+  // Detect columns from first row keys
+  const keys = Object.keys(json[0]);
+  const hasCustomerName = keys.some((k) => /customer\s*name/i.test(k));
+  const hasDivision = keys.some((k) => /^division$/i.test(k));
+  const hasKeheDc = keys.some((k) => /kehe\s*dc/i.test(k));
+  const hasScannedSales = keys.some((k) => /scanned\s*sales/i.test(k));
+  const hasBillAmount = keys.some((k) => /bill\s*amount/i.test(k));
+
+  const customerNameKey = keys.find((k) => /customer\s*name/i.test(k)) ?? "";
+  const divisionKey = keys.find((k) => /^division$/i.test(k)) ?? "";
+  const keheDcKey = keys.find((k) => /kehe\s*dc/i.test(k)) ?? "";
+  const amountKey =
+    keys.find((k) => /scanned\s*sales/i.test(k)) ??
+    keys.find((k) => /bill\s*amount/i.test(k)) ??
+    "";
+  const upcKey = keys.find((k) => /^upc$/i.test(k)) ?? "";
+
+  for (const row of json) {
+    const upc = String(row[upcKey] || "").trim();
+    if (!upc || !/^\d{10,14}$/.test(upc)) continue;
+
+    // Customer priority: CUSTOMER NAME → DIVISION → DC {KeHE DC}
+    let cust = "";
+    if (hasCustomerName && row[customerNameKey]) {
+      cust = String(row[customerNameKey]).trim();
+    } else if (hasDivision && row[divisionKey]) {
+      cust = String(row[divisionKey]).trim();
+    } else if (hasKeheDc && row[keheDcKey]) {
+      cust = `DC ${String(row[keheDcKey]).trim()}`;
+    }
+
+    const amt = parseAmount(row[amountKey]);
+    if (amt === null || amt === 0) continue;
+
+    rows.push({ upc, item: "", cust_name: cust, amt });
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Detect file format and parse detail rows
+// ---------------------------------------------------------------------------
+async function parseDetailRows(
+  file: File,
+  fullText: string
+): Promise<DatasetRow[]> {
+  const lowerText = fullText.toLowerCase();
+  const lowerName = file.name.toLowerCase();
+
+  // Excel formats
+  if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
+    const buffer = await file.arrayBuffer();
+    return parseExcelProductDetailsRows(buffer);
+  }
+
+  // Fresh Thyme SAS Chargeback PDF
+  if (/fresh\s+thyme\s+sas/i.test(lowerText) && /chargeback/i.test(lowerText)) {
+    return parseFreshThymeSasPdfRows(fullText);
+  }
+
+  // WM Invoice PDF (Wonder Monday to KeHE)
+  if (
+    /wonder\s*monday/i.test(lowerText) &&
+    /ship\s+to/i.test(lowerText) &&
+    /kehe\s+distributors/i.test(lowerText) &&
+    /invoice\s+no/i.test(lowerText)
+  ) {
+    return parseWMInvoicePdfRows(fullText);
+  }
+
+  // Default: KeHE Spoils PDF
+  return parseSpoilsPdfRows(fullText);
+}
+
+// ---------------------------------------------------------------------------
+// Save dataset rows — with product_list lookup and invoice type from DB
+// ---------------------------------------------------------------------------
 async function replaceDatasetRowsForInvoice(
   invoice: string,
-  type: string,
   pdfDate: string,
   file: File
 ) {
@@ -461,28 +716,30 @@ async function replaceDatasetRowsForInvoice(
   const { fullText } = await extractTextWithPdfJs(file);
   console.log("FULL PDF TEXT:", fullText);
 
-  const detailRows = parseDetailRowsFromText(fullText);
+  const detailRows = await parseDetailRows(file, fullText);
   console.log("PARSED DETAIL ROWS:", detailRows);
 
   if (detailRows.length === 0) return 0;
 
-  // Fetch product_list lookup once for this upload
-  const productLookup = await fetchProductLookup();
+  // Fetch product_list and invoice type in parallel
+  const [productLookup, invoiceType] = await Promise.all([
+    fetchProductLookup(),
+    fetchInvoiceType(normalizedInvoice),
+  ]);
+
   console.log("PRODUCT LOOKUP size:", productLookup.size);
+  console.log("INVOICE TYPE:", invoiceType);
 
   const invoiceDateIso = parseIsoDateFromMmDdYyyy(pdfDate);
   const monthLabel = formatMonthLabelFromDate(pdfDate);
 
   const inserts = detailRows.map((row) => {
-    // Look up standardized item description by UPC; fall back to raw PDF text
     const standardizedItem = productLookup.get(row.upc) || row.item;
-    console.log(`[productLookup] UPC ${row.upc} → "${standardizedItem}"`);
-
     return {
       month: monthLabel,
       invoice: normalizedInvoice,
       invoice_date: invoiceDateIso,
-      type: type === "Unknown" ? "" : type,
+      type: invoiceType,
       upc: row.upc,
       item: standardizedItem,
       cust_name: row.cust_name,
@@ -514,6 +771,9 @@ async function syncInvoiceFromUpload(invoice: string, type: string) {
   if (error) throw new Error(`Failed to sync invoice ${invoice}: ${error.message}`);
 }
 
+// ---------------------------------------------------------------------------
+// React component
+// ---------------------------------------------------------------------------
 export default function InvoicesView({
   invoiceUploadSignal,
   documentUploadSignal,
@@ -776,16 +1036,12 @@ export default function InvoicesView({
         if (existingUpload) {
           const result = await replaceExistingDocument(existingUpload, file, finalMetadata);
           if (result.skipped) { skippedCount++; continue; }
-          if (finalMetadata.file_type === "pdf") {
-            datasetRowCount += await replaceDatasetRowsForInvoice(finalMetadata.invoice, finalMetadata.category, finalMetadata.pdf_date, file);
-          }
+          datasetRowCount += await replaceDatasetRowsForInvoice(finalMetadata.invoice, finalMetadata.pdf_date, file);
           replaceCount++; continue;
         }
 
         await uploadNewDocument(file, finalMetadata);
-        if (finalMetadata.file_type === "pdf") {
-          datasetRowCount += await replaceDatasetRowsForInvoice(finalMetadata.invoice, finalMetadata.category, finalMetadata.pdf_date, file);
-        }
+        datasetRowCount += await replaceDatasetRowsForInvoice(finalMetadata.invoice, finalMetadata.pdf_date, file);
         successCount++;
       }
 
@@ -884,9 +1140,7 @@ export default function InvoicesView({
               <div className="flex gap-2">
                 <Button type="button" variant={selectMode ? "default" : "outline"}
                   onClick={() => setSelectMode((prev) => { const next = !prev; if (!next) { setSelectedIds([]); setDeleteMonth("Delete Month"); } return next; })}
-                  className="flex-1">
-                  Select
-                </Button>
+                  className="flex-1">Select</Button>
                 <Button type="button" variant="destructive" onClick={handleDeleteSelected} disabled={!selectMode} className="flex-1">
                   <Trash2 className="mr-2 h-4 w-4" /> Delete
                 </Button>
