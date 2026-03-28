@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Search, Trash2, FileText, XCircle, FileSpreadsheet } from "lucide-react";
+import { Search, Trash2, FileText, XCircle, FileSpreadsheet, RefreshCw } from "lucide-react";
 import { createWorker } from "tesseract.js";
 import * as XLSX from "xlsx";
 
@@ -226,7 +226,6 @@ function parseMetadataFromText(text: string) {
     }
   }
 
-  // Invoice number + date extraction
   if (category === "WM Invoice" || isStrictWMInvoice || isWMInvoicePdf) {
     const m =
       normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i) ||
@@ -304,7 +303,7 @@ function parseMetadataFromText(text: string) {
 }
 
 // ---------------------------------------------------------------------------
-// PDF extraction helpers
+// PDF helpers
 // ---------------------------------------------------------------------------
 async function extractTextWithPdfJs(file: File) {
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -396,7 +395,7 @@ async function fetchProductLookup(): Promise<Map<string, string>> {
 }
 
 // ---------------------------------------------------------------------------
-// Invoice type lookup from invoices table
+// Invoice type lookup
 // ---------------------------------------------------------------------------
 async function fetchInvoiceType(invoiceNumber: string): Promise<string> {
   const normalized = normalizeInvoiceNumber(invoiceNumber);
@@ -410,8 +409,6 @@ async function fetchInvoiceType(invoiceNumber: string): Promise<string> {
 
 // ---------------------------------------------------------------------------
 // FORMAT 1: KeHE Spoils PDF
-// pdfjs emits one field per line:
-//   i+0 UPC (12 digits), i+1 ITEM, i+2 BRAND (skip), i+3 CUST, i+8 AMT
 // ---------------------------------------------------------------------------
 function parseSpoilsPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
@@ -439,7 +436,6 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
 
 // ---------------------------------------------------------------------------
 // FORMAT 2: Fresh Thyme SAS Chargeback PDF
-// Item rows start with 12-digit UPC. EP FEE distributed by qty.
 // ---------------------------------------------------------------------------
 function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
@@ -479,17 +475,12 @@ function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
 }
 
 // ---------------------------------------------------------------------------
-// FORMAT 3: WM Invoice PDF (Wonder Monday → KeHE DC)
-//
-// Actual pdfjs line structure (confirmed from Invoice_1761):
-//   "# Product or service SKU Description Qty Rate Amount"  ← header, skip
-//   "1. Key Lime Pie Cheesecake (High"                      ← product name part 1
-//   "Protein) (12/cs)"                                      ← product name part 2
-//   "HP-KEYL-134 110 $39.12 $4,303.20"                     ← SKU + qty + rate + amount
-//   "2. MA 2% KeHE MA 2% 1 −$86.06 −$86.06"               ← MA row, distribute
-//
-// Strategy: scan for lines that match "SKU qty $rate $amount" pattern.
-// MA 2% is on its own combined line — capture and distribute.
+// FORMAT 3: WM Invoice PDF
+// Actual pdfjs line structure:
+//   "1. Product name (High"
+//   "Protein) (12/cs)"
+//   "HP-KEYL-134 110 $39.12 $4,303.20"   ← SKU data line
+//   "2. MA 2% KeHE MA 2% 1 −$86.06 −$86.06"
 // ---------------------------------------------------------------------------
 function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
@@ -497,7 +488,7 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     .replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ")
     .split("\n").map((l) => l.trim()).filter(Boolean);
 
-  // Extract customer: first non-empty line after "Ship to"
+  // Customer: first non-empty line after "Ship to"
   let customer = "";
   for (let i = 0; i < lines.length; i++) {
     if (/^ship\s+to$/i.test(lines[i])) {
@@ -510,37 +501,29 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   let maAmount = 0;
   for (const line of lines) {
     if (/ma\s*2%/i.test(line)) {
-      // Match negative amounts like −$86.06 or -$86.06
       const m = line.match(/[\u2212\-]\$?([\d,]+\.\d{2})/);
       if (m) maAmount = -Math.abs(parseFloat(m[1].replace(/,/g, "")));
     }
   }
 
   // SKU data lines: "HP-KEYL-134 110 $39.12 $4,303.20"
-  // Pattern: SKU (letters-letters-digits) followed by qty and two amounts
   const SKU_LINE_RE = /^([A-Z]{2,6}-[A-Z]{2,8}-\d{2,4})\s+(\d+)\s+[\u2212\-]?\$[\d,]+\.\d{2}\s+[\u2212\-]?\$([\d,]+\.\d{2})\s*$/;
 
   const rawRows: Array<{ upc: string; qty: number; amt: number }> = [];
   for (const line of lines) {
     const m = line.match(SKU_LINE_RE);
     if (!m) continue;
-    const sku = m[1];
-    const qty = parseInt(m[2]);
-    const amt = parseFloat(m[3].replace(/,/g, ""));
-    rawRows.push({ upc: sku, qty, amt });
+    rawRows.push({ upc: m[1], qty: parseInt(m[2]), amt: parseFloat(m[3].replace(/,/g, "")) });
   }
 
   console.log("[WMInvoice] customer:", customer, "| maAmount:", maAmount, "| rawRows:", rawRows);
 
   if (rawRows.length === 0) return rows;
-
   const totalQty = rawRows.reduce((sum, r) => sum + r.qty, 0);
   for (const r of rawRows) {
     const maShare = totalQty > 0 ? (r.qty / totalQty) * maAmount : 0;
     rows.push({
-      upc: r.upc,
-      item: "",
-      cust_name: customer,
+      upc: r.upc, item: "", cust_name: customer,
       amt: Math.round((r.amt + maShare) * 100) / 100,
     });
   }
@@ -549,8 +532,6 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
 
 // ---------------------------------------------------------------------------
 // FORMAT 4: Excel — Product Details sheet
-// Customer priority: CUSTOMER NAME → DIVISION → DC {KeHE DC}
-// Amount priority:   SCANNED SALES @ COST → Bill Amount
 // ---------------------------------------------------------------------------
 function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
   const rows: DatasetRow[] = [];
@@ -586,7 +567,6 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
 
     const amt = parseAmount(row[amountKey]);
     if (amt === null || amt === 0) continue;
-
     rows.push({ upc, item: "", cust_name: cust, amt });
   }
   return rows;
@@ -594,25 +574,18 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
 
 // ---------------------------------------------------------------------------
 // Detect format and parse rows
-// For Excel: parse directly from buffer (no pdfjs).
-// For PDF: use fullText to detect format, then parse accordingly.
 // ---------------------------------------------------------------------------
 async function parseDetailRows(file: File, fullText: string): Promise<DatasetRow[]> {
   const lowerText = fullText.toLowerCase();
   const lowerName = file.name.toLowerCase();
 
-  // Excel — parse from buffer directly, never touch pdfjs
   if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
     const buffer = await file.arrayBuffer();
     return parseExcelProductDetailsRows(buffer);
   }
-
-  // Fresh Thyme SAS Chargeback PDF
   if (/fresh\s+thyme\s+sas/i.test(lowerText) && /chargeback/i.test(lowerText)) {
     return parseFreshThymeSasPdfRows(fullText);
   }
-
-  // WM Invoice PDF
   if (
     /wonder\s*monday/i.test(lowerText) &&
     /ship\s+to/i.test(lowerText) &&
@@ -621,13 +594,11 @@ async function parseDetailRows(file: File, fullText: string): Promise<DatasetRow
   ) {
     return parseWMInvoicePdfRows(fullText);
   }
-
-  // Default: KeHE Spoils PDF
   return parseSpoilsPdfRows(fullText);
 }
 
 // ---------------------------------------------------------------------------
-// Save dataset rows
+// Save dataset rows for one invoice
 // ---------------------------------------------------------------------------
 async function replaceDatasetRowsForInvoice(
   invoice: string,
@@ -640,7 +611,6 @@ async function replaceDatasetRowsForInvoice(
   const lowerName = file.name.toLowerCase();
   const isExcel = lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls");
 
-  // For Excel: parse rows directly. For PDF: extract text first.
   let detailRows: DatasetRow[] = [];
   if (isExcel) {
     const buffer = await file.arrayBuffer();
@@ -658,9 +628,6 @@ async function replaceDatasetRowsForInvoice(
     fetchProductLookup(),
     fetchInvoiceType(normalizedInvoice),
   ]);
-
-  console.log("PRODUCT LOOKUP size:", productLookup.size);
-  console.log("INVOICE TYPE:", invoiceType);
 
   const invoiceDateIso = parseIsoDateFromMmDdYyyy(pdfDate);
   const monthLabel = formatMonthLabelFromDate(pdfDate);
@@ -681,6 +648,60 @@ async function replaceDatasetRowsForInvoice(
   if (insertError) throw new Error(`Failed saving dataset rows: ${insertError.message}`);
 
   return inserts.length;
+}
+
+// ---------------------------------------------------------------------------
+// Reprocess all uploads — downloads each file from storage, re-parses, re-saves
+// ---------------------------------------------------------------------------
+async function reprocessAllUploads(
+  onProgress: (msg: string) => void
+): Promise<{ processed: number; failed: number; totalRows: number }> {
+  const { data: allUploads, error } = await supabase.from("uploads").select("*");
+  if (error) throw new Error(`Failed to fetch uploads: ${error.message}`);
+
+  let processed = 0;
+  let failed = 0;
+  let totalRows = 0;
+
+  for (const upload of allUploads ?? []) {
+    if (!upload.file_path || !upload.invoice) continue;
+
+    try {
+      onProgress(`Processing ${upload.file_name}...`);
+
+      // Download file from storage
+      const { data: fileData, error: downloadError } = await supabase.storage
+        .from(DOCUMENT_BUCKET)
+        .download(upload.file_path);
+
+      if (downloadError || !fileData) {
+        console.error(`Failed to download ${upload.file_name}:`, downloadError);
+        failed++;
+        continue;
+      }
+
+      // Reconstruct File object
+      const file = new File([fileData], upload.file_name, {
+        type: upload.file_type === "excel"
+          ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          : "application/pdf",
+      });
+
+      const rowCount = await replaceDatasetRowsForInvoice(
+        upload.invoice,
+        upload.pdf_date ?? "",
+        file
+      );
+
+      totalRows += rowCount;
+      processed++;
+    } catch (err: any) {
+      console.error(`Failed to reprocess ${upload.file_name}:`, err);
+      failed++;
+    }
+  }
+
+  return { processed, failed, totalRows };
 }
 
 async function syncInvoiceFromUpload(invoice: string, type: string) {
@@ -713,6 +734,7 @@ export default function InvoicesView({
   const [rows, setRows] = useState<InvoiceRecord[]>([]);
   const [uploads, setUploads] = useState<UploadRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [reprocessing, setReprocessing] = useState(false);
   const [toast, setToast] = useState<{ show: boolean; text: string; type: ToastType }>({
     show: false, text: "", type: "success",
   });
@@ -733,7 +755,7 @@ export default function InvoicesView({
   const showToast = (text: string, type: ToastType = "success") => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast({ show: true, text, type });
-    toastTimerRef.current = setTimeout(() => setToast((p) => ({ ...p, show: false })), 2500);
+    toastTimerRef.current = setTimeout(() => setToast((p) => ({ ...p, show: false })), 4000);
   };
 
   const loadData = async () => {
@@ -985,6 +1007,22 @@ export default function InvoicesView({
     }
   };
 
+  const handleReprocessAll = async () => {
+    if (!window.confirm("This will re-parse all uploaded files and rebuild the entire Data Sets table. Continue?")) return;
+    setReprocessing(true);
+    showToast("Reprocessing all uploads...", "info");
+    try {
+      const { processed, failed, totalRows } = await reprocessAllUploads((msg) => {
+        showToast(msg, "info");
+      });
+      showToast(`Done! ${processed} files processed, ${failed} failed, ${totalRows} dataset rows saved.`, "success");
+    } catch (error: any) {
+      showToast(error.message || "Reprocess failed.", "error");
+    } finally {
+      setReprocessing(false);
+    }
+  };
+
   const toggleSelectOne = (id: number) =>
     setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
 
@@ -1028,7 +1066,7 @@ export default function InvoicesView({
       <div className="sticky top-0 z-40 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
         <Card className="rounded-3xl">
           <CardContent className="space-y-4 pt-6">
-            <div className={`grid gap-3 ${selectMode ? "md:grid-cols-7" : "md:grid-cols-6"}`}>
+            <div className={`grid gap-3 ${selectMode ? "md:grid-cols-8" : "md:grid-cols-7"}`}>
               <div className="relative md:col-span-2">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <Input
@@ -1066,6 +1104,19 @@ export default function InvoicesView({
                   {monthOptions.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
               )}
+
+              {/* Reprocess All button */}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleReprocessAll}
+                disabled={reprocessing}
+                className="flex items-center gap-2"
+              >
+                <RefreshCw className={`h-4 w-4 ${reprocessing ? "animate-spin" : ""}`} />
+                {reprocessing ? "Processing..." : "Reprocess All"}
+              </Button>
+
               <div className="flex gap-2">
                 <Button type="button" variant={selectMode ? "default" : "outline"}
                   onClick={() => setSelectMode((prev) => { const next = !prev; if (!next) { setSelectedIds([]); setDeleteMonth("Delete Month"); } return next; })}

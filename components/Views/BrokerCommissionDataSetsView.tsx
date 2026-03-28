@@ -100,17 +100,17 @@ export default function BrokerCommissionDataSetsView() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border bg-white">
+      <div className="overflow-auto rounded-2xl border bg-white" style={{ maxHeight: "70vh" }}>
         <table className="w-full text-sm">
-          <thead className="bg-gray-50">
+          <thead className="sticky top-0 z-10 bg-gray-50 shadow-sm">
             <tr>
-              <th className="p-3 text-left">Type</th>
-              <th className="p-3 text-left">Month</th>
-              <th className="p-3 text-left">Invoice</th>
-              <th className="p-3 text-left">UPC</th>
-              <th className="p-3 text-left">Item</th>
-              <th className="p-3 text-left">Customer</th>
-              <th className="p-3 text-left">Amount</th>
+              <th className="p-3 text-left font-semibold">Type</th>
+              <th className="p-3 text-left font-semibold">Month</th>
+              <th className="p-3 text-left font-semibold">Invoice</th>
+              <th className="p-3 text-left font-semibold">UPC</th>
+              <th className="p-3 text-left font-semibold">Item</th>
+              <th className="p-3 text-left font-semibold">Customer</th>
+              <th className="p-3 text-left font-semibold">Amount</th>
             </tr>
           </thead>
 
