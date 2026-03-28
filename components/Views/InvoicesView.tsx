@@ -303,99 +303,148 @@ function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
 }
 
 // FORMAT 3: WM Invoice PDF
-// pdfjs splits each text span onto its own line. SKU line confirmed:
-//   "HP-KEYL-134 110 $39.12 $4,303.20"  (may be split further by pdfjs)
-// We join up to 5 lines into a block to catch any splits.
+// Confirmed pdfjs line structure — every token is its own line:
+//   "HP-KEYL-134" → "110" → "$39.12" → "$4,303.20"
+//   "MA 2%" → "KeHE MA 2%" → "1" → "−" → "$86.06" → "−" → "$86.06"
+// Strategy: find the SKU line, then read qty=next line, skip rate, amount=line after rate
 function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
   const lines = text.replace(/\u00a0/g," ").replace(/\r/g,"\n").replace(/[ \t]+/g," ").split("\n").map(l=>l.trim()).filter(Boolean);
-  console.log("[WMInvoice] total lines:", lines.length, "| lines:", JSON.stringify(lines));
+  console.log("[WMInvoice] total lines:", lines.length);
 
   // Customer: first non-header line after "Ship to"
-  let customer="";
-  for (let i=0;i<lines.length;i++) {
-    if (/^ship\s+to/i.test(lines[i])) {
-      for (let j=i+1;j<Math.min(i+5,lines.length);j++) {
-        const c=lines[j].trim();
-        if (c&&!/^(bill\s+to|ship\s+to|shipping|invoice|note)/i.test(c)) { customer=c; break; }
+  let customer = "";
+  for (let i = 0; i < lines.length; i++) {
+    if (/^ship\s+to$/i.test(lines[i])) {
+      for (let j = i+1; j < Math.min(i+5, lines.length); j++) {
+        const c = lines[j].trim();
+        if (c && !/^(bill\s+to|ship\s+to|shipping|invoice|note|#)/i.test(c)) { customer = c; break; }
       }
       break;
     }
   }
 
-  // MA 2% — unicode minus (−) or regular minus
-  let maAmount=0;
-  for (const l of lines) {
-    if (/ma\s*2%/i.test(l)) {
-      const m=l.match(/[\u2212\-]\$?([\d,]+\.\d{2})/);
-      if (m) { maAmount=-Math.abs(parseFloat(m[1].replace(/,/g,""))); }
+  // MA 2% amount — look for line with "MA 2%", then find the negative amount
+  // pdfjs emits: "MA 2%" "KeHE MA 2%" "1" "−" "$86.06" "−" "$86.06"
+  // The last "$XX.XX" after MA 2% row is the total MA amount
+  let maAmount = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^ma\s*2%$/i.test(lines[i])) {
+      // Scan next 10 lines for dollar amounts, take the last one as the MA total
+      const block = lines.slice(i, i + 10).join(" ");
+      const amounts = [...block.matchAll(/\$\s*([\d,]+\.\d{2})/g)];
+      if (amounts.length > 0) {
+        maAmount = -Math.abs(parseFloat(amounts[amounts.length - 1][1].replace(/,/g, "")));
+      }
+      break;
     }
   }
 
-  // Build merged blocks of up to 5 lines to catch pdfjs splits
-  const merged=lines.map((_,i)=>lines.slice(i,i+5).join(" "));
+  // SKU pattern: a line that matches "XX-XXXX-XXX" format (e.g. HP-KEYL-134)
+  // Following lines: qty (digits only), then rate ($X.XX), then amount ($X,XXX.XX)
+  const SKU_RE = /^([A-Z]{2,6}-[A-Z]{2,8}-\d{2,4})$/;
+  const AMT_RE = /^\$\s*([\d,]+\.\d{2})$/;
+  const DIGITS_RE = /^\d+$/;
 
-  // Match: SKU qty $rate $amount — amounts may have commas, $ may be split
-  // Also handles case where $ is a separate token: "HP-KEYL-134 110 $ 39.12 $ 4,303.20"
-  const SKU_RE=/\b([A-Z]{2,6}-[A-Z]{2,8}-\d{2,4})\s+(\d+)\s+[\u2212\-]?\$\s*[\d,]+\.\d{2}\s+[\u2212\-]?\$\s*([\d,]+\.\d{2})/;
+  const raw: Array<{upc: string; qty: number; amt: number}> = [];
+  const seen = new Set<string>();
 
-  const raw: Array<{upc:string;qty:number;amt:number}> = [];
-  const seen=new Set<string>();
-  for (const b of merged) {
-    const m=b.match(SKU_RE);
-    if (!m||seen.has(m[1])) continue;
-    seen.add(m[1]);
-    raw.push({ upc:m[1], qty:parseInt(m[2]), amt:parseFloat(m[3].replace(/,/g,"")) });
+  for (let i = 0; i < lines.length; i++) {
+    const skuMatch = lines[i].match(SKU_RE);
+    if (!skuMatch) continue;
+    const sku = skuMatch[1];
+    if (seen.has(sku)) continue;
+
+    // Next line should be qty (pure digits)
+    const qtyLine = lines[i + 1] ?? "";
+    if (!DIGITS_RE.test(qtyLine)) continue;
+    const qty = parseInt(qtyLine);
+
+    // Then rate ($X.XX) — skip it
+    // Then amount ($X,XXX.XX)
+    // Look in next 5 lines for two consecutive $amounts
+    let rate = "", amount = "";
+    for (let j = i + 2; j < Math.min(i + 8, lines.length); j++) {
+      if (AMT_RE.test(lines[j])) {
+        if (!rate) { rate = lines[j]; }
+        else { amount = lines[j]; break; }
+      }
+    }
+
+    if (!amount) continue;
+    const amtMatch = amount.match(AMT_RE);
+    if (!amtMatch) continue;
+
+    seen.add(sku);
+    raw.push({ upc: sku, qty, amt: parseFloat(amtMatch[1].replace(/,/g, "")) });
   }
 
   console.log("[WMInvoice] customer:", customer, "| maAmount:", maAmount, "| raw:", JSON.stringify(raw));
 
   if (!raw.length) return rows;
-  const tq=raw.reduce((s,r)=>s+r.qty,0);
-  for (const r of raw) rows.push({ upc:r.upc, item:"", cust_name:customer, amt:Math.round((r.amt+(tq>0?r.qty/tq*maAmount:0))*100)/100 });
+  const tq = raw.reduce((s, r) => s + r.qty, 0);
+  for (const r of raw) {
+    rows.push({
+      upc: r.upc, item: "", cust_name: customer,
+      amt: Math.round((r.amt + (tq > 0 ? r.qty / tq * maAmount : 0)) * 100) / 100,
+    });
+  }
   return rows;
 }
 
 // FORMAT 4: $1 Promotion PDF (Distributor Charge)
-// pdfjs may split "SOLD TO:" and the customer name onto separate lines.
-// UPC rows end with EXT-COST (last dollar amount on the line/block).
+// Confirmed pdfjs line structure — every token is its own line:
+//   "SOLD TO:" → "KRO ATL 412, ATLANTA" (next line)
+//   UPC row: "850067781097" → "12" → "WONDR CHEESECAKE" → ... → "12.00"
+// EXT-COST is the last number in each UPC block (look ahead 10 lines)
 function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
   const lines = text.replace(/\u00a0/g," ").replace(/\r/g,"\n").replace(/[ \t]+/g," ").split("\n").map(l=>l.trim()).filter(Boolean);
-  console.log("[DollarPromo] total lines:", lines.length, "| lines:", JSON.stringify(lines));
+  console.log("[DollarPromo] total lines:", lines.length);
 
-  let currentCustomer="";
+  let currentCustomer = "";
 
-  for (let i=0;i<lines.length;i++) {
-    const line=lines[i];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
 
-    // "SOLD TO:  QFC 101, BELFAIR" — customer on same line
-    const soldToInline=line.match(/sold\s+to:\s*(.+)/i);
-    if (soldToInline&&soldToInline[1].trim()) {
-      currentCustomer=soldToInline[1].trim();
+    // "SOLD TO:" with customer inline: "SOLD TO: QFC 101, BELFAIR"
+    const soldToInline = line.match(/^sold\s+to:\s*(.+)/i);
+    if (soldToInline && soldToInline[1].trim()) {
+      currentCustomer = soldToInline[1].trim();
       continue;
     }
 
-    // "SOLD TO:" alone — customer is on the next non-empty line
+    // "SOLD TO:" alone — customer is on the next non-address line
     if (/^sold\s+to:\s*$/i.test(line)) {
-      for (let j=i+1;j<Math.min(i+4,lines.length);j++) {
-        const next=lines[j].trim();
-        if (next&&!/^\d{6,}/.test(next)) { currentCustomer=next; break; }
+      for (let j = i+1; j < Math.min(i+5, lines.length); j++) {
+        const next = lines[j].trim();
+        // Customer lines contain a comma (store# + city): "KRO ATL 412, ATLANTA"
+        if (next && next.includes(",") && !/^\d{5,}/.test(next)) {
+          currentCustomer = next;
+          break;
+        }
       }
       continue;
     }
 
-    // UPC row: starts with 12-digit UPC
-    if (!/^\d{12}\b/.test(line)) continue;
-    const upcMatch=line.match(/^(\d{12})/);
-    if (!upcMatch) continue;
+    // UPC row: exactly 12 digits
+    if (!/^\d{12}$/.test(line)) continue;
+    const upc = line;
 
-    // EXT-COST: last number on the line or in block of next 3 lines
-    const block=lines.slice(i,i+4).join(" ");
-    const amtMatch=block.match(/([\d,]+\.\d{2})\s*$/);
-    if (!amtMatch) continue;
+    // EXT-COST: scan ahead up to 15 lines, collect all plain numbers/decimals
+    // The last one before the next SOLD TO or UPC is EXT-COST
+    let extCost = 0;
+    for (let j = i+1; j < Math.min(i+15, lines.length); j++) {
+      const l = lines[j];
+      // Stop at next UPC or SOLD TO
+      if (/^\d{12}$/.test(l) || /^sold\s+to/i.test(l)) break;
+      // Match a plain number like "12.00" or "4.72" or "1.00"
+      const numMatch = l.match(/^([\d,]+\.\d{2})$/);
+      if (numMatch) extCost = parseFloat(numMatch[1].replace(/,/g, ""));
+    }
 
-    rows.push({ upc:upcMatch[1], item:"", cust_name:currentCustomer, amt:parseFloat(amtMatch[1].replace(/,/g,"")) });
+    if (!extCost) continue;
+    rows.push({ upc, item: "", cust_name: currentCustomer, amt: extCost });
   }
 
   console.log("[DollarPromo] rows:", JSON.stringify(rows));
