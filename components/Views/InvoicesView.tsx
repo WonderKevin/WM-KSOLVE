@@ -158,65 +158,50 @@ function parseMetadataFromText(text: string) {
   }
 
   if (category === "$1 Promotion" || isDollarPromotion) {
-    const promoInvoiceMatch = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
-    if (promoInvoiceMatch?.[1]) {
-      const candidate = promoInvoiceMatch[1].trim();
-      if (!isBadInvoiceCandidate(candidate)) invoice = normalizeInvoiceNumber(candidate);
-    }
-    const promoDateMatch =
+    const m = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    const d =
       normalizedText.match(/\bdate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i) ||
       normalizedText.match(/\bdate\b\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i);
-    if (promoDateMatch?.[1]) pdf_date = normalizeDocDate(promoDateMatch[1]);
+    if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
   if (category === "WM Invoice" || isStrictWMInvoice) {
-    const wmInvoiceMatch =
+    const m =
       normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i) ||
       normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
-    if (wmInvoiceMatch?.[1]) {
-      const candidate = wmInvoiceMatch[1].trim();
-      if (!isBadInvoiceCandidate(candidate)) invoice = normalizeInvoiceNumber(candidate);
-    }
-    const wmDateMatch =
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    const d =
       normalizedText.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
       normalizedText.match(/ship\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
-    if (wmDateMatch?.[1]) pdf_date = normalizeDocDate(wmDateMatch[1]);
+    if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
   if (invoice === "Unknown" && category === "$1 Promotion") {
-    const fb = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
-    if (fb?.[1]) {
-      const candidate = fb[1].trim();
-      if (!isBadInvoiceCandidate(candidate)) invoice = normalizeInvoiceNumber(candidate);
-    }
-    const dateFb =
+    const m = normalizedText.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    const d =
       normalizedText.match(/\bdate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i) ||
       normalizedText.match(/\bdate\b\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i);
-    if (dateFb?.[1]) pdf_date = normalizeDocDate(dateFb[1]);
+    if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
   if (invoice === "Unknown" && category === "Pass Thru Deduction") {
-    const ptMatch =
+    const m =
       normalizedText.match(/invoice\s*number\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i) ||
       normalizedText.match(/invoice\s*number\s*\n\s*([A-Z0-9.\-\/]+)/i) ||
       normalizedText.match(/invoice\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
-    if (ptMatch?.[1]) {
-      const candidate = ptMatch[1].trim();
-      if (!isBadInvoiceCandidate(candidate)) invoice = normalizeInvoiceNumber(candidate);
-    }
-    const ptDate =
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    const d =
       normalizedText.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
       normalizedText.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
-    if (ptDate?.[1]) pdf_date = normalizeDocDate(ptDate[1]);
+    if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
   if (invoice === "Unknown") {
     for (const pattern of [/\b(CN\d{9,})\b/i, /\b(CS\d{6,})\b/i, /\b([A-Z]{1,6}\d{6,})\b/]) {
-      const match = normalizedText.match(pattern);
-      if (match?.[1] && !isBadInvoiceCandidate(match[1])) {
-        invoice = normalizeInvoiceNumber(match[1]);
-        break;
-      }
+      const m = normalizedText.match(pattern);
+      if (m?.[1] && !isBadInvoiceCandidate(m[1])) { invoice = normalizeInvoiceNumber(m[1]); break; }
     }
   }
 
@@ -225,24 +210,21 @@ function parseMetadataFromText(text: string) {
       /Invoice\s*(?:Number|No\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i,
       /Invoice\s*(?:Number|No\.?|#)\s*\n\s*([A-Z0-9.\-\/]+)/i,
     ]) {
-      const match = normalizedText.match(pattern);
-      if (match?.[1] && !isBadInvoiceCandidate(match[1])) {
-        invoice = normalizeInvoiceNumber(match[1]);
-        break;
-      }
+      const m = normalizedText.match(pattern);
+      if (m?.[1] && !isBadInvoiceCandidate(m[1])) { invoice = normalizeInvoiceNumber(m[1]); break; }
     }
   }
 
   if (invoice === "Unknown" && (category === "WM Invoice" || /wonder\s+monday/i.test(lowerText))) {
-    const wmFb =
+    const m =
       normalizedText.match(/invoice\s*no\.?\s*[:\-]?\s*(\d{1,10})\b/i) ||
       normalizedText.match(/invoice\s*#\s*[:\-]?\s*(\d{1,10})\b/i);
-    if (wmFb?.[1] && !isBadInvoiceCandidate(wmFb[1])) invoice = normalizeInvoiceNumber(wmFb[1]);
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
   }
 
   if (invoice === "Unknown") {
-    const fb = normalizedText.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{1,})\b/);
-    if (fb?.[1] && !isBadInvoiceCandidate(fb[1])) invoice = normalizeInvoiceNumber(fb[1]);
+    const m = normalizedText.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{1,})\b/);
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
   }
 
   if (pdf_date === "Unknown") {
@@ -253,8 +235,8 @@ function parseMetadataFromText(text: string) {
       /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/,
       /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2})\b/,
     ]) {
-      const match = normalizedText.match(pattern);
-      if (match?.[1]) { pdf_date = normalizeDocDate(match[1]); break; }
+      const m = normalizedText.match(pattern);
+      if (m?.[1]) { pdf_date = normalizeDocDate(m[1]); break; }
     }
   }
 
@@ -393,19 +375,20 @@ function formatMonthLabelFromDate(value: string | null | undefined) {
 // ---------------------------------------------------------------------------
 // parseDetailRowsFromText
 //
-// Tuned for KeHE Customer Spoils Allowance PDF format.
-// Each data row looks like (may be split across pdfjs text items / lines):
+// pdfjs-dist emits each PDF text item on its own line. For KeHE Spoils PDFs
+// the columns always appear in this fixed order per row:
 //
-//   850067781066  CHEESECAKE KEY LIME PIE  WONDR  KROGER 587, DALLAS
-//   02/18/2026  6293487  12  2%  $.82
+//   i+0  UPC          (12 digits)
+//   i+1  ITEM         (description)
+//   i+2  BRAND        (e.g. WONDR — skipped)
+//   i+3  CUST NAME    (e.g. KROGER 587, DALLAS)
+//   i+4  DATE         (MM/DD/YYYY — skipped)
+//   i+5  INV #        (skipped)
+//   i+6  QTY          (skipped)
+//   i+7  PCT%         (skipped)
+//   i+8  AMOUNT       (e.g. $.82)
 //
-// Key fixes vs original:
-//   1. Amount regex handles $.82 (no digit before decimal): \$(\d*\.\d{2})
-//   2. Block window is 10 lines (pdfjs splits text items onto separate lines)
-//   3. Date is NOT required — only amount is required to accept a row
-//   4. Customer name matched by "STORENAME number, CITY" pattern
-//   5. Brand short-code (WONDR) stripped from end of item description
-//   6. Header rows (UPC ITEM...) and TOTAL line are explicitly skipped
+// We parse positionally instead of regex-splitting a joined block.
 // ---------------------------------------------------------------------------
 function parseDetailRowsFromText(text: string): Array<{
   upc: string; item: string; cust_name: string; amt: number;
@@ -422,77 +405,34 @@ function parseDetailRowsFromText(text: string): Array<{
 
   console.log("[parseDetailRows] total lines:", lines.length);
 
-  // Matches $0.82, $.82, $1.23, $24.60 at end of block
-  const AMT_RE = /\$(\d*\.\d{2})/;
-  // Per-row date: MM/DD/YYYY
-  const DATE_RE = /\b\d{1,2}\/\d{1,2}\/\d{4}\b/;
-  // UPC starts line: 12 digits (KeHE standard)
-  const UPC_RE = /^(\d{12})\b/;
-  // Skip header and total lines
+  // UPC: exactly 12 digits on their own line
+  const UPC_RE = /^(\d{12})$/;
+  // Amount: $X.XX or $.XX on its own line
+  const AMT_RE = /^\$(\d*\.\d{2})$/;
+  // Skip header / footer lines
   const SKIP_RE = /^(UPC\s|TOTAL\s*:)/i;
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (SKIP_RE.test(line)) continue;
-    if (!UPC_RE.test(line)) continue;
+    if (SKIP_RE.test(lines[i])) continue;
+    if (!UPC_RE.test(lines[i])) continue;
 
-    // Join up to 10 lines to capture rows split by pdfjs
-    const block = lines.slice(i, i + 10).join(" ");
-    console.log("[parseDetailRows] candidate block:", block);
+    const upc     = lines[i]      ?? "";  // i+0: UPC
+    const item    = lines[i + 1]  ?? "";  // i+1: ITEM
+    // i+2: BRAND — skip
+    const cust    = lines[i + 3]  ?? "";  // i+3: CUST NAME
+    // i+4: DATE, i+5: INV#, i+6: QTY, i+7: PCT% — all skipped
+    const amtRaw  = lines[i + 8]  ?? "";  // i+8: AMOUNT
 
-    const amtMatch = block.match(AMT_RE);
+    const amtMatch = amtRaw.match(AMT_RE);
     if (!amtMatch) {
-      console.log("[parseDetailRows] skipped — no amount");
+      console.log("[parseDetailRows] skipped — no amount at i+8:", amtRaw, "| block:", lines.slice(i, i + 9).join(" | "));
       continue;
     }
 
-    const upc = UPC_RE.exec(block)![1];
-    const amt = parseFloat(amtMatch[1]); // e.g. "0.82" or ".82"
+    const amt = parseFloat(amtMatch[1]);
 
-    // Slice out the middle: after UPC, before the $ amount token
-    const amtIdx = block.lastIndexOf(amtMatch[0]);
-    let middle = block.slice(upc.length, amtIdx).trim();
-
-    // Remove inline date from middle
-    const dateMatch = middle.match(DATE_RE);
-    if (dateMatch) middle = middle.replace(dateMatch[0], "").trim();
-
-    // Remove trailing numeric/percent tail: "<Inv#> <Qty> <Pct%>"
-    // e.g. "6293487 12 2%" at the end
-    middle = middle.replace(/\s+\d+\s+\d+\s*%\s*$/, "").trim();
-    middle = middle.replace(/\s+\d+\s*%\s*$/, "").trim();
-    middle = middle.replace(/\s+\d{5,}\s*$/, "").trim(); // lone invoice number leftover
-
-    // Customer name pattern for KeHE Spoils: "KROGER 587, DALLAS" or "DILLONS 34, WICHITA"
-    // Always: WORD(S) + space + digits + comma + space + WORD(S)
-    const custMatch = middle.match(/\b([A-Z]+(?:\s+[A-Z]+)*\s+\d+,\s+[A-Z][A-Z\s]*)$/i);
-    let item = "";
-    let cust_name = "";
-
-    if (custMatch) {
-      cust_name = custMatch[1].trim();
-      item = middle.slice(0, middle.length - custMatch[1].length).trim();
-    } else {
-      const parts = middle.split(/\s{2,}/);
-      if (parts.length >= 2) {
-        item = parts.slice(0, -1).join(" ").trim();
-        cust_name = parts[parts.length - 1].trim();
-      } else {
-        item = middle.trim();
-        cust_name = "";
-      }
-    }
-
-    // Strip trailing brand code from item (short ALL-CAPS word like "WONDR")
-    item = item.replace(/\s+[A-Z]{2,8}\s*$/, "").trim();
-
-    if (!item && !cust_name) {
-      console.log("[parseDetailRows] skipped — empty item and customer");
-      continue;
-    }
-
-    console.log("[parseDetailRows] row:", { upc, item, cust_name, amt });
-    rows.push({ upc, item, cust_name, amt });
+    console.log("[parseDetailRows] row:", { upc, item, cust_name: cust, amt });
+    rows.push({ upc, item, cust_name: cust, amt });
   }
 
   console.log("[parseDetailRows] total rows parsed:", rows.length);
@@ -531,7 +471,6 @@ async function replaceDatasetRowsForInvoice(
   }));
 
   await supabase.from("broker_commission_datasets").delete().eq("invoice", normalizedInvoice);
-
   const { error: insertError } = await supabase.from("broker_commission_datasets").insert(inserts);
   if (insertError) throw new Error(`Failed saving dataset rows: ${insertError.message}`);
 
@@ -541,16 +480,13 @@ async function replaceDatasetRowsForInvoice(
 async function syncInvoiceFromUpload(invoice: string, type: string) {
   if (!invoice || invoice === "Unknown") return;
   const normalizedInvoice = normalizeInvoiceNumber(invoice);
-
   const { data: invoiceRows, error: lookupError } = await supabase
     .from("invoices").select("id, invoice_number").limit(5000);
   if (lookupError) throw new Error(`Failed to find invoice ${invoice}: ${lookupError.message}`);
-
   const matched = (invoiceRows || []).find(
     (row) => normalizeInvoiceNumber(row.invoice_number || "") === normalizedInvoice
   );
   if (!matched) return;
-
   const { error } = await supabase
     .from("invoices")
     .update({ type: type === "Unknown" ? "" : type, doc_status: true })
@@ -662,7 +598,6 @@ export default function InvoicesView({
     const n = normalizeInvoiceNumber(row.invoice_number || "");
     const hasDoc = !!(n && uploadMap.has(n));
     const liveType = n ? uploadMap.get(n)?.category || row.type || "" : row.type || "";
-
     return (
       (monthFilter === "Month" || row.month === monthFilter) &&
       (typeFilter === "Type" || liveType === typeFilter) &&
@@ -694,7 +629,6 @@ export default function InvoicesView({
       const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(
         workbook.Sheets[workbook.SheetNames[0]], { defval: "" }
       );
-
       const mappedRows = json
         .map((row) => {
           const checkDate = normalizeExcelDate(row["Check Date"]);
@@ -724,7 +658,6 @@ export default function InvoicesView({
 
       const existingSet = new Set((existing || []).map((i) => i.invoice_number).filter(Boolean));
       const newRows = mappedRows.filter((r) => !existingSet.has(r.invoice_number));
-
       if (newRows.length === 0) { showToast("All invoices already exist. Nothing added.", "info"); return; }
 
       const { error: ie } = await supabase.from("invoices").insert(newRows);
@@ -756,16 +689,13 @@ export default function InvoicesView({
     const contentType = metadata.file_type === "excel"
       ? file.name.toLowerCase().endsWith(".xls") ? "application/vnd.ms-excel" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       : "application/pdf";
-
     const { error: se } = await supabase.storage.from(DOCUMENT_BUCKET).upload(filePath, file, { cacheControl: "3600", upsert: false, contentType });
     if (se) throw new Error(`${file.name}: ${se.message || "upload failed."}`);
-
     const { error: de } = await supabase.from("uploads").insert({
       file_name: file.name, file_path: filePath, file_type: metadata.file_type,
       category: metadata.category, invoice: metadata.invoice, pdf_date: metadata.pdf_date,
     });
     if (de) throw new Error(`${file.name}: ${de.message || "database save failed."}`);
-
     await syncInvoiceFromUpload(metadata.invoice, metadata.category);
   };
 
@@ -775,23 +705,18 @@ export default function InvoicesView({
     metadata: { category: string; invoice: string; pdf_date: string; file_type: "pdf" | "excel" }
   ) => {
     if (!window.confirm(`A document already exists for invoice ${metadata.invoice}. Replace with ${file.name}?`)) return { skipped: true };
-
     if (existingUpload.file_path) await supabase.storage.from(DOCUMENT_BUCKET).remove([existingUpload.file_path]);
-
     const filePath = `${Date.now()}-${file.name.replace(/\s+/g, "-")}`;
     const contentType = metadata.file_type === "excel"
       ? file.name.toLowerCase().endsWith(".xls") ? "application/vnd.ms-excel" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       : "application/pdf";
-
     const { error: se } = await supabase.storage.from(DOCUMENT_BUCKET).upload(filePath, file, { cacheControl: "3600", upsert: false, contentType });
     if (se) throw new Error(`${file.name}: ${se.message || "upload failed."}`);
-
     const { error: de } = await supabase.from("uploads").update({
       file_name: file.name, file_path: filePath, file_type: metadata.file_type,
       category: metadata.category, invoice: metadata.invoice, pdf_date: metadata.pdf_date,
     }).eq("id", existingUpload.id);
     if (de) throw new Error(`${file.name}: ${de.message || "database update failed."}`);
-
     await syncInvoiceFromUpload(metadata.invoice, metadata.category);
     return { replaced: true };
   };
@@ -799,36 +724,29 @@ export default function InvoicesView({
   const handleDocumentChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
     if (selectedFiles.length === 0) return;
-
     if (!window.confirm(selectedFiles.length === 1 ? "Upload this file?" : `Upload ${selectedFiles.length} files?`)) {
       if (documentInputRef.current) documentInputRef.current.value = "";
       return;
     }
-
     try {
       let successCount = 0, replaceCount = 0, skippedCount = 0, datasetRowCount = 0;
-
       const { data: allInvoices, error: aie } = await supabase.from("invoices").select("id, invoice_number");
       if (aie) throw aie;
-
       const invoiceLookup = new Map<string, { id: number; invoice_number: string | null }>();
       for (const row of allInvoices || []) invoiceLookup.set(normalizeInvoiceNumber(row.invoice_number || ""), row);
 
       for (const file of selectedFiles) {
         const metadata = await extractDocumentMetadata(file);
         const normalizedInvoice = normalizeInvoiceNumber(metadata.invoice);
-
         if (metadata.invoice === "Unknown" || !normalizedInvoice) {
           showToast(`${file.name}: invoice reference not found.`, "error");
           skippedCount++; continue;
         }
-
         const matchedInvoice = invoiceLookup.get(normalizedInvoice);
         if (!matchedInvoice) {
           showToast(`${file.name}: invoice ${metadata.invoice} not in invoices file.`, "error");
           skippedCount++; continue;
         }
-
         const { data: dup, error: de } = await supabase.from("uploads").select("*").eq("invoice", matchedInvoice.invoice_number).limit(1);
         if (de) { showToast(`${file.name}: failed checking existing file.`, "error"); skippedCount++; continue; }
 
@@ -868,7 +786,6 @@ export default function InvoicesView({
   const handleDeleteSelected = async () => {
     if (selectedIds.length === 0 && deleteMonth === "Delete Month") { showToast("No rows selected.", "info"); return; }
     if (!window.confirm("Are you sure you want to delete the data?")) return;
-
     try {
       if (selectedIds.length > 0) {
         const { error } = await supabase.from("invoices").delete().in("id", selectedIds);
@@ -916,17 +833,14 @@ export default function InvoicesView({
                   className="pl-9"
                 />
               </div>
-
               <select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
                 <option value="Month">Month</option>
                 {monthOptions.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
-
               <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
                 <option value="Type">Type</option>
                 {typeOptions.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
-
               <div className="relative">
                 <select value={documentFilter} onChange={(e) => setDocumentFilter(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 text-sm">
                   <option value="Documents">Documents</option>
@@ -941,14 +855,12 @@ export default function InvoicesView({
                   </button>
                 )}
               </div>
-
               {selectMode && (
                 <select value={deleteMonth} onChange={(e) => setDeleteMonth(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
                   <option value="Delete Month">Delete Month</option>
                   {monthOptions.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
               )}
-
               <div className="flex gap-2">
                 <Button type="button" variant={selectMode ? "default" : "outline"}
                   onClick={() => setSelectMode((prev) => { const next = !prev; if (!next) { setSelectedIds([]); setDeleteMonth("Delete Month"); } return next; })}

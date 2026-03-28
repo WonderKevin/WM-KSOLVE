@@ -104,6 +104,7 @@ export default function BrokerCommissionDataSetsView() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
+              <th className="p-3 text-left">Type</th>
               <th className="p-3 text-left">Month</th>
               <th className="p-3 text-left">Invoice</th>
               <th className="p-3 text-left">UPC</th>
@@ -116,19 +117,20 @@ export default function BrokerCommissionDataSetsView() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-gray-500">
+                <td colSpan={7} className="p-6 text-center text-gray-500">
                   Loading data...
                 </td>
               </tr>
             ) : data.length === 0 ? (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-gray-500">
+                <td colSpan={7} className="p-6 text-center text-gray-500">
                   No data found.
                 </td>
               </tr>
             ) : (
               data.map((row) => (
                 <tr key={row.id} className="border-t">
+                  <td className="p-3">{row.type}</td>
                   <td className="p-3">{row.month}</td>
                   <td className="p-3 font-medium">{row.invoice}</td>
                   <td className="p-3">{row.upc}</td>
