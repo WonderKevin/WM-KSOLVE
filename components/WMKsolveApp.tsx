@@ -22,6 +22,8 @@ import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDat
 import AccountingSummaryView from "@/components/Views/AccountingSummaryView";
 import CheckDetailsView from "@/components/Views/CheckDetailsView";
 import InvoicesView from "@/components/Views/InvoicesView";
+import ProductListView from "@/components/Views/ProductListView";
+import LocationsView from "@/components/Views/LocationsView";
 
 const sidebarItems = [
   { label: "Dashboard", icon: LayoutDashboard, key: "dashboard" },
@@ -44,6 +46,15 @@ const sidebarItems = [
     ],
   },
   { label: "Invoices", icon: Database, key: "invoices" },
+  {
+    label: "Database",
+    icon: Database,
+    key: "database",
+    children: [
+      { label: "Product List", key: "database-product-list" },
+      { label: "Locations", key: "database-locations" },
+    ],
+  },
 ];
 
 function SidebarItem({
@@ -127,6 +138,7 @@ export default function WMKsolveApp() {
   const [openGroups, setOpenGroups] = useState({
     "broker-commission": false,
     accounting: false,
+    database: false,
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [invoiceUploadSignal, setInvoiceUploadSignal] = useState(0);
@@ -185,6 +197,8 @@ export default function WMKsolveApp() {
     "accounting-summary": "Summary",
     "accounting-check-details": "Check Details",
     invoices: "Invoices",
+    "database-product-list": "Product List",
+    "database-locations": "Locations",
   };
 
   const renderContent = () => {
@@ -206,6 +220,10 @@ export default function WMKsolveApp() {
             documentUploadSignal={documentUploadSignal}
           />
         );
+      case "database-product-list":
+        return <ProductListView />;
+      case "database-locations":
+        return <LocationsView />;
       default:
         return <DashboardView />;
     }
