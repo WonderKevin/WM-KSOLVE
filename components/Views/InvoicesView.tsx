@@ -263,9 +263,19 @@ async function fetchProductLookup(): Promise<Map<string,string>> {
 
 async function fetchInvoiceType(invoiceNumber: string): Promise<string> {
   const norm = normalizeInvoiceNumber(invoiceNumber);
-  const { data, error } = await supabase.from("invoices").select("type, invoice_number").limit(5000);
-  if (error) return "";
-  return (data||[]).find(r => normalizeInvoiceNumber(r.invoice_number||"")=== norm)?.type || "";
+  // Check invoices table first
+  const { data: invData, error: invErr } = await supabase.from("invoices").select("type, invoice_number").limit(5000);
+  if (!invErr) {
+    const matched = (invData||[]).find(r => normalizeInvoiceNumber(r.invoice_number||"") === norm);
+    if (matched?.type) return matched.type;
+  }
+  // Fall back to uploads table category (WM Invoice, $1 Promotion, etc.)
+  const { data: upData, error: upErr } = await supabase.from("uploads").select("category, invoice").limit(5000);
+  if (!upErr) {
+    const matched = (upData||[]).find(r => normalizeInvoiceNumber(r.invoice||"") === norm);
+    if (matched?.category) return matched.category;
+  }
+  return "";
 }
 
 // FORMAT 1: KeHE Spoils PDF
@@ -414,12 +424,13 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
       continue;
     }
 
-    // "SOLD TO:" alone — customer is on the next non-address line
+    // "SOLD TO:" alone — customer is on the next non-empty non-address line
     if (/^sold\s+to:\s*$/i.test(line)) {
       for (let j = i+1; j < Math.min(i+5, lines.length); j++) {
         const next = lines[j].trim();
-        // Customer lines contain a comma (store# + city): "KRO ATL 412, ATLANTA"
-        if (next && next.includes(",") && !/^\d{5,}/.test(next)) {
+        // Skip pure zip codes, phone numbers, or very short strings
+        // Customer lines: "KRO ATL 412, ATLANTA" or "PICK N SAVE #412" or "QFC 101, BELFAIR"
+        if (next && !/^\d{5,}$/.test(next) && !/^telephone/i.test(next) && next.length > 3) {
           currentCustomer = next;
           break;
         }
@@ -488,17 +499,17 @@ async function parseDetailRows(file: File, fullText: string): Promise<DatasetRow
   return parseSpoilsPdfRows(fullText);
 }
 
-async function replaceDatasetRowsForInvoice(invoice: string, pdfDate: string, file: File) {
+async function replaceDatasetRowsForInvoice(invoice: string, pdfDate: string, file: File, categoryFallback = "") {
   const ni=normalizeInvoiceNumber(invoice);
   if (!ni) return 0;
   const ln=file.name.toLowerCase(), isExcel=ln.endsWith(".xlsx")||ln.endsWith(".xls");
   let detailRows: DatasetRow[]=[];
   if (isExcel) detailRows=parseExcelProductDetailsRows(await file.arrayBuffer());
-  else { const {fullText}=await extractTextWithPdfJs(file); console.log("FULL PDF TEXT:",fullText); detailRows=await parseDetailRows(file,fullText); }
+  else { const {fullText}=await extractTextWithPdfJs(file); console.log("FULL PDF TEXT:",fullText); detailRows=await parseDetailRows(file,fullText); if (!categoryFallback) { const pm=parseMetadataFromText(fullText); if (pm.category!=="Unknown") categoryFallback=pm.category; } }
   console.log("PARSED DETAIL ROWS:",detailRows);
   if (!detailRows.length) return 0;
-  const [pl,it]=await Promise.all([fetchProductLookup(),fetchInvoiceType(ni)]);
-  const inserts=detailRows.map(r=>({ month:formatMonthLabelFromDate(pdfDate), invoice:ni, invoice_date:parseIsoDateFromMmDdYyyy(pdfDate), type:it, upc:r.upc, item:pl.get(r.upc)||r.item, cust_name:r.cust_name, amt:r.amt }));
+  const [pl,it]=await Promise.all([fetchProductLookup(),fetchInvoiceType(ni)]); const finalType=it||categoryFallback;
+  const inserts=detailRows.map(r=>({ month:formatMonthLabelFromDate(pdfDate), invoice:ni, invoice_date:parseIsoDateFromMmDdYyyy(pdfDate), type:finalType, upc:r.upc, item:pl.get(r.upc)||r.item, cust_name:r.cust_name, amt:r.amt }));
   await supabase.from("broker_commission_datasets").delete().eq("invoice",ni);
   const {error}=await supabase.from("broker_commission_datasets").insert(inserts);
   if (error) throw new Error(`Failed saving dataset rows: ${error.message}`);
@@ -516,7 +527,7 @@ async function reprocessAllUploads(onProgress:(msg:string)=>void): Promise<{proc
       const {data:fd,error:de}=await supabase.storage.from(DOCUMENT_BUCKET).download(u.file_path);
       if (de||!fd) { failed++; continue; }
       const f=new File([fd],u.file_name,{ type:u.file_type==="excel"?"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":"application/pdf" });
-      totalRows+=await replaceDatasetRowsForInvoice(u.invoice,u.pdf_date??"",f);
+      totalRows+=await replaceDatasetRowsForInvoice(u.invoice,u.pdf_date??"",f,u.category||"");
       processed++;
     } catch(e:any) { console.error(`Failed ${u.file_name}:`,e); failed++; }
   }
@@ -673,11 +684,11 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
         if (eu) {
           const r=await replaceExistingDocument(eu,file,fm);
           if (r.skipped) { skip++; continue; }
-          rows+=await replaceDatasetRowsForInvoice(fm.invoice,fm.pdf_date,file);
+          rows+=await replaceDatasetRowsForInvoice(fm.invoice,fm.pdf_date,file,fm.category||"");
           rep++; continue;
         }
         await uploadNewDocument(file,fm);
-        rows+=await replaceDatasetRowsForInvoice(fm.invoice,fm.pdf_date,file);
+        rows+=await replaceDatasetRowsForInvoice(fm.invoice,fm.pdf_date,file,fm.category||"");
         ok++;
       }
       await loadData();
