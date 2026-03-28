@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, X } from "lucide-react";
+import { Plus, Search, X, Pencil, Trash2 } from "lucide-react";
 
 import { supabase } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -19,12 +19,16 @@ export default function ProductListView() {
   const [items, setItems] = useState<ProductItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
   const [showModal, setShowModal] = useState(false);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [upc, setUpc] = useState("");
   const [itemDescription, setItemDescription] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+
+  const isEditMode = !!editingItemId;
 
   const fetchItems = async () => {
     setLoading(true);
@@ -58,22 +62,31 @@ export default function ProductListView() {
   }, [items, search]);
 
   const resetForm = () => {
+    setEditingItemId(null);
     setUpc("");
     setItemDescription("");
     setErrorMessage("");
   };
 
-  const handleOpenModal = () => {
+  const handleOpenAddModal = () => {
     resetForm();
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (item: ProductItem) => {
+    setEditingItemId(item.id);
+    setUpc(item.upc);
+    setItemDescription(item.item_description);
+    setErrorMessage("");
     setShowModal(true);
   };
 
   const handleCloseModal = () => {
     setShowModal(false);
-    setErrorMessage("");
+    resetForm();
   };
 
-  const handleAddItem = async () => {
+  const handleSaveItem = async () => {
     setErrorMessage("");
 
     const cleanUpc = upc.trim();
@@ -86,46 +99,91 @@ export default function ProductListView() {
 
     setSaving(true);
 
-    const { data: existingItem, error: duplicateCheckError } = await supabase
-      .from("product_list")
-      .select("id")
-      .eq("upc", cleanUpc)
-      .maybeSingle();
+    try {
+      const duplicateQuery = supabase
+        .from("product_list")
+        .select("id")
+        .eq("upc", cleanUpc);
 
-    if (duplicateCheckError) {
-      setSaving(false);
-      setErrorMessage("Unable to validate duplicate item.");
-      return;
-    }
+      const { data: duplicateItems, error: duplicateCheckError } = isEditMode
+        ? await duplicateQuery.neq("id", editingItemId as string)
+        : await duplicateQuery;
 
-    if (existingItem) {
-      setSaving(false);
-      setErrorMessage("Item already exist please check.");
-      return;
-    }
+      if (duplicateCheckError) {
+        setErrorMessage("Unable to validate duplicate item.");
+        return;
+      }
 
-    const { error } = await supabase.from("product_list").insert([
-      {
-        upc: cleanUpc,
-        item_description: cleanDescription,
-      },
-    ]);
-
-    setSaving(false);
-
-    if (error) {
-      if (error.code === "23505") {
+      if (duplicateItems && duplicateItems.length > 0) {
         setErrorMessage("Item already exist please check.");
         return;
       }
 
-      setErrorMessage(error.message || "Failed to add item.");
-      return;
-    }
+      if (isEditMode) {
+        const { error } = await supabase
+          .from("product_list")
+          .update({
+            upc: cleanUpc,
+            item_description: cleanDescription,
+          })
+          .eq("id", editingItemId);
 
-    handleCloseModal();
-    resetForm();
-    fetchItems();
+        if (error) {
+          if (error.code === "23505") {
+            setErrorMessage("Item already exist please check.");
+            return;
+          }
+
+          setErrorMessage(error.message || "Failed to update item.");
+          return;
+        }
+      } else {
+        const { error } = await supabase.from("product_list").insert([
+          {
+            upc: cleanUpc,
+            item_description: cleanDescription,
+          },
+        ]);
+
+        if (error) {
+          if (error.code === "23505") {
+            setErrorMessage("Item already exist please check.");
+            return;
+          }
+
+          setErrorMessage(error.message || "Failed to add item.");
+          return;
+        }
+      }
+
+      handleCloseModal();
+      await fetchItems();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteItem = async (item: ProductItem) => {
+    const confirmed = window.confirm(
+      `Delete this item?\n\nUPC: ${item.upc}\nItem: ${item.item_description}`
+    );
+
+    if (!confirmed) return;
+
+    setDeletingId(item.id);
+
+    try {
+      const { error } = await supabase.from("product_list").delete().eq("id", item.id);
+
+      if (error) {
+        alert(error.message || "Failed to delete item.");
+        return;
+      }
+
+      await fetchItems();
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
@@ -145,7 +203,7 @@ export default function ProductListView() {
           <Button
             type="button"
             className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-            onClick={handleOpenModal}
+            onClick={handleOpenAddModal}
           >
             <Plus className="mr-2 h-4 w-4" />
             Add Item
@@ -159,18 +217,19 @@ export default function ProductListView() {
                 <tr>
                   <th className="px-4 py-3 font-semibold text-slate-700">UPC</th>
                   <th className="px-4 py-3 font-semibold text-slate-700">Item Description</th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-700">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={2} className="px-4 py-6 text-center text-slate-500">
+                    <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
                       Loading items...
                     </td>
                   </tr>
                 ) : filteredItems.length === 0 ? (
                   <tr>
-                    <td colSpan={2} className="px-4 py-6 text-center text-slate-500">
+                    <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
                       No items found.
                     </td>
                   </tr>
@@ -179,6 +238,30 @@ export default function ProductListView() {
                     <tr key={item.id} className="border-t border-slate-200">
                       <td className="px-4 py-3 text-slate-700">{item.upc}</td>
                       <td className="px-4 py-3 text-slate-700">{item.item_description}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-xl"
+                            onClick={() => handleOpenEditModal(item)}
+                          >
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Edit
+                          </Button>
+
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            className="rounded-xl"
+                            onClick={() => handleDeleteItem(item)}
+                            disabled={deletingId === item.id}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            {deletingId === item.id ? "Deleting..." : "Delete"}
+                          </Button>
+                        </div>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -192,7 +275,9 @@ export default function ProductListView() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
           <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-900">Add Item</h2>
+              <h2 className="text-xl font-bold text-slate-900">
+                {isEditMode ? "Edit Item" : "Add Item"}
+              </h2>
               <button
                 type="button"
                 onClick={handleCloseModal}
@@ -236,16 +321,17 @@ export default function ProductListView() {
                 variant="outline"
                 className="rounded-2xl"
                 onClick={handleCloseModal}
+                disabled={saving}
               >
                 Cancel
               </Button>
               <Button
                 type="button"
                 className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-                onClick={handleAddItem}
+                onClick={handleSaveItem}
                 disabled={saving}
               >
-                {saving ? "Saving..." : "Save Item"}
+                {saving ? "Saving..." : isEditMode ? "Save Changes" : "Save Item"}
               </Button>
             </div>
           </div>
