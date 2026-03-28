@@ -144,10 +144,7 @@ function parseMetadataFromText(text: string) {
       { pattern: /wonder\s+monday/i, value: "WM Invoice" },
     ];
     for (const matcher of knownTypeMatchers) {
-      if (matcher.pattern.test(lowerText)) {
-        category = matcher.value;
-        break;
-      }
+      if (matcher.pattern.test(lowerText)) { category = matcher.value; break; }
     }
     if (category === "Unknown") {
       const typeMatch = normalizedText.match(
@@ -249,11 +246,9 @@ async function extractTextWithPdfJs(file: File) {
     "pdfjs-dist/build/pdf.worker.min.mjs",
     import.meta.url
   ).toString();
-
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   let fullText = "";
-
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
@@ -262,7 +257,6 @@ async function extractTextWithPdfJs(file: File) {
       .join("\n");
     fullText += `\n${pageText}\n`;
   }
-
   return { pdf, fullText: fullText.trim() };
 }
 
@@ -375,20 +369,18 @@ function formatMonthLabelFromDate(value: string | null | undefined) {
 // ---------------------------------------------------------------------------
 // parseDetailRowsFromText
 //
-// pdfjs-dist emits each PDF text item on its own line. For KeHE Spoils PDFs
-// the columns always appear in this fixed order per row:
+// pdfjs-dist emits each PDF text item on its own line.
+// KeHE Spoils PDF columns appear in this fixed order per row:
 //
-//   i+0  UPC          (12 digits)
-//   i+1  ITEM         (description)
-//   i+2  BRAND        (e.g. WONDR — skipped)
-//   i+3  CUST NAME    (e.g. KROGER 587, DALLAS)
-//   i+4  DATE         (MM/DD/YYYY — skipped)
-//   i+5  INV #        (skipped)
-//   i+6  QTY          (skipped)
-//   i+7  PCT%         (skipped)
-//   i+8  AMOUNT       (e.g. $.82)
-//
-// We parse positionally instead of regex-splitting a joined block.
+//   i+0  UPC       (12 digits)
+//   i+1  ITEM      (raw PDF description — will be replaced by product_list lookup)
+//   i+2  BRAND     (e.g. WONDR — skipped)
+//   i+3  CUST NAME (e.g. KROGER 587, DALLAS)
+//   i+4  DATE      (MM/DD/YYYY — skipped)
+//   i+5  INV #     (skipped)
+//   i+6  QTY       (skipped)
+//   i+7  PCT%      (skipped)
+//   i+8  AMOUNT    (e.g. $.82)
 // ---------------------------------------------------------------------------
 function parseDetailRowsFromText(text: string): Array<{
   upc: string; item: string; cust_name: string; amt: number;
@@ -405,38 +397,56 @@ function parseDetailRowsFromText(text: string): Array<{
 
   console.log("[parseDetailRows] total lines:", lines.length);
 
-  // UPC: exactly 12 digits on their own line
   const UPC_RE = /^(\d{12})$/;
-  // Amount: $X.XX or $.XX on its own line
   const AMT_RE = /^\$(\d*\.\d{2})$/;
-  // Skip header / footer lines
   const SKIP_RE = /^(UPC\s|TOTAL\s*:)/i;
 
   for (let i = 0; i < lines.length; i++) {
     if (SKIP_RE.test(lines[i])) continue;
     if (!UPC_RE.test(lines[i])) continue;
 
-    const upc     = lines[i]      ?? "";  // i+0: UPC
-    const item    = lines[i + 1]  ?? "";  // i+1: ITEM
+    const upc    = lines[i]     ?? "";  // i+0: UPC
+    const item   = lines[i + 1] ?? "";  // i+1: ITEM (raw — overridden by product_list below)
     // i+2: BRAND — skip
-    const cust    = lines[i + 3]  ?? "";  // i+3: CUST NAME
-    // i+4: DATE, i+5: INV#, i+6: QTY, i+7: PCT% — all skipped
-    const amtRaw  = lines[i + 8]  ?? "";  // i+8: AMOUNT
+    const cust   = lines[i + 3] ?? "";  // i+3: CUST NAME
+    // i+4–i+7: DATE, INV#, QTY, PCT% — skip
+    const amtRaw = lines[i + 8] ?? "";  // i+8: AMOUNT
 
     const amtMatch = amtRaw.match(AMT_RE);
     if (!amtMatch) {
-      console.log("[parseDetailRows] skipped — no amount at i+8:", amtRaw, "| block:", lines.slice(i, i + 9).join(" | "));
+      console.log("[parseDetailRows] skipped — no amount at i+8:", amtRaw, "| lines:", lines.slice(i, i + 9).join(" | "));
       continue;
     }
 
     const amt = parseFloat(amtMatch[1]);
-
     console.log("[parseDetailRows] row:", { upc, item, cust_name: cust, amt });
     rows.push({ upc, item, cust_name: cust, amt });
   }
 
   console.log("[parseDetailRows] total rows parsed:", rows.length);
   return rows;
+}
+
+// ---------------------------------------------------------------------------
+// fetchProductLookup
+// Loads all rows from product_list and returns a Map<upc, item_description>.
+// UPC keys are normalized (trimmed, no leading zeros stripped) for safe lookup.
+// ---------------------------------------------------------------------------
+async function fetchProductLookup(): Promise<Map<string, string>> {
+  const { data, error } = await supabase
+    .from("product_list")
+    .select("upc, item_description");
+
+  if (error) {
+    console.error("Failed to load product_list:", error.message);
+    return new Map();
+  }
+
+  const map = new Map<string, string>();
+  for (const row of data ?? []) {
+    if (row.upc) map.set(String(row.upc).trim(), row.item_description ?? "");
+  }
+  return map;
 }
 
 async function replaceDatasetRowsForInvoice(
@@ -456,19 +466,29 @@ async function replaceDatasetRowsForInvoice(
 
   if (detailRows.length === 0) return 0;
 
+  // Fetch product_list lookup once for this upload
+  const productLookup = await fetchProductLookup();
+  console.log("PRODUCT LOOKUP size:", productLookup.size);
+
   const invoiceDateIso = parseIsoDateFromMmDdYyyy(pdfDate);
   const monthLabel = formatMonthLabelFromDate(pdfDate);
 
-  const inserts = detailRows.map((row) => ({
-    month: monthLabel,
-    invoice: normalizedInvoice,
-    invoice_date: invoiceDateIso,
-    type: type === "Unknown" ? "" : type,
-    upc: row.upc,
-    item: row.item,
-    cust_name: row.cust_name,
-    amt: row.amt,
-  }));
+  const inserts = detailRows.map((row) => {
+    // Look up standardized item description by UPC; fall back to raw PDF text
+    const standardizedItem = productLookup.get(row.upc) || row.item;
+    console.log(`[productLookup] UPC ${row.upc} → "${standardizedItem}"`);
+
+    return {
+      month: monthLabel,
+      invoice: normalizedInvoice,
+      invoice_date: invoiceDateIso,
+      type: type === "Unknown" ? "" : type,
+      upc: row.upc,
+      item: standardizedItem,
+      cust_name: row.cust_name,
+      amt: row.amt,
+    };
+  });
 
   await supabase.from("broker_commission_datasets").delete().eq("invoice", normalizedInvoice);
   const { error: insertError } = await supabase.from("broker_commission_datasets").insert(inserts);
