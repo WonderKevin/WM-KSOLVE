@@ -12,6 +12,7 @@ import {
   BadgeDollarSign,
   Menu,
   LogOut,
+  BarChart3,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -46,12 +47,19 @@ const sidebarItems = [
       { label: "Check Details", key: "accounting-check-details" },
     ],
   },
-  { label: "Invoices", icon: Database, key: "invoices" },
+  {
+    label: "Reporting",
+    icon: BarChart3,
+    key: "reporting",
+    children: [{ label: "Report XXX", key: "reporting-report-xxx" }],
+  },
   {
     label: "Database",
     icon: Database,
     key: "database",
     children: [
+      { label: "Ksolve Invoices", key: "database-ksolve-invoices" },
+      { label: "KeHe Velocity", key: "database-kehe-velocity" },
       { label: "Product List", key: "database-product-list" },
       { label: "Locations", key: "database-locations" },
       { label: "Deduction Type", key: "database-deduction-type" },
@@ -132,6 +140,15 @@ function SidebarItem({
   );
 }
 
+function PlaceholderView({ title }: { title: string }) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="text-lg font-semibold text-slate-900">{title}</div>
+      <p className="mt-2 text-sm text-slate-500">This page is ready for the next build.</p>
+    </div>
+  );
+}
+
 export default function WMKsolveApp() {
   const router = useRouter();
 
@@ -140,6 +157,7 @@ export default function WMKsolveApp() {
   const [openGroups, setOpenGroups] = useState({
     "broker-commission": false,
     accounting: false,
+    reporting: false,
     database: false,
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -198,7 +216,9 @@ export default function WMKsolveApp() {
     "broker-commission-data-sets": "Data Sets",
     "accounting-summary": "Summary",
     "accounting-check-details": "Check Details",
-    invoices: "Invoices",
+    "reporting-report-xxx": "Report XXX",
+    "database-ksolve-invoices": "Ksolve Invoices",
+    "database-kehe-velocity": "KeHe Velocity",
     "database-product-list": "Product List",
     "database-locations": "Locations",
     "database-deduction-type": "Deduction Type",
@@ -216,13 +236,17 @@ export default function WMKsolveApp() {
         return <AccountingSummaryView />;
       case "accounting-check-details":
         return <CheckDetailsView />;
-      case "invoices":
+      case "reporting-report-xxx":
+        return <PlaceholderView title="Report XXX" />;
+      case "database-ksolve-invoices":
         return (
           <InvoicesView
             invoiceUploadSignal={invoiceUploadSignal}
             documentUploadSignal={documentUploadSignal}
           />
         );
+      case "database-kehe-velocity":
+        return <PlaceholderView title="KeHe Velocity" />;
       case "database-product-list":
         return <ProductListView />;
       case "database-locations":
@@ -298,7 +322,7 @@ export default function WMKsolveApp() {
             </div>
 
             <div className="flex items-center gap-3">
-              {activeKey === "invoices" && (
+              {activeKey === "database-ksolve-invoices" && (
                 <>
                   <Button
                     type="button"
