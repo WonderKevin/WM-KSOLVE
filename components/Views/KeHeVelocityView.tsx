@@ -44,9 +44,34 @@ function formatMonthLabel(monthNumber: number, year: number) {
 
 function normalizeText(value: string) {
   return String(value || "")
+    .toUpperCase()
+    .replace(/&/g, "AND")
+    .replace(/[#]/g, "")
+    .replace(/[-_/(),.]/g, " ")
     .replace(/\s+/g, " ")
-    .trim()
-    .toUpperCase();
+    .trim();
+}
+
+function compactText(value: string) {
+  return normalizeText(value).replace(/\s+/g, "");
+}
+
+function textLooksLikeMatch(a: string, b: string) {
+  const na = normalizeText(a);
+  const nb = normalizeText(b);
+  const ca = compactText(a);
+  const cb = compactText(b);
+
+  if (!na || !nb) return false;
+
+  return (
+    na === nb ||
+    ca === cb ||
+    na.includes(nb) ||
+    nb.includes(na) ||
+    ca.includes(cb) ||
+    cb.includes(ca)
+  );
 }
 
 function extractUpcFromDescription(value: string) {
@@ -70,18 +95,37 @@ function findRetailerFromLocations(
   retailerArea: string,
   locations: LocationRow[]
 ) {
-  const customerNorm = normalizeText(customer);
-  const areaNorm = normalizeText(retailerArea);
+  for (const row of locations) {
+    const rowCustomer =
+      row.customer || row.retailer_name || row.location_name || "";
+    const rowArea =
+      row.retailer_area || row.area || row.region || "";
+
+    const customerMatch = textLooksLikeMatch(customer, String(rowCustomer));
+    const areaMatch = textLooksLikeMatch(retailerArea, String(rowArea));
+
+    if (customerMatch && areaMatch) {
+      return String(
+        row.retailer ||
+          row.chain ||
+          row.banner ||
+          row.parent ||
+          row.account_name ||
+          ""
+      );
+    }
+  }
 
   for (const row of locations) {
-    const rowCustomer = normalizeText(
-      row.customer || row.retailer_name || row.location_name || ""
-    );
-    const rowArea = normalizeText(
-      row.retailer_area || row.area || row.region || ""
-    );
+    const rowCustomer =
+      row.customer || row.retailer_name || row.location_name || "";
+    const rowArea =
+      row.retailer_area || row.area || row.region || "";
 
-    if (rowCustomer === customerNorm && rowArea === areaNorm) {
+    if (
+      textLooksLikeMatch(customer, String(rowCustomer)) ||
+      textLooksLikeMatch(retailerArea, String(rowArea))
+    ) {
       return String(
         row.retailer ||
           row.chain ||
@@ -101,17 +145,16 @@ function hasLocationMatch(
   retailerArea: string,
   locations: LocationRow[]
 ) {
-  const customerNorm = normalizeText(customer);
-  const areaNorm = normalizeText(retailerArea);
-
   return locations.some((row) => {
-    const rowCustomer = normalizeText(
-      row.customer || row.retailer_name || row.location_name || ""
+    const rowCustomer =
+      row.customer || row.retailer_name || row.location_name || "";
+    const rowArea =
+      row.retailer_area || row.area || row.region || "";
+
+    return (
+      textLooksLikeMatch(customer, String(rowCustomer)) &&
+      textLooksLikeMatch(retailerArea, String(rowArea))
     );
-    const rowArea = normalizeText(
-      row.retailer_area || row.area || row.region || ""
-    );
-    return rowCustomer === customerNorm && rowArea === areaNorm;
   });
 }
 
@@ -167,7 +210,7 @@ function parseKeheWorksheet(
     const upc = extractUpcFromDescription(rawItemDescription);
     if (!upc) continue;
 
-    const shipped = parseCurrencyNumber(row[15]); // column P
+    const shipped = parseCurrencyNumber(row[15]);
     const cases = roundCases(shipped);
     const eaches = cases * 12;
 
@@ -204,7 +247,7 @@ function getMissingLocations(
     const exists = hasLocationMatch(row.customer, row.retailer_area, locations);
     if (exists) continue;
 
-    const key = `${normalizeText(row.retailer_area)}__${normalizeText(row.customer)}`;
+    const key = `${compactText(row.retailer_area)}__${compactText(row.customer)}`;
     if (!uniqueMap.has(key)) {
       uniqueMap.set(key, {
         retailer_area: row.retailer_area,
@@ -506,7 +549,7 @@ export default function KeHeVelocityView() {
               Choose a retailer, then save them before continuing.
             </p>
 
-            <div className="mt-5 space-y-3 max-h-[420px] overflow-auto">
+            <div className="mt-5 max-h-[420px] space-y-3 overflow-auto">
               {missingLocations.map((item, index) => (
                 <div
                   key={`${item.retailer_area}-${item.customer}-${index}`}
