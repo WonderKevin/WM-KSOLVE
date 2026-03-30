@@ -30,19 +30,35 @@ export default function LocationsView() {
 
   const fetchLocations = async () => {
     setLoading(true);
-
-    const { data, error } = await supabase
-      .from("locations")
-      .select("*")
-      .order("customer", { ascending: true });
-
-    if (error) {
+  
+    try {
+      const pageSize = 1000;
+      let from = 0;
+      let allRows: Location[] = [];
+  
+      while (true) {
+        const { data, error } = await supabase
+          .from("locations")
+          .select("*")
+          .order("customer", { ascending: true })
+          .range(from, from + pageSize - 1);
+  
+        if (error) throw error;
+  
+        const batch = data ?? [];
+        allRows = [...allRows, ...batch];
+  
+        if (batch.length < pageSize) break;
+        from += pageSize;
+      }
+  
+      setLocations(allRows);
+    } catch (error) {
       console.error("Error fetching locations:", error);
-    } else {
-      setLocations(data ?? []);
+      setLocations([]);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   useEffect(() => {
