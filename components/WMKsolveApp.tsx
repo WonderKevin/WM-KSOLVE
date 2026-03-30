@@ -27,6 +27,7 @@ import InvoicesView from "@/components/Views/InvoicesView";
 import ProductListView from "@/components/Views/ProductListView";
 import LocationsView from "@/components/Views/LocationsView";
 import DeductionTypesView from "@/components/Views/DeductionTypesView";
+import UserAccountView from "@/components/Views/UserAccountView";
 
 type Permissions = {
   email: string;
@@ -134,18 +135,6 @@ function PlaceholderView({ title }: { title: string }) {
   );
 }
 
-function UserAccountView() {
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="text-lg font-semibold text-slate-900">User Account</div>
-      <p className="mt-2 text-sm text-slate-500">
-        Manage user access here. Next step is connecting this page to the
-        user_permissions table.
-      </p>
-    </div>
-  );
-}
-
 export default function WMKsolveApp() {
   const router = useRouter();
 
@@ -235,6 +224,29 @@ export default function WMKsolveApp() {
       subscription.unsubscribe();
     };
   }, [router]);
+
+  useEffect(() => {
+    if (!permissions) return;
+
+    const allowedKeys: string[] = [];
+
+    if (permissions.can_view_dashboard) allowedKeys.push("dashboard");
+    if (permissions.can_view_broker_commission_summary) allowedKeys.push("broker-commission-summary");
+    if (permissions.can_view_broker_commission_data_sets) allowedKeys.push("broker-commission-data-sets");
+    if (permissions.can_view_accounting_summary) allowedKeys.push("accounting-summary");
+    if (permissions.can_view_accounting_check_details) allowedKeys.push("accounting-check-details");
+    if (permissions.can_view_reporting_report_xxx) allowedKeys.push("reporting-report-xxx");
+    if (permissions.can_view_database_ksolve_invoices) allowedKeys.push("database-ksolve-invoices");
+    if (permissions.can_view_database_kehe_velocity) allowedKeys.push("database-kehe-velocity");
+    if (permissions.can_view_database_product_list) allowedKeys.push("database-product-list");
+    if (permissions.can_view_database_locations) allowedKeys.push("database-locations");
+    if (permissions.can_view_database_deduction_type) allowedKeys.push("database-deduction-type");
+    if (permissions.can_view_user_account) allowedKeys.push("admin-user-account");
+
+    if (!allowedKeys.includes(activeKey)) {
+      setActiveKey(allowedKeys[0] || "dashboard");
+    }
+  }, [permissions, activeKey]);
 
   const handleLogout = async () => {
     try {
