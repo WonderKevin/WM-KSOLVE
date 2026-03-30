@@ -28,6 +28,7 @@ import ProductListView from "@/components/Views/ProductListView";
 import LocationsView from "@/components/Views/LocationsView";
 import DeductionTypesView from "@/components/Views/DeductionTypesView";
 import UserAccountView from "@/components/Views/UserAccountView";
+import KeHeVelocityView from "@/components/Views/KeHeVelocityView";
 
 type Permissions = {
   email: string;
@@ -402,8 +403,8 @@ export default function WMKsolveApp() {
             isAdmin={userEmail.toLowerCase() === "kevin@wondermonday.com"}
           />
         );
-      case "database-kehe-velocity":
-        return <PlaceholderView title="KeHe Velocity" />;
+        case "database-kehe-velocity":
+          return <KeHeVelocityView />;
       case "database-product-list":
         return <ProductListView />;
       case "database-locations":
