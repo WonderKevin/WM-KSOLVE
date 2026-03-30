@@ -27,33 +27,26 @@ export default function ProductListView() {
   const [upc, setUpc] = useState("");
   const [itemDescription, setItemDescription] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [conflictItem, setConflictItem] = useState<ProductItem | null>(null);
+  const [overwriting, setOverwriting] = useState(false);
 
   const isEditMode = !!editingItemId;
 
   const fetchItems = async () => {
     setLoading(true);
-
     const { data, error } = await supabase
       .from("product_list")
       .select("*")
       .order("item_description", { ascending: true });
-
-    if (!error && data) {
-      setItems(data);
-    }
-
+    if (!error && data) setItems(data);
     setLoading(false);
   };
 
-  useEffect(() => {
-    fetchItems();
-  }, []);
+  useEffect(() => { fetchItems(); }, []);
 
   const filteredItems = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-
     if (!keyword) return items;
-
     return items.filter(
       (item) =>
         item.upc.toLowerCase().includes(keyword) ||
@@ -66,28 +59,27 @@ export default function ProductListView() {
     setUpc("");
     setItemDescription("");
     setErrorMessage("");
+    setConflictItem(null);
+    setOverwriting(false);
   };
 
-  const handleOpenAddModal = () => {
-    resetForm();
-    setShowModal(true);
-  };
+  const handleOpenAddModal = () => { resetForm(); setShowModal(true); };
 
   const handleOpenEditModal = (item: ProductItem) => {
     setEditingItemId(item.id);
     setUpc(item.upc);
     setItemDescription(item.item_description);
     setErrorMessage("");
+    setConflictItem(null);
+    setOverwriting(false);
     setShowModal(true);
   };
 
-  const handleCloseModal = () => {
-    setShowModal(false);
-    resetForm();
-  };
+  const handleCloseModal = () => { setShowModal(false); resetForm(); };
 
   const handleSaveItem = async () => {
     setErrorMessage("");
+    setConflictItem(null);
 
     const cleanUpc = upc.trim();
     const cleanDescription = itemDescription.trim();
@@ -100,14 +92,15 @@ export default function ProductListView() {
     setSaving(true);
 
     try {
-      const duplicateQuery = supabase
+      // Exact UPC match — exclude current record if editing
+      const query = supabase
         .from("product_list")
-        .select("id")
+        .select("id, upc, item_description, created_at")
         .eq("upc", cleanUpc);
 
       const { data: duplicateItems, error: duplicateCheckError } = isEditMode
-        ? await duplicateQuery.neq("id", editingItemId as string)
-        : await duplicateQuery;
+        ? await query.neq("id", editingItemId as string)
+        : await query;
 
       if (duplicateCheckError) {
         setErrorMessage("Unable to validate duplicate item.");
@@ -115,42 +108,29 @@ export default function ProductListView() {
       }
 
       if (duplicateItems && duplicateItems.length > 0) {
-        setErrorMessage("Item already exist please check.");
+        setConflictItem(duplicateItems[0] as ProductItem);
+        setErrorMessage(`UPC already exists with description: "${duplicateItems[0].item_description}"`);
         return;
       }
 
       if (isEditMode) {
         const { error } = await supabase
           .from("product_list")
-          .update({
-            upc: cleanUpc,
-            item_description: cleanDescription,
-          })
+          .update({ upc: cleanUpc, item_description: cleanDescription })
           .eq("id", editingItemId);
-
         if (error) {
-          if (error.code === "23505") {
-            setErrorMessage("Item already exist please check.");
-            return;
-          }
-
           setErrorMessage(error.message || "Failed to update item.");
           return;
         }
       } else {
-        const { error } = await supabase.from("product_list").insert([
-          {
-            upc: cleanUpc,
-            item_description: cleanDescription,
-          },
-        ]);
-
+        const { error } = await supabase
+          .from("product_list")
+          .insert([{ upc: cleanUpc, item_description: cleanDescription }]);
         if (error) {
           if (error.code === "23505") {
-            setErrorMessage("Item already exist please check.");
+            setErrorMessage("This UPC already exists in the product list.");
             return;
           }
-
           setErrorMessage(error.message || "Failed to add item.");
           return;
         }
@@ -163,23 +143,32 @@ export default function ProductListView() {
     }
   };
 
+  // Override existing UPC with new description
+  const handleOverwriteExisting = async () => {
+    if (!conflictItem) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from("product_list")
+        .update({ item_description: itemDescription.trim() })
+        .eq("id", conflictItem.id);
+      if (error) { setErrorMessage(error.message || "Failed to update."); return; }
+      handleCloseModal();
+      await fetchItems();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleDeleteItem = async (item: ProductItem) => {
     const confirmed = window.confirm(
       `Delete this item?\n\nUPC: ${item.upc}\nItem: ${item.item_description}`
     );
-
     if (!confirmed) return;
-
     setDeletingId(item.id);
-
     try {
       const { error } = await supabase.from("product_list").delete().eq("id", item.id);
-
-      if (error) {
-        alert(error.message || "Failed to delete item.");
-        return;
-      }
-
+      if (error) { alert(error.message || "Failed to delete item."); return; }
       await fetchItems();
     } finally {
       setDeletingId(null);
@@ -199,7 +188,6 @@ export default function ProductListView() {
               className="rounded-2xl pl-10"
             />
           </div>
-
           <Button
             type="button"
             className="rounded-2xl bg-slate-900 hover:bg-slate-800"
@@ -222,17 +210,9 @@ export default function ProductListView() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr>
-                    <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
-                      Loading items...
-                    </td>
-                  </tr>
+                  <tr><td colSpan={3} className="px-4 py-6 text-center text-slate-500">Loading items...</td></tr>
                 ) : filteredItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
-                      No items found.
-                    </td>
-                  </tr>
+                  <tr><td colSpan={3} className="px-4 py-6 text-center text-slate-500">No items found.</td></tr>
                 ) : (
                   filteredItems.map((item) => (
                     <tr key={item.id} className="border-t border-slate-200">
@@ -247,7 +227,6 @@ export default function ProductListView() {
                             >
                               <MoreHorizontal className="h-5 w-5" />
                             </button>
-
                             <div className="invisible absolute right-0 top-full z-20 mt-2 w-40 rounded-2xl border border-slate-200 bg-white p-2 opacity-0 shadow-lg transition-all group-hover:visible group-hover:opacity-100">
                               <button
                                 type="button"
@@ -257,7 +236,6 @@ export default function ProductListView() {
                                 <Pencil className="h-4 w-4" />
                                 Edit
                               </button>
-
                               <button
                                 type="button"
                                 onClick={() => handleDeleteItem(item)}
@@ -301,7 +279,7 @@ export default function ProductListView() {
                 <label className="text-sm font-medium text-slate-700">UPC</label>
                 <Input
                   value={upc}
-                  onChange={(e) => setUpc(e.target.value)}
+                  onChange={(e) => { setUpc(e.target.value); setErrorMessage(""); setConflictItem(null); }}
                   placeholder="Type in"
                   className="rounded-2xl"
                 />
@@ -317,11 +295,26 @@ export default function ProductListView() {
                 />
               </div>
 
-              {errorMessage ? (
+              {errorMessage && (
                 <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
-                  {errorMessage}
+                  <p className="font-medium">{errorMessage}</p>
+                  {conflictItem && (
+                    <div className="mt-2 rounded-xl border border-red-100 bg-white px-3 py-2 text-slate-700">
+                      <p className="text-xs text-slate-400 mb-1">Existing record:</p>
+                      <p className="font-semibold text-slate-800">{conflictItem.upc}</p>
+                      <p className="text-slate-600">{conflictItem.item_description}</p>
+                      <button
+                        type="button"
+                        onClick={handleOverwriteExisting}
+                        disabled={overwriting}
+                        className="mt-3 w-full rounded-xl bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                      >
+                        {overwriting ? "Updating..." : `Update description to "${itemDescription.trim()}"`}
+                      </button>
+                    </div>
+                  )}
                 </div>
-              ) : null}
+              )}
             </div>
 
             <div className="mt-6 flex justify-end gap-3">
