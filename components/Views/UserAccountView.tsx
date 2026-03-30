@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Search, Save } from "lucide-react";
+import { ChevronDown, ChevronRight, Save, Search, UserPlus } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,16 +54,19 @@ export default function UserAccountView() {
   const [search, setSearch] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [adding, setAdding] = useState(false);
+  const [expandedEmails, setExpandedEmails] = useState<string[]>([]);
 
   const loadRows = async () => {
     try {
       setLoading(true);
+
       const { data, error } = await supabase
         .from("user_permissions")
         .select("*")
         .order("email", { ascending: true });
 
       if (error) throw error;
+
       setRows(data || []);
     } catch (error) {
       console.error("Failed to load user permissions:", error);
@@ -127,6 +130,7 @@ export default function UserAccountView() {
     if (!email) return;
 
     setAdding(true);
+
     try {
       const { error } = await supabase.from("user_permissions").insert({
         email,
@@ -155,6 +159,14 @@ export default function UserAccountView() {
     } finally {
       setAdding(false);
     }
+  };
+
+  const toggleExpanded = (email: string) => {
+    setExpandedEmails((prev) =>
+      prev.includes(email)
+        ? prev.filter((item) => item !== email)
+        : [...prev, email]
+    );
   };
 
   return (
@@ -191,7 +203,7 @@ export default function UserAccountView() {
             onClick={handleAddUser}
             disabled={adding}
           >
-            <Save className="mr-2 h-4 w-4" />
+            <UserPlus className="mr-2 h-4 w-4" />
             {adding ? "Adding..." : "Add User"}
           </Button>
         </div>
@@ -207,42 +219,68 @@ export default function UserAccountView() {
         </div>
       ) : (
         <div className="space-y-4">
-          {filteredRows.map((row) => (
-            <div
-              key={row.id}
-              className="rounded-2xl border border-slate-200 bg-white p-4"
-            >
-              <div className="mb-4 flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-sm font-semibold text-slate-900">
-                    {row.email}
-                  </div>
-                  <div className="text-xs text-slate-400">
-                    {savingEmail === row.email ? "Saving..." : "Ready"}
-                  </div>
-                </div>
-              </div>
+          {filteredRows.map((row) => {
+            const isExpanded = expandedEmails.includes(row.email);
 
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {PERMISSION_FIELDS.map((permission) => (
-                  <label
-                    key={String(permission.key)}
-                    className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  >
-                    <span className="pr-3 text-slate-700">{permission.label}</span>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(row[permission.key])}
-                      onChange={(e) =>
-                        handleToggle(row.email, permission.key, e.target.checked)
-                      }
-                      className="h-4 w-4"
-                    />
-                  </label>
-                ))}
+            return (
+              <div
+                key={row.id}
+                className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleExpanded(row.email)}
+                  className="flex w-full items-center justify-between px-4 py-4 text-left hover:bg-slate-50"
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">
+                      {row.email}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {savingEmail === row.email ? "Saving..." : "Click to view access"}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-slate-500">
+                    {isExpanded ? (
+                      <ChevronDown className="h-4 w-4" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4" />
+                    )}
+                  </div>
+                </button>
+
+                {isExpanded && (
+                  <div className="border-t border-slate-200 px-4 py-4">
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {PERMISSION_FIELDS.map((permission) => (
+                        <label
+                          key={String(permission.key)}
+                          className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                        >
+                          <span className="pr-3 text-slate-700">
+                            {permission.label}
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(row[permission.key])}
+                            onChange={(e) =>
+                              handleToggle(
+                                row.email,
+                                permission.key,
+                                e.target.checked
+                              )
+                            }
+                            className="h-4 w-4"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
