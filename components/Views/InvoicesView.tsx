@@ -38,6 +38,31 @@ type InvoiceRecord = {
 
 type ToastType = "success" | "error" | "info";
 type DatasetRow = { upc: string; item: string; cust_name: string; amt: number; };
+type DeductionTypeRecord = { id: string; document_type: string; deduction_type: string };
+type NewDeductionTypeModal = {
+  open: boolean;
+  detectedName: string;
+  docTypeName: string;
+  deductionName: string;
+  pendingFile: File | null;
+  pendingMeta: { category: string; invoice: string; pdf_date: string; file_type: "pdf" | "excel" } | null;
+  pendingIsReplace: boolean;
+  pendingExistingUpload: UploadRecord | null;
+};
+type UpcEntry = {
+  upc: string;
+  description: string;
+  descEditMode: boolean;
+  descEditValue: string;
+};
+type NewUpcModal = {
+  open: boolean;
+  upcs: UpcEntry[];
+  pendingInvoice: string;
+  pendingPdfDate: string;
+  pendingFile: File | null;
+  pendingCategory: string;
+};
 
 const DOCUMENT_BUCKET = "document-uploads";
 
@@ -258,6 +283,20 @@ async function fetchProductLookup(): Promise<Map<string,string>> {
   return map;
 }
 
+async function fetchDeductionTypes(): Promise<DeductionTypeRecord[]> {
+  const { data, error } = await supabase.from("deduction_types").select("id, document_type, deduction_type").order("deduction_type");
+  if (error) return [];
+  return data ?? [];
+}
+
+async function saveDeductionType(documentType: string, deductionType: string): Promise<void> {
+  await supabase.from("deduction_types").insert({ document_type: documentType, deduction_type: deductionType });
+}
+
+async function saveProductListEntry(upc: string, description: string): Promise<void> {
+  await supabase.from("product_list").upsert({ upc, item_description: description }, { onConflict: "upc" });
+}
+
 async function fetchInvoiceType(invoiceNumber: string): Promise<string> {
   const norm = normalizeInvoiceNumber(invoiceNumber);
   // Check invoices table first
@@ -429,20 +468,35 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
   const uk = keys.find(k => /^upc$/i.test(k)) ?? "";
   const qk = keys.find(k => /qty\s*ship/i.test(k)) ?? keys.find(k => /^qty$/i.test(k)) ?? keys.find(k => /qty/i.test(k)) ?? "";
 
-  // Find EP Fee by scanning all raw rows for a cell labelled "EP Fee" / "EP FEE"
+  // Find EP Fee — scan ALL sheets for a cell labelled "EP Fee"
+  // The value may be in the same row (next columns) or the cell itself contains "$35.00"
   let epFee = 0;
-  const rawRows = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[sn], { header: 1, raw: false, defval: "" });
-  for (const row of rawRows) {
-    for (let ci = 0; ci < row.length; ci++) {
-      if (/ep\s*fee/i.test(String(row[ci] || ""))) {
-        for (let cj = ci + 1; cj < row.length; cj++) {
-          const val = parseAmount(row[cj]);
-          if (val !== null && val > 0) { epFee = val; break; }
-        }
-        break;
-      }
-    }
+  for (const sheetName of wb.SheetNames) {
     if (epFee) break;
+    const allRows = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[sheetName], { header: 1, raw: false, defval: "" });
+    for (let ri = 0; ri < allRows.length; ri++) {
+      const row = allRows[ri];
+      for (let ci = 0; ci < row.length; ci++) {
+        const cellStr = String(row[ci] || "").trim();
+        if (/ep\s*fee/i.test(cellStr)) {
+          // Check same row for a value to the right
+          for (let cj = ci + 1; cj < row.length; cj++) {
+            const val = parseAmount(row[cj]);
+            if (val !== null && val > 0) { epFee = val; break; }
+          }
+          // If not found in same row, check next row same column
+          if (!epFee && ri + 1 < allRows.length) {
+            const nextRow = allRows[ri + 1];
+            for (let cj = ci; cj < Math.min(ci + 3, nextRow.length); cj++) {
+              const val = parseAmount(nextRow[cj]);
+              if (val !== null && val > 0) { epFee = val; break; }
+            }
+          }
+          break;
+        }
+      }
+      if (epFee) break;
+    }
   }
 
   // Parse data rows
@@ -575,12 +629,33 @@ async function replaceDatasetRowsForInvoice(invoice: string, pdfDate: string, fi
   return inserts.length;
 }
 
-async function reprocessAllUploads(onProgress: (msg: string) => void): Promise<{ processed: number; failed: number; totalRows: number }> {
+async function reprocessAllUploads(
+  onProgress: (msg: string) => void,
+  fromDate?: string,
+  toDate?: string
+): Promise<{ processed: number; failed: number; totalRows: number }> {
   const { data: all, error } = await supabase.from("uploads").select("*");
   if (error) throw new Error(`Failed to fetch uploads: ${error.message}`);
   let processed = 0, failed = 0, totalRows = 0;
-  for (const u of all ?? []) {
-    if (!u.file_path || !u.invoice) continue;
+
+  // Filter by pdf_date range if provided
+  const uploads = (all ?? []).filter(u => {
+    if (!u.file_path || !u.invoice) return false;
+    if (!fromDate && !toDate) return true;
+    // pdf_date is stored as MM/DD/YYYY
+    const pdfDate = u.pdf_date ?? "";
+    if (!pdfDate) return true; // include if no date
+    const match = pdfDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (!match) return true;
+    const iso = `${match[3]}-${match[1].padStart(2,"0")}-${match[2].padStart(2,"0")}`;
+    if (fromDate && iso < fromDate) return false;
+    if (toDate && iso > toDate) return false;
+    return true;
+  });
+
+  onProgress(`Found ${uploads.length} uploads in date range...`);
+
+  for (const u of uploads) {
     try {
       onProgress(`Processing ${u.file_name}...`);
       const { data: fd, error: de } = await supabase.storage.from(DOCUMENT_BUCKET).download(u.file_path);
@@ -608,6 +683,22 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
   const [uploads, setUploads] = useState<UploadRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [reprocessing, setReprocessing] = useState(false);
+  const [reprocessModalOpen, setReprocessModalOpen] = useState(false);
+  const [reprocessFrom, setReprocessFrom] = useState("");
+  const [reprocessTo, setReprocessTo] = useState("");
+
+  // Deduction type modal
+  const [deductionModal, setDeductionModal] = useState<NewDeductionTypeModal>({
+    open: false, detectedName: "", docTypeName: "", deductionName: "",
+    pendingFile: null, pendingMeta: null, pendingIsReplace: false, pendingExistingUpload: null,
+  });
+  const [deductionTypes, setDeductionTypes] = useState<DeductionTypeRecord[]>([]);
+
+  // UPC modal
+  const [upcModal, setUpcModal] = useState<NewUpcModal>({
+    open: false, upcs: [], pendingInvoice: "", pendingPdfDate: "", pendingFile: null, pendingCategory: "",
+  });
+  const [existingDescriptions, setExistingDescriptions] = useState<string[]>([]);
   const [toast, setToast] = useState<{ show: boolean; text: string; type: ToastType }>({ show: false, text: "", type: "success" });
   const [searchTerm, setSearchTerm] = useState("");
   const [monthFilter, setMonthFilter] = useState("Month");
@@ -643,7 +734,13 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
     finally { setLoading(false); }
   };
 
-  useEffect(() => { loadData(); return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }; }, []);
+  useEffect(() => {
+    loadData();
+    // Load deduction types and product descriptions for modals
+    fetchDeductionTypes().then(setDeductionTypes);
+    fetchProductLookup().then(map => setExistingDescriptions(Array.from(new Set(Array.from(map.values()).filter(Boolean))).sort()));
+    return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
+  }, []);
   useEffect(() => { if (invoiceUploadSignal > 0 && invoiceUploadSignal !== lastInvRef.current) { lastInvRef.current = invoiceUploadSignal; invoiceInputRef.current?.click(); } }, [invoiceUploadSignal]);
   useEffect(() => { if (documentUploadSignal > 0 && documentUploadSignal !== lastDocRef.current) { lastDocRef.current = documentUploadSignal; documentInputRef.current?.click(); } }, [documentUploadSignal]);
 
@@ -740,6 +837,28 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
         if (meta.invoice === "Unknown" || !ni) { showToast(`${file.name}: invoice reference not found.`, "error"); skip++; continue; }
         const mi = il.get(ni);
         if (!mi) { showToast(`${file.name}: invoice ${meta.invoice} not in invoices file.`, "error"); skip++; continue; }
+
+        // ── Check if deduction type is unknown ──
+        const knownTypes = deductionTypes.map(t => t.deduction_type.toLowerCase());
+        const detectedCat = meta.category;
+        const isUnknownType = !detectedCat || detectedCat === "Unknown" || !knownTypes.includes(detectedCat.toLowerCase());
+        if (isUnknownType) {
+          const { data: dup2 } = await supabase.from("uploads").select("*").eq("invoice", mi.invoice_number).limit(1);
+          const eu2 = dup2 && dup2.length > 0 ? dup2[0] : null;
+          setDeductionModal({
+            open: true,
+            detectedName: detectedCat === "Unknown" ? "" : detectedCat,
+            docTypeName: "",
+            deductionName: detectedCat === "Unknown" ? "" : detectedCat,
+            pendingFile: file,
+            pendingMeta: { ...meta, invoice: mi.invoice_number || meta.invoice },
+            pendingIsReplace: !!eu2,
+            pendingExistingUpload: eu2,
+          });
+          if (documentInputRef.current) documentInputRef.current.value = "";
+          return; // pause — modal will continue
+        }
+
         const { data: dup, error: de } = await supabase.from("uploads").select("*").eq("invoice", mi.invoice_number).limit(1);
         if (de) { showToast(`${file.name}: failed checking existing.`, "error"); skip++; continue; }
         const eu = dup && dup.length > 0 ? dup[0] : null;
@@ -747,11 +866,16 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
         if (eu) {
           const r = await replaceExistingDocument(eu, file, fm);
           if (r.skipped) { skip++; continue; }
-          savedRows += await replaceDatasetRowsForInvoice(fm.invoice, fm.pdf_date, file, fm.category || "");
+          const inserted = await replaceDatasetRowsForInvoice(fm.invoice, fm.pdf_date, file, fm.category || "");
+          savedRows += inserted;
+          // ── Check for unknown UPCs after parsing ──
+          await checkAndPromptUnknownUpcs(fm.invoice, fm.pdf_date, file, fm.category || "");
           rep++; continue;
         }
         await uploadNewDocument(file, fm);
-        savedRows += await replaceDatasetRowsForInvoice(fm.invoice, fm.pdf_date, file, fm.category || "");
+        const inserted = await replaceDatasetRowsForInvoice(fm.invoice, fm.pdf_date, file, fm.category || "");
+        savedRows += inserted;
+        await checkAndPromptUnknownUpcs(fm.invoice, fm.pdf_date, file, fm.category || "");
         ok++;
       }
       await loadData();
@@ -760,11 +884,85 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
     finally { if (documentInputRef.current) documentInputRef.current.value = ""; }
   };
 
-  const handleReprocessAll = async () => {
-    if (!window.confirm("Re-parse all uploaded files and rebuild Data Sets table. Continue?")) return;
-    setReprocessing(true); showToast("Reprocessing all uploads...", "info");
+  // After upload, check if any parsed UPCs are missing from product_list
+  const checkAndPromptUnknownUpcs = async (invoice: string, pdfDate: string, file: File, category: string) => {
+    const { fullText } = await extractTextWithPdfJs(file);
+    const parsed = await parseDetailRows(file, fullText);
+    if (!parsed.length) return;
+    const productMap = await fetchProductLookup();
+    const unknown = parsed.filter(r => r.upc && !productMap.has(r.upc));
+    const uniqueUnknown = Array.from(new Map(unknown.map(r => [r.upc, r])).values());
+    if (!uniqueUnknown.length) return;
+    setUpcModal({
+      open: true,
+      upcs: uniqueUnknown.map(r => ({ upc: r.upc, description: r.item || "", descEditMode: false, descEditValue: r.item || "" })),
+      pendingInvoice: invoice,
+      pendingPdfDate: pdfDate,
+      pendingFile: file,
+      pendingCategory: category,
+    });
+  };
+
+  // Called when user saves new deduction type from modal
+  const handleSaveDeductionType = async () => {
+    const { deductionName, docTypeName, pendingFile, pendingMeta, pendingIsReplace, pendingExistingUpload } = deductionModal;
+    if (!deductionName.trim()) { showToast("Please enter a deduction type name.", "error"); return; }
+    if (!pendingFile || !pendingMeta) return;
     try {
-      const { processed, failed, totalRows } = await reprocessAllUploads(msg => showToast(msg, "info"));
+      // Save to deduction_types table
+      await saveDeductionType(docTypeName.trim() || deductionName.trim(), deductionName.trim());
+      const refreshed = await fetchDeductionTypes();
+      setDeductionTypes(refreshed);
+      // Continue with upload using the new type
+      const fm = { ...pendingMeta, category: deductionName.trim() };
+      if (pendingIsReplace && pendingExistingUpload) {
+        const r = await replaceExistingDocument(pendingExistingUpload, pendingFile, fm);
+        if (!r.skipped) await replaceDatasetRowsForInvoice(fm.invoice, fm.pdf_date, pendingFile, fm.category);
+      } else {
+        await uploadNewDocument(pendingFile, fm);
+        await replaceDatasetRowsForInvoice(fm.invoice, fm.pdf_date, pendingFile, fm.category);
+      }
+      await checkAndPromptUnknownUpcs(fm.invoice, fm.pdf_date, pendingFile, fm.category);
+      setDeductionModal(p => ({ ...p, open: false }));
+      await loadData();
+      showToast(`Deduction type "${deductionName}" saved and file uploaded.`, "success");
+    } catch (e: any) { showToast(e.message || "Failed to save.", "error"); }
+  };
+
+  // Called when user saves unknown UPCs from modal
+  const handleSaveUpcs = async () => {
+    const { upcs, pendingInvoice, pendingPdfDate, pendingFile, pendingCategory } = upcModal;
+    try {
+      for (const entry of upcs) {
+        const desc = entry.descEditMode ? entry.descEditValue : entry.description;
+        if (entry.upc && desc.trim()) {
+          await saveProductListEntry(entry.upc, desc.trim());
+        }
+      }
+      // Refresh product lookup then re-save dataset rows with new descriptions
+      if (pendingFile && pendingInvoice) {
+        await replaceDatasetRowsForInvoice(pendingInvoice, pendingPdfDate, pendingFile, pendingCategory);
+      }
+      const newMap = await fetchProductLookup();
+      setExistingDescriptions(Array.from(new Set(Array.from(newMap.values()).filter(Boolean))).sort());
+      setUpcModal(p => ({ ...p, open: false }));
+      await loadData();
+      showToast("UPC(s) saved successfully.", "success");
+    } catch (e: any) { showToast(e.message || "Failed to save UPCs.", "error"); }
+  };
+
+  const handleReprocessAll = () => {
+    setReprocessModalOpen(true);
+  };
+
+  const doReprocess = async () => {
+    setReprocessModalOpen(false);
+    setReprocessing(true);
+    showToast("Reprocessing uploads...", "info");
+    try {
+      const from = reprocessFrom || undefined;
+      const to = reprocessTo || undefined;
+      const { processed, failed, totalRows } = await reprocessAllUploads(msg => showToast(msg, "info"), from, to);
       showToast(`Done! ${processed} processed, ${failed} failed, ${totalRows} rows saved.`, "success");
     } catch (e: any) { showToast(e.message || "Reprocess failed.", "error"); }
     finally { setReprocessing(false); }
@@ -790,6 +988,158 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
       {toast.show && (
         <div className="fixed right-6 top-6 z-[100]">
           <div className={`rounded-2xl border px-4 py-3 text-sm shadow-lg ${toast.type === "success" ? "border-green-200 bg-green-50 text-green-700" : toast.type === "error" ? "border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-700"}`}>{toast.text}</div>
+        </div>
+      )}
+
+      {reprocessModalOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <h3 className="mb-1 text-lg font-semibold">Reprocess Uploads</h3>
+            <p className="mb-4 text-sm text-slate-500">Choose a date range to limit which uploads get reprocessed. Leave blank to reprocess all.</p>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">From Date</label>
+                <input type="date" value={reprocessFrom} onChange={e => setReprocessFrom(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">To Date</label>
+                <input type="date" value={reprocessTo} onChange={e => setReprocessTo(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button type="button" onClick={() => setReprocessModalOpen(false)} className="flex-1 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-50">Cancel</button>
+              <button type="button" onClick={doReprocess} className="flex-1 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">
+                {reprocessFrom || reprocessTo ? "Reprocess Range" : "Reprocess All"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── New Deduction Type Modal ── */}
+      {deductionModal.open && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <h3 className="mb-1 text-lg font-semibold">Unknown Deduction Type</h3>
+            <p className="mb-4 text-sm text-slate-500">
+              {deductionModal.detectedName
+                ? <>The detected type <span className="font-semibold text-slate-700">"{deductionModal.detectedName}"</span> is not in your deduction types. Would you like to add it?</>
+                : "No deduction type was detected. Please enter one to proceed."}
+            </p>
+            <div className="space-y-3 mb-5">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Document Type</label>
+                <input
+                  type="text"
+                  value={deductionModal.docTypeName}
+                  onChange={e => setDeductionModal(p => ({ ...p, docTypeName: e.target.value }))}
+                  placeholder="e.g. Invoice, Chargeback, Credit Memo"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Deduction Type</label>
+                <input
+                  type="text"
+                  value={deductionModal.deductionName}
+                  onChange={e => setDeductionModal(p => ({ ...p, deductionName: e.target.value }))}
+                  placeholder="e.g. Customer Spoils Allowance"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                />
+                {deductionTypes.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-xs text-slate-400 mb-1">Or pick existing:</p>
+                    <div className="flex flex-wrap gap-1">
+                      {deductionTypes.map(t => (
+                        <button key={t.id} type="button"
+                          onClick={() => setDeductionModal(p => ({ ...p, deductionName: t.deduction_type, docTypeName: t.document_type }))}
+                          className={`rounded-full px-2 py-0.5 text-xs border ${deductionModal.deductionName === t.deduction_type ? "bg-slate-900 text-white border-slate-900" : "border-slate-200 hover:bg-slate-50"}`}>
+                          {t.deduction_type}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button type="button" onClick={() => setDeductionModal(p => ({ ...p, open: false }))} className="flex-1 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-50">Cancel</button>
+              <button type="button" onClick={handleSaveDeductionType} className="flex-1 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">Save & Upload</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── New UPC Modal ── */}
+      {upcModal.open && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+            <h3 className="mb-1 text-lg font-semibold">Unknown UPC{upcModal.upcs.length > 1 ? "s" : ""} Found</h3>
+            <p className="mb-4 text-sm text-slate-500">The following UPC{upcModal.upcs.length > 1 ? "s were" : " was"} not found in the product list. Please add a description for each.</p>
+            <div className="space-y-4 mb-5 max-h-80 overflow-auto">
+              {upcModal.upcs.map((entry, idx) => (
+                <div key={entry.upc} className="rounded-2xl border border-slate-100 p-3">
+                  <p className="mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wide">UPC: {entry.upc}</p>
+                  {entry.descEditMode ? (
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={entry.descEditValue}
+                        onChange={e => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, descEditValue: e.target.value } : u) }))}
+                        placeholder="Enter item description"
+                        className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-slate-400"
+                        autoFocus
+                      />
+                      <button type="button"
+                        onClick={() => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, description: u.descEditValue, descEditMode: false } : u) }))}
+                        className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs text-white">
+                        ✓
+                      </button>
+                      <button type="button"
+                        onClick={() => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, descEditMode: false } : u) }))}
+                        className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs">
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 items-center">
+                      <select
+                        value={entry.description}
+                        onChange={e => {
+                          const val = e.target.value;
+                          if (val === "__add_new__") {
+                            setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, descEditMode: true, descEditValue: "" } : u) }));
+                          } else {
+                            setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, description: val } : u) }));
+                          }
+                        }}
+                        className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-slate-400"
+                      >
+                        <option value="">-- Select description --</option>
+                        {existingDescriptions.map(d => <option key={d} value={d}>{d}</option>)}
+                        <option value="__add_new__">+ Add new description...</option>
+                      </select>
+                      {entry.description && (
+                        <button type="button"
+                          onClick={() => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, descEditMode: true, descEditValue: u.description } : u) }))}
+                          className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs hover:bg-slate-50"
+                          title="Edit selected description">
+                          ✏️
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {entry.description && !entry.descEditMode && (
+                    <p className="mt-1 text-xs text-slate-400">Selected: <span className="font-medium text-slate-600">{entry.description}</span></p>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button type="button" onClick={() => setUpcModal(p => ({ ...p, open: false }))} className="flex-1 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-50">Skip</button>
+              <button type="button" onClick={handleSaveUpcs} className="flex-1 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">Save UPCs</button>
+            </div>
+          </div>
         </div>
       )}
       <div className="sticky top-0 z-40 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
