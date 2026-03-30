@@ -37,7 +37,7 @@ type InvoiceRecord = {
 };
 
 type ToastType = "success" | "error" | "info";
-type DatasetRow = { upc: string; item: string; cust_name: string; amt: number; };
+type DatasetRow = { upc: string; item: string; cust_name: string; amt: number };
 type DeductionTypeRecord = { id: string; document_type: string; deduction_type: string };
 type NewDeductionTypeModal = {
   open: boolean;
@@ -99,7 +99,7 @@ function normalizeInvoiceNumber(raw: string) {
 function isBadInvoiceCandidate(value: string) {
   const v = normalizeInvoiceNumber(value).toLowerCase();
   if (!v) return true;
-  return new Set(["invoice","wonder","wondermonday","monday","billto","shipto","details","date","invoicedate","invoiceno","number","unknown"]).has(v);
+  return new Set(["invoice", "wonder", "wondermonday", "monday", "billto", "shipto", "details", "date", "invoicedate", "invoiceno", "number", "unknown"]).has(v);
 }
 
 function parseAmount(value: unknown): number | null {
@@ -126,11 +126,11 @@ function formatMonthShort(dateStr: string | null | undefined): string {
   if (!dateStr) return "";
   const mdy = String(dateStr).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (mdy) {
-    const d = new Date(`${mdy[3]}-${mdy[1].padStart(2,"0")}-${mdy[2].padStart(2,"0")}T00:00:00`);
-    if (!isNaN(d.getTime())) return `${d.toLocaleString("en-US",{month:"long"})} '${String(d.getFullYear()).slice(-2)}`;
+    const d = new Date(`${mdy[3]}-${mdy[1].padStart(2, "0")}-${mdy[2].padStart(2, "0")}T00:00:00`);
+    if (!isNaN(d.getTime())) return `${d.toLocaleString("en-US", { month: "long" })} '${String(d.getFullYear()).slice(-2)}`;
   }
   const d = new Date(String(dateStr));
-  if (!isNaN(d.getTime())) return `${d.toLocaleString("en-US",{month:"long"})} '${String(d.getFullYear()).slice(-2)}`;
+  if (!isNaN(d.getTime())) return `${d.toLocaleString("en-US", { month: "long" })} '${String(d.getFullYear()).slice(-2)}`;
   return String(dateStr);
 }
 
@@ -139,24 +139,24 @@ function formatMonthLabelFromDate(value: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(`${iso}T00:00:00`);
   if (isNaN(d.getTime())) return "";
-  return `${d.toLocaleString("en-US",{month:"long"})} '${String(d.getFullYear()).slice(-2)}`;
+  return `${d.toLocaleString("en-US", { month: "long" })} '${String(d.getFullYear()).slice(-2)}`;
 }
 
 function normalizeExcelDate(value: unknown) {
   if (typeof value === "number") {
     const jsDate = XLSX.SSF.parse_date_code(value);
     if (!jsDate) return "";
-    return `${String(jsDate.m).padStart(2,"0")}/${String(jsDate.d).padStart(2,"0")}/${jsDate.y}`;
+    return `${String(jsDate.m).padStart(2, "0")}/${String(jsDate.d).padStart(2, "0")}/${jsDate.y}`;
   }
   if (!value) return "";
   const str = String(value).trim();
   const d = new Date(str);
-  if (!isNaN(d.getTime())) return `${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}/${d.getFullYear()}`;
+  if (!isNaN(d.getTime())) return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`;
   return str;
 }
 
 function parseMetadataFromText(text: string) {
-  const norm = text.replace(/\u00a0/g," ").replace(/[ \t]+/g," ").replace(/\s*\n\s*/g,"\n").trim();
+  const norm = text.replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim();
   const lower = norm.toLowerCase();
   let invoice = "Unknown", category = "Unknown", pdf_date = "Unknown";
 
@@ -171,49 +171,76 @@ function parseMetadataFromText(text: string) {
   else if (isFreshThymePpf || isFreshThymeSas) category = "Pass Thru Deduction";
   else {
     const matchers = [
-      {p:/\$\s*1\s*promotion/i,v:"$1 Promotion"},{p:/distributor\s+charge/i,v:"$1 Promotion"},
-      {p:/customer\s+spoils\s+allowance/i,v:"Customer Spoils Allowance"},{p:/customer\s+spoilage/i,v:"Customer Spoils Allowance"},
-      {p:/pass\s+thru\s+deduction/i,v:"Pass Thru Deduction"},{p:/fresh\s+thyme\s+ppf/i,v:"Pass Thru Deduction"},
-      {p:/new\s+item\s+setup\s+fee/i,v:"New Item Setup Fee"},{p:/new\s+item\s+setup/i,v:"New Item Setup"},
-      {p:/intro\s+allowance\s+audit/i,v:"Intro Allowance Audit"},{p:/introductory\s+fee/i,v:"Introductory Fee"},
-      {p:/wonder\s+monday/i,v:"WM Invoice"},
+      { p: /\$\s*1\s*promotion/i, v: "$1 Promotion" }, { p: /distributor\s+charge/i, v: "$1 Promotion" },
+      { p: /customer\s+spoils\s+allowance/i, v: "Customer Spoils Allowance" }, { p: /customer\s+spoilage/i, v: "Customer Spoils Allowance" },
+      { p: /pass\s+thru\s+deduction/i, v: "Pass Thru Deduction" }, { p: /fresh\s+thyme\s+ppf/i, v: "Pass Thru Deduction" },
+      { p: /new\s+item\s+setup\s+fee/i, v: "New Item Setup Fee" }, { p: /new\s+item\s+setup/i, v: "New Item Setup" },
+      { p: /intro\s+allowance\s+audit/i, v: "Intro Allowance Audit" }, { p: /introductory\s+fee/i, v: "Introductory Fee" },
+      { p: /wonder\s+monday/i, v: "WM Invoice" },
     ];
-    for (const {p,v} of matchers) { if (p.test(lower)) { category=v; break; } }
-    if (category==="Unknown") { const m=norm.match(/(?:Type|Description|Category)\s*[:\-]?\s*([A-Za-z][A-Za-z\s]{3,100})/i); if (m?.[1]) category=normalizeType(m[1]); }
+    for (const { p, v } of matchers) {
+      if (p.test(lower)) {
+        category = v;
+        break;
+      }
+    }
+    if (category === "Unknown") {
+      const m = norm.match(/(?:Type|Description|Category)\s*[:\-]?\s*([A-Za-z][A-Za-z\s]{3,100})/i);
+      if (m?.[1]) category = normalizeType(m[1]);
+    }
   }
 
-  if (category==="WM Invoice"||isStrictWMInvoice||isWMInvoicePdf) {
-    const m=norm.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i)||norm.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
-    if (m?.[1]&&!isBadInvoiceCandidate(m[1])) invoice=normalizeInvoiceNumber(m[1]);
-    const d=norm.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i)||norm.match(/ship\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
-    if (d?.[1]) pdf_date=normalizeDocDate(d[1]);
+  if (category === "WM Invoice" || isStrictWMInvoice || isWMInvoicePdf) {
+    const m = norm.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i) || norm.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    const d = norm.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) || norm.match(/ship\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+    if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
-  if (category==="$1 Promotion"||isDollarPromotion) {
-    const m=norm.match(/invoice\s*#\s*0*(\d+)/i)||norm.match(/invoice\s+#(\d+)/i);
-    if (m?.[1]&&!isBadInvoiceCandidate(m[1])) invoice=normalizeInvoiceNumber(m[1]);
-    const d=norm.match(/\bdate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i);
-    if (d?.[1]) pdf_date=normalizeDocDate(d[1]);
+  if (category === "$1 Promotion" || isDollarPromotion) {
+    const m = norm.match(/invoice\s*#\s*0*(\d+)/i) || norm.match(/invoice\s+#(\d+)/i);
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    const d = norm.match(/\bdate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i);
+    if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
-  if (invoice==="Unknown"&&(category==="Pass Thru Deduction"||isFreshThymeSas)) {
-    const m=norm.match(/invoice\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
-    if (m?.[1]&&!isBadInvoiceCandidate(m[1])) invoice=normalizeInvoiceNumber(m[1]);
-    const d=norm.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i)||norm.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
-    if (d?.[1]) pdf_date=normalizeDocDate(d[1]);
+  if (invoice === "Unknown" && (category === "Pass Thru Deduction" || isFreshThymeSas)) {
+    const m = norm.match(/invoice\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    const d = norm.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) || norm.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+    if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
-  if (invoice==="Unknown") {
-    for (const p of [/\b(CN\d{9,})\b/i,/\b(CS\d{6,})\b/i,/\b([A-Z]{1,6}\d{6,})\b/]) { const m=norm.match(p); if (m?.[1]&&!isBadInvoiceCandidate(m[1])) { invoice=normalizeInvoiceNumber(m[1]); break; } }
+  if (invoice === "Unknown") {
+    for (const p of [/\b(CN\d{9,})\b/i, /\b(CS\d{6,})\b/i, /\b([A-Z]{1,6}\d{6,})\b/]) {
+      const m = norm.match(p);
+      if (m?.[1] && !isBadInvoiceCandidate(m[1])) {
+        invoice = normalizeInvoiceNumber(m[1]);
+        break;
+      }
+    }
   }
-  if (invoice==="Unknown") {
-    for (const p of [/Invoice\s*(?:Number|No\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i]) { const m=norm.match(p); if (m?.[1]&&!isBadInvoiceCandidate(m[1])) { invoice=normalizeInvoiceNumber(m[1]); break; } }
+  if (invoice === "Unknown") {
+    for (const p of [/Invoice\s*(?:Number|No\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i]) {
+      const m = norm.match(p);
+      if (m?.[1] && !isBadInvoiceCandidate(m[1])) {
+        invoice = normalizeInvoiceNumber(m[1]);
+        break;
+      }
+    }
   }
-  if (invoice==="Unknown"&&(category==="WM Invoice"||/wonder\s+monday/i.test(lower))) {
-    const m=norm.match(/invoice\s*no\.?\s*[:\-]?\s*(\d{1,10})\b/i)||norm.match(/invoice\s*#\s*[:\-]?\s*(\d{1,10})\b/i);
-    if (m?.[1]&&!isBadInvoiceCandidate(m[1])) invoice=normalizeInvoiceNumber(m[1]);
+  if (invoice === "Unknown" && (category === "WM Invoice" || /wonder\s+monday/i.test(lower))) {
+    const m = norm.match(/invoice\s*no\.?\s*[:\-]?\s*(\d{1,10})\b/i) || norm.match(/invoice\s*#\s*[:\-]?\s*(\d{1,10})\b/i);
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
   }
-  if (invoice==="Unknown") { const m=norm.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{1,})\b/); if (m?.[1]&&!isBadInvoiceCandidate(m[1])) invoice=normalizeInvoiceNumber(m[1]); }
-  if (pdf_date==="Unknown") {
-    for (const p of [/\bDate\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i,/Invoice\s+date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,/Date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,/\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/,/\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2})\b/]) {
-      const m=norm.match(p); if (m?.[1]) { pdf_date=normalizeDocDate(m[1]); break; }
+  if (invoice === "Unknown") {
+    const m = norm.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{1,})\b/);
+    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+  }
+  if (pdf_date === "Unknown") {
+    for (const p of [/\bDate\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i, /Invoice\s+date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i, /Date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i, /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/, /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2})\b/]) {
+      const m = norm.match(p);
+      if (m?.[1]) {
+        pdf_date = normalizeDocDate(m[1]);
+        break;
+      }
     }
   }
   return { category, invoice, pdf_date };
@@ -242,18 +269,21 @@ async function extractTextWithOcr(pdf: any) {
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
       if (!ctx) continue;
-      canvas.width = vp.width; canvas.height = vp.height;
+      canvas.width = vp.width;
+      canvas.height = vp.height;
       await page.render({ canvasContext: ctx, viewport: vp }).promise;
       fullText += "\n" + (await worker.recognize(canvas.toDataURL("image/png"))).data.text + "\n";
     }
-  } finally { await worker.terminate(); }
+  } finally {
+    await worker.terminate();
+  }
   return fullText.trim();
 }
 
 async function extractPdfMetadata(file: File) {
   const { pdf, fullText } = await extractTextWithPdfJs(file);
   let parsed = parseMetadataFromText(fullText);
-  if (parsed.category==="Unknown"&&parsed.invoice==="Unknown"&&parsed.pdf_date==="Unknown") {
+  if (parsed.category === "Unknown" && parsed.invoice === "Unknown" && parsed.pdf_date === "Unknown") {
     parsed = parseMetadataFromText(await extractTextWithOcr(pdf));
   }
   return parsed;
@@ -264,22 +294,22 @@ async function extractExcelMetadata(file: File) {
   let fullText = "";
   for (const sn of wb.SheetNames) {
     const rows = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[sn], { header: 1, raw: false, defval: "" });
-    fullText += " " + rows.flat().map((c) => String(c||"").trim()).filter(Boolean).join(" ");
+    fullText += " " + rows.flat().map((c) => String(c || "").trim()).filter(Boolean).join(" ");
   }
   return parseMetadataFromText(fullText);
 }
 
-async function extractDocumentMetadata(file: File): Promise<{ category: string; invoice: string; pdf_date: string; file_type: "pdf"|"excel" }> {
+async function extractDocumentMetadata(file: File): Promise<{ category: string; invoice: string; pdf_date: string; file_type: "pdf" | "excel" }> {
   const ln = file.name.toLowerCase();
-  if (ln.endsWith(".xlsx")||ln.endsWith(".xls")) return { ...(await extractExcelMetadata(file)), file_type: "excel" };
+  if (ln.endsWith(".xlsx") || ln.endsWith(".xls")) return { ...(await extractExcelMetadata(file)), file_type: "excel" };
   return { ...(await extractPdfMetadata(file)), file_type: "pdf" };
 }
 
-async function fetchProductLookup(): Promise<Map<string,string>> {
+async function fetchProductLookup(): Promise<Map<string, string>> {
   const { data, error } = await supabase.from("product_list").select("upc, item_description");
   if (error) return new Map();
-  const map = new Map<string,string>();
-  for (const r of data??[]) if (r.upc) map.set(String(r.upc).trim(), r.item_description??"");
+  const map = new Map<string, string>();
+  for (const r of data ?? []) if (r.upc) map.set(String(r.upc).trim(), r.item_description ?? "");
   return map;
 }
 
@@ -299,82 +329,90 @@ async function saveProductListEntry(upc: string, description: string): Promise<v
 
 async function fetchInvoiceType(invoiceNumber: string): Promise<string> {
   const norm = normalizeInvoiceNumber(invoiceNumber);
-  // Check invoices table first
   const { data: invData, error: invErr } = await supabase.from("invoices").select("type, invoice_number").limit(5000);
   if (!invErr) {
-    const matched = (invData||[]).find(r => normalizeInvoiceNumber(r.invoice_number||"") === norm);
+    const matched = (invData || []).find(r => normalizeInvoiceNumber(r.invoice_number || "") === norm);
     if (matched?.type) return matched.type;
   }
-  // Fall back to uploads table category (WM Invoice, $1 Promotion, etc.)
   const { data: upData, error: upErr } = await supabase.from("uploads").select("category, invoice").limit(5000);
   if (!upErr) {
-    const matched = (upData||[]).find(r => normalizeInvoiceNumber(r.invoice||"") === norm);
+    const matched = (upData || []).find(r => normalizeInvoiceNumber(r.invoice || "") === norm);
     if (matched?.category) return matched.category;
   }
   return "";
 }
 
-// FORMAT 1: KeHE Spoils PDF
 function parseSpoilsPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
-  const lines = text.replace(/\u00a0/g," ").replace(/\r/g,"\n").replace(/[ \t]+/g," ").split("\n").map(l=>l.trim()).filter(Boolean);
-  const UPC_RE=/^(\d{12})$/, AMT_RE=/^\$(\d*\.\d{2})$/, SKIP_RE=/^(UPC\s|TOTAL\s*:)/i;
-  for (let i=0;i<lines.length;i++) {
-    if (SKIP_RE.test(lines[i])||!UPC_RE.test(lines[i])) continue;
-    const amtMatch=(lines[i+8]??"").match(AMT_RE);
+  const lines = text.replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ").split("\n").map(l => l.trim()).filter(Boolean);
+  const UPC_RE = /^(\d{12})$/, AMT_RE = /^\$(\d*\.\d{2})$/, SKIP_RE = /^(UPC\s|TOTAL\s*:)/i;
+  for (let i = 0; i < lines.length; i++) {
+    if (SKIP_RE.test(lines[i]) || !UPC_RE.test(lines[i])) continue;
+    const amtMatch = (lines[i + 8] ?? "").match(AMT_RE);
     if (!amtMatch) continue;
-    rows.push({ upc: lines[i], item: lines[i+1]??"", cust_name: lines[i+3]??"", amt: parseFloat(amtMatch[1]) });
+    rows.push({ upc: lines[i], item: lines[i + 1] ?? "", cust_name: lines[i + 3] ?? "", amt: parseFloat(amtMatch[1]) });
   }
   return rows;
 }
 
-// FORMAT 2: Fresh Thyme SAS Chargeback PDF
 function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
-  const lines = text.replace(/\u00a0/g," ").replace(/\r/g,"\n").replace(/[ \t]+/g," ").split("\n").map(l=>l.trim()).filter(Boolean);
+  const lines = text.replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ").split("\n").map(l => l.trim()).filter(Boolean);
 
-  // Extract DC# for customer (same logic as New Item Setup)
   let dcCustomer = "";
   for (let i = 0; i < lines.length; i++) {
     const sameLine = lines[i].match(/dc\s*#\s*[:\-]?\s*(\d+)/i);
-    if (sameLine) { dcCustomer = `DC ${sameLine[1]}`; break; }
+    if (sameLine) {
+      dcCustomer = `DC ${sameLine[1]}`;
+      break;
+    }
     if (/^dc\s*#\s*[:\-]?\s*$/i.test(lines[i])) {
       for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
         const next = lines[j].match(/^(\d+)$/);
-        if (next) { dcCustomer = `DC ${next[1]}`; break; }
+        if (next) {
+          dcCustomer = `DC ${next[1]}`;
+          break;
+        }
       }
       if (dcCustomer) break;
     }
   }
 
-  let epFee=0;
-  for (const l of lines) { if (/ep\s*fee/i.test(l)) { const m=l.match(/\$(\d*\.\d{2})/); if (m) epFee=parseFloat(m[1]); } }
-  const raw: Array<{upc:string;qty:number;amt:number}> = [];
+  let epFee = 0;
   for (const l of lines) {
-    if (!/^\d{12}\b/.test(l)||/ep\s*fee|chargeback|invoice\s+total|sub\s*total/i.test(l)) continue;
-    const um=l.match(/^(\d{12})/), am=l.match(/\$(\d*\.\d{2})\s*$/);
-    if (!um||!am) continue;
-    const nums=(l.slice(12).trim().match(/\b(\d+)\b/g)||[]);
-    raw.push({ upc:um[1], qty:nums.length?parseInt(nums[nums.length-1]):1, amt:parseFloat(am[1]) });
+    if (/ep\s*fee/i.test(l)) {
+      const m = l.match(/\$(\d*\.\d{2})/);
+      if (m) epFee = parseFloat(m[1]);
+    }
+  }
+  const raw: Array<{ upc: string; qty: number; amt: number }> = [];
+  for (const l of lines) {
+    if (!/^\d{12}\b/.test(l) || /ep\s*fee|chargeback|invoice\s+total|sub\s*total/i.test(l)) continue;
+    const um = l.match(/^(\d{12})/), am = l.match(/\$(\d*\.\d{2})\s*$/);
+    if (!um || !am) continue;
+    const nums = (l.slice(12).trim().match(/\b(\d+)\b/g) || []);
+    raw.push({ upc: um[1], qty: nums.length ? parseInt(nums[nums.length - 1]) : 1, amt: parseFloat(am[1]) });
   }
   if (!raw.length) return rows;
-  const tq=raw.reduce((s,r)=>s+r.qty,0);
-  for (const r of raw) rows.push({ upc:r.upc, item:"", cust_name:dcCustomer, amt:Math.round((r.amt+(tq>0?r.qty/tq*epFee:0))*100)/100 });
+  const tq = raw.reduce((s, r) => s + r.qty, 0);
+  for (const r of raw) rows.push({ upc: r.upc, item: "", cust_name: dcCustomer, amt: Math.round((r.amt + (tq > 0 ? r.qty / tq * epFee : 0)) * 100) / 100 });
   return rows;
 }
 
-// FORMAT 3: WM Invoice PDF
 function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
-  const lines = text.replace(/\u00a0/g," ").replace(/\r/g,"\n").replace(/[ \t]+/g," ").split("\n").map(l=>l.trim()).filter(Boolean);
+  const lines = text.replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ").split("\n").map(l => l.trim()).filter(Boolean);
   console.log("[WMInvoice] total lines:", lines.length);
 
   let customer = "";
   for (let i = 0; i < lines.length; i++) {
     if (/^ship\s+to$/i.test(lines[i])) {
-      for (let j = i+1; j < Math.min(i+5, lines.length); j++) {
+      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
         const c = lines[j].trim();
-        if (c && !/^(bill\s+to|ship\s+to|shipping|invoice|note|#)/i.test(c)) { customer = c; break; }
+        if (c && !/^(bill\s+to|ship\s+to|shipping|invoice|note|#)/i.test(c)) {
+          customer = c;
+          break;
+        }
       }
       break;
     }
@@ -395,7 +433,7 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const SKU_RE = /^([A-Z]{2,6}-[A-Z]{2,8}-\d{2,4})$/;
   const AMT_RE = /^\$\s*([\d,]+\.\d{2})$/;
   const DIGITS_RE = /^\d+$/;
-  const raw: Array<{upc: string; qty: number; amt: number}> = [];
+  const raw: Array<{ upc: string; qty: number; amt: number }> = [];
   const seen = new Set<string>();
 
   for (let i = 0; i < lines.length; i++) {
@@ -409,8 +447,11 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     let rate = "", amount = "";
     for (let j = i + 2; j < Math.min(i + 8, lines.length); j++) {
       if (AMT_RE.test(lines[j])) {
-        if (!rate) { rate = lines[j]; }
-        else { amount = lines[j]; break; }
+        if (!rate) rate = lines[j];
+        else {
+          amount = lines[j];
+          break;
+        }
       }
     }
     if (!amount) continue;
@@ -429,28 +470,33 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   return rows;
 }
 
-// FORMAT 4: $1 Promotion PDF (Distributor Charge)
 function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
-  const lines = text.replace(/\u00a0/g," ").replace(/\r/g,"\n").replace(/[ \t]+/g," ").split("\n").map(l=>l.trim()).filter(Boolean);
+  const lines = text.replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ").split("\n").map(l => l.trim()).filter(Boolean);
   console.log("[DollarPromo] total lines:", lines.length);
   let currentCustomer = "";
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const soldToInline = line.match(/^sold\s+to:\s*(.+)/i);
-    if (soldToInline && soldToInline[1].trim()) { currentCustomer = soldToInline[1].trim(); continue; }
+    if (soldToInline && soldToInline[1].trim()) {
+      currentCustomer = soldToInline[1].trim();
+      continue;
+    }
     if (/^sold\s+to:\s*$/i.test(line)) {
-      for (let j = i+1; j < Math.min(i+5, lines.length); j++) {
+      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
         const next = lines[j].trim();
-        if (next && !/^\d{5,}$/.test(next) && !/^telephone/i.test(next) && next.length > 3) { currentCustomer = next; break; }
+        if (next && !/^\d{5,}$/.test(next) && !/^telephone/i.test(next) && next.length > 3) {
+          currentCustomer = next;
+          break;
+        }
       }
       continue;
     }
     if (!/^\d{12}$/.test(line)) continue;
     const upc = line;
     let extCost = 0;
-    for (let j = i+1; j < Math.min(i+15, lines.length); j++) {
+    for (let j = i + 1; j < Math.min(i + 15, lines.length); j++) {
       const l = lines[j];
       if (/^\d{12}$/.test(l) || /^sold\s+to/i.test(l)) break;
       const numMatch = l.match(/^([\d,]+\.\d{2})$/);
@@ -464,15 +510,13 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
   return rows;
 }
 
-// FORMAT 5: Excel Product Details
-// EP Fee is distributed proportionally: EP Fee * (QtyShipped / totalQtyShipped)
 function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
   const rows: DatasetRow[] = [];
   const wb = XLSX.read(buffer, { type: "array" });
   const sn = wb.SheetNames.find(n => /product\s*details/i.test(n));
   if (!sn) return rows;
 
-  const json = XLSX.utils.sheet_to_json<Record<string,any>>(wb.Sheets[sn], { defval: "" });
+  const json = XLSX.utils.sheet_to_json<Record<string, any>>(wb.Sheets[sn], { defval: "" });
   if (!json.length) return rows;
 
   const keys = Object.keys(json[0]);
@@ -483,8 +527,6 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
   const uk = keys.find(k => /^upc$/i.test(k)) ?? "";
   const qk = keys.find(k => /qty\s*ship/i.test(k)) ?? keys.find(k => /^qty$/i.test(k)) ?? keys.find(k => /qty/i.test(k)) ?? "";
 
-  // Find EP Fee — scan ALL sheets for a cell labelled "EP Fee"
-  // The value may be in the same row (next columns) or the cell itself contains "$35.00"
   let epFee = 0;
   for (const sheetName of wb.SheetNames) {
     if (epFee) break;
@@ -494,17 +536,21 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
       for (let ci = 0; ci < row.length; ci++) {
         const cellStr = String(row[ci] || "").trim();
         if (/ep\s*fee/i.test(cellStr)) {
-          // Check same row for a value to the right
           for (let cj = ci + 1; cj < row.length; cj++) {
             const val = parseAmount(row[cj]);
-            if (val !== null && val > 0) { epFee = val; break; }
+            if (val !== null && val > 0) {
+              epFee = val;
+              break;
+            }
           }
-          // If not found in same row, check next row same column
           if (!epFee && ri + 1 < allRows.length) {
             const nextRow = allRows[ri + 1];
             for (let cj = ci; cj < Math.min(ci + 3, nextRow.length); cj++) {
               const val = parseAmount(nextRow[cj]);
-              if (val !== null && val > 0) { epFee = val; break; }
+              if (val !== null && val > 0) {
+                epFee = val;
+                break;
+              }
             }
           }
           break;
@@ -514,7 +560,6 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
     }
   }
 
-  // Parse data rows
   const rawData: Array<{ upc: string; cust: string; amt: number; qty: number }> = [];
   for (const row of json) {
     const upc = String(row[uk] || "").trim();
@@ -531,7 +576,6 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
 
   if (!rawData.length) return rows;
 
-  // Distribute EP Fee proportionally by QtyShipped
   const totalQty = rawData.reduce((s, r) => s + r.qty, 0);
   for (const r of rawData) {
     const epShare = (epFee > 0 && totalQty > 0) ? (r.qty / totalQty) * epFee : 0;
@@ -547,47 +591,50 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
   return rows;
 }
 
-// FORMAT 6: New Item Setup Fee PDF (KeHE New Item Distribution)
 function parseNewItemSetupPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
   const lines = text.replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ").split("\n").map(l => l.trim()).filter(Boolean);
   console.log("[NewItemSetup] total lines:", lines.length);
 
-  // DC# detection — handles various OCR formats:
-  // "DC#: 19" | "DC #: 19" | "DC#:      19" | "DC#" on one line, number on next
   let dcCustomer = "";
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Same line: "DC#: 19" or "DC#:19" or "DC # : 19"
     const sameLine = line.match(/dc\s*#\s*[:\-]?\s*(\d+)/i);
-    if (sameLine) { dcCustomer = `DC ${sameLine[1]}`; break; }
-    // DC# label alone, number on next line
+    if (sameLine) {
+      dcCustomer = `DC ${sameLine[1]}`;
+      break;
+    }
     if (/^dc\s*#\s*[:\-]?\s*$/i.test(line)) {
       for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
         const next = lines[j].match(/^(\d+)$/);
-        if (next) { dcCustomer = `DC ${next[1]}`; break; }
+        if (next) {
+          dcCustomer = `DC ${next[1]}`;
+          break;
+        }
       }
       if (dcCustomer) break;
     }
   }
 
-  // Invoice Total — same line or next line after label
   let invoiceTotal = 0;
   for (let i = 0; i < lines.length; i++) {
     if (/invoice\s+total/i.test(lines[i])) {
-      // Check same line first
       const m = lines[i].match(/\$?\s*([\d,]+\.\d{2})/);
-      if (m) { invoiceTotal = parseFloat(m[1].replace(/,/g, "")); break; }
-      // Then check next few lines
+      if (m) {
+        invoiceTotal = parseFloat(m[1].replace(/,/g, ""));
+        break;
+      }
       for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
         const m2 = lines[j].match(/^\$?\s*([\d,]+\.\d{2})$/);
-        if (m2) { invoiceTotal = parseFloat(m2[1].replace(/,/g, "")); break; }
+        if (m2) {
+          invoiceTotal = parseFloat(m2[1].replace(/,/g, ""));
+          break;
+        }
       }
       if (invoiceTotal) break;
     }
   }
 
-  // UPCs — 10-14 digit numbers (skip invoice numbers, dates, DC numbers)
   const upcs: string[] = [];
   const seen = new Set<string>();
   for (const line of lines) {
@@ -631,7 +678,10 @@ async function replaceDatasetRowsForInvoice(invoice: string, pdfDate: string, fi
     const { fullText } = await extractTextWithPdfJs(file);
     console.log("FULL PDF TEXT:", fullText);
     detailRows = await parseDetailRows(file, fullText);
-    if (!categoryFallback) { const pm = parseMetadataFromText(fullText); if (pm.category !== "Unknown") categoryFallback = pm.category; }
+    if (!categoryFallback) {
+      const pm = parseMetadataFromText(fullText);
+      if (pm.category !== "Unknown") categoryFallback = pm.category;
+    }
   }
   console.log("PARSED DETAIL ROWS:", detailRows);
   if (!detailRows.length) return 0;
@@ -662,16 +712,14 @@ async function reprocessAllUploads(
   if (error) throw new Error(`Failed to fetch uploads: ${error.message}`);
   let processed = 0, failed = 0, totalRows = 0;
 
-  // Filter by pdf_date range if provided
   const uploads = (all ?? []).filter(u => {
     if (!u.file_path || !u.invoice) return false;
     if (!fromDate && !toDate) return true;
-    // pdf_date is stored as MM/DD/YYYY
     const pdfDate = u.pdf_date ?? "";
-    if (!pdfDate) return true; // include if no date
+    if (!pdfDate) return true;
     const match = pdfDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (!match) return true;
-    const iso = `${match[3]}-${match[1].padStart(2,"0")}-${match[2].padStart(2,"0")}`;
+    const iso = `${match[3]}-${match[1].padStart(2, "0")}-${match[2].padStart(2, "0")}`;
     if (fromDate && iso < fromDate) return false;
     if (toDate && iso > toDate) return false;
     return true;
@@ -683,11 +731,17 @@ async function reprocessAllUploads(
     try {
       onProgress(`Processing ${u.file_name}...`);
       const { data: fd, error: de } = await supabase.storage.from(DOCUMENT_BUCKET).download(u.file_path);
-      if (de || !fd) { failed++; continue; }
+      if (de || !fd) {
+        failed++;
+        continue;
+      }
       const f = new File([fd], u.file_name, { type: u.file_type === "excel" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf" });
       totalRows += await replaceDatasetRowsForInvoice(u.invoice, u.pdf_date ?? "", f, u.category || "");
       processed++;
-    } catch (e: any) { console.error(`Failed ${u.file_name}:`, e); failed++; }
+    } catch (e: any) {
+      console.error(`Failed ${u.file_name}:`, e);
+      failed++;
+    }
   }
   return { processed, failed, totalRows };
 }
@@ -702,7 +756,17 @@ async function syncInvoiceFromUpload(invoice: string, type: string) {
   await supabase.from("invoices").update({ type: type === "Unknown" ? "" : type, doc_status: true }).eq("id", matched.id);
 }
 
-export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal }: { invoiceUploadSignal: number; documentUploadSignal: number }) {
+export default function InvoicesView({
+  invoiceUploadSignal,
+  documentUploadSignal,
+  canReprocess = false,
+  isAdmin = false,
+}: {
+  invoiceUploadSignal: number;
+  documentUploadSignal: number;
+  canReprocess?: boolean;
+  isAdmin?: boolean;
+}) {
   const [rows, setRows] = useState<InvoiceRecord[]>([]);
   const [uploads, setUploads] = useState<UploadRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -711,16 +775,25 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
   const [reprocessFrom, setReprocessFrom] = useState("");
   const [reprocessTo, setReprocessTo] = useState("");
 
-  // Deduction type modal
   const [deductionModal, setDeductionModal] = useState<NewDeductionTypeModal>({
-    open: false, detectedName: "", docTypeName: "", deductionName: "",
-    pendingFile: null, pendingMeta: null, pendingIsReplace: false, pendingExistingUpload: null,
+    open: false,
+    detectedName: "",
+    docTypeName: "",
+    deductionName: "",
+    pendingFile: null,
+    pendingMeta: null,
+    pendingIsReplace: false,
+    pendingExistingUpload: null,
   });
   const [deductionTypes, setDeductionTypes] = useState<DeductionTypeRecord[]>([]);
 
-  // UPC modal
   const [upcModal, setUpcModal] = useState<NewUpcModal>({
-    open: false, upcs: [], pendingInvoice: "", pendingPdfDate: "", pendingFile: null, pendingCategory: "",
+    open: false,
+    upcs: [],
+    pendingInvoice: "",
+    pendingPdfDate: "",
+    pendingFile: null,
+    pendingCategory: "",
   });
   const [existingDescriptions, setExistingDescriptions] = useState<string[]>([]);
   const [toast, setToast] = useState<{ show: boolean; text: string; type: ToastType }>({ show: false, text: "", type: "success" });
@@ -754,34 +827,84 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
       if (ue) throw ue;
       setRows(id || []);
       setUploads(ud || []);
-    } catch (e: any) { showToast(e.message || "Failed to load.", "error"); }
-    finally { setLoading(false); }
+    } catch (e: any) {
+      showToast(e.message || "Failed to load.", "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     loadData();
-    // Load deduction types and product descriptions for modals
     fetchDeductionTypes().then(setDeductionTypes);
     fetchProductLookup().then(map => setExistingDescriptions(Array.from(new Set(Array.from(map.values()).filter(Boolean))).sort()));
-    return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
   }, []);
-  useEffect(() => { if (invoiceUploadSignal > 0 && invoiceUploadSignal !== lastInvRef.current) { lastInvRef.current = invoiceUploadSignal; invoiceInputRef.current?.click(); } }, [invoiceUploadSignal]);
-  useEffect(() => { if (documentUploadSignal > 0 && documentUploadSignal !== lastDocRef.current) { lastDocRef.current = documentUploadSignal; documentInputRef.current?.click(); } }, [documentUploadSignal]);
 
-  const uploadMap = useMemo(() => { const m = new Map<string, UploadRecord>(); for (const u of uploads) if (u.invoice) m.set(normalizeInvoiceNumber(u.invoice), u); return m; }, [uploads]);
-  const withoutDocumentCount = useMemo(() => rows.filter(r => { const n = normalizeInvoiceNumber(r.invoice_number || ""); return n ? !uploadMap.has(n) : false; }).length, [rows, uploadMap]);
-  const monthOptions = useMemo(() => Array.from(new Set(rows.map(r => r.month || ""))).filter(Boolean), [rows]);
-  const typeOptions = useMemo(() => { const v = new Set<string>(); for (const r of rows) { const n = normalizeInvoiceNumber(r.invoice_number || ""); const t = n ? uploadMap.get(n)?.category || r.type || "" : r.type || ""; if (t.trim()) v.add(t.trim()); } return Array.from(v).sort((a, b) => a.localeCompare(b)); }, [rows, uploadMap]);
+  useEffect(() => {
+    if (invoiceUploadSignal > 0 && invoiceUploadSignal !== lastInvRef.current) {
+      lastInvRef.current = invoiceUploadSignal;
+      invoiceInputRef.current?.click();
+    }
+  }, [invoiceUploadSignal]);
+
+  useEffect(() => {
+    if (documentUploadSignal > 0 && documentUploadSignal !== lastDocRef.current) {
+      lastDocRef.current = documentUploadSignal;
+      documentInputRef.current?.click();
+    }
+  }, [documentUploadSignal]);
+
+  const uploadMap = useMemo(() => {
+    const m = new Map<string, UploadRecord>();
+    for (const u of uploads) if (u.invoice) m.set(normalizeInvoiceNumber(u.invoice), u);
+    return m;
+  }, [uploads]);
+
+  const withoutDocumentCount = useMemo(
+    () => rows.filter(r => {
+      const n = normalizeInvoiceNumber(r.invoice_number || "");
+      return n ? !uploadMap.has(n) : false;
+    }).length,
+    [rows, uploadMap]
+  );
+
+  const monthOptions = useMemo(
+    () => Array.from(new Set(rows.map(r => r.month || ""))).filter(Boolean),
+    [rows]
+  );
+
+  const typeOptions = useMemo(() => {
+    const v = new Set<string>();
+    for (const r of rows) {
+      const n = normalizeInvoiceNumber(r.invoice_number || "");
+      const t = n ? uploadMap.get(n)?.category || r.type || "" : r.type || "";
+      if (t.trim()) v.add(t.trim());
+    }
+    return Array.from(v).sort((a, b) => a.localeCompare(b));
+  }, [rows, uploadMap]);
 
   const filteredRows = useMemo(() => rows.filter(row => {
     const s = searchTerm.toLowerCase().trim();
     const n = normalizeInvoiceNumber(row.invoice_number || "");
     const hasDoc = !!(n && uploadMap.has(n));
     const liveType = n ? uploadMap.get(n)?.category || row.type || "" : row.type || "";
-    return (monthFilter === "Month" || row.month === monthFilter) &&
+    return (
+      (monthFilter === "Month" || row.month === monthFilter) &&
       (typeFilter === "Type" || liveType === typeFilter) &&
-      (documentFilter === "Documents" || (documentFilter === "With Document" && hasDoc) || (documentFilter === "Without Document" && !hasDoc)) &&
-      (!s || (row.invoice_number || "").toLowerCase().includes(s) || (row.dc_name || "").toLowerCase().includes(s) || liveType.toLowerCase().includes(s) || (row.check_number || "").toLowerCase().includes(s) || String(row.check_amt ?? "").includes(s) || (row.status || "").toLowerCase().includes(s));
+      (documentFilter === "Documents" ||
+        (documentFilter === "With Document" && hasDoc) ||
+        (documentFilter === "Without Document" && !hasDoc)) &&
+      (!s ||
+        (row.invoice_number || "").toLowerCase().includes(s) ||
+        (row.dc_name || "").toLowerCase().includes(s) ||
+        liveType.toLowerCase().includes(s) ||
+        (row.check_number || "").toLowerCase().includes(s) ||
+        String(row.check_amt ?? "").includes(s) ||
+        (row.status || "").toLowerCase().includes(s))
+    );
   }), [rows, searchTerm, monthFilter, typeFilter, documentFilter, uploadMap]);
 
   const openDocumentByInvoice = async (invoiceNumber: string | null) => {
@@ -801,31 +924,58 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
         const cd = normalizeExcelDate(row["Check Date"]);
         const inv = String(row["Invoice #"] || "").trim();
         const mu = uploadMap.get(normalizeInvoiceNumber(inv));
-        return { month: formatMonthShort(cd), check_date: cd, check_number: String(row["Check #"] || "").trim(), check_amt: parseAmount(row["Check Amt"]) ?? parseAmount(row["Check Amount"]) ?? null, invoice_number: inv, invoice_amt: parseAmount(row["Invoice Amt"]) ?? 0, dc_name: String(row["DC Name"] || "").trim(), status: String(row["Status"] || "").trim(), type: mu?.category || "", doc_status: !!mu };
+        return {
+          month: formatMonthShort(cd),
+          check_date: cd,
+          check_number: String(row["Check #"] || "").trim(),
+          check_amt: parseAmount(row["Check Amt"]) ?? parseAmount(row["Check Amount"]) ?? null,
+          invoice_number: inv,
+          invoice_amt: parseAmount(row["Invoice Amt"]) ?? 0,
+          dc_name: String(row["DC Name"] || "").trim(),
+          status: String(row["Status"] || "").trim(),
+          type: mu?.category || "",
+          doc_status: !!mu,
+        };
       }).filter(r => r.invoice_number);
-      if (!mappedRows.length) { showToast("No valid invoices found.", "info"); return; }
+      if (!mappedRows.length) {
+        showToast("No valid invoices found.", "info");
+        return;
+      }
       const { data: ex, error: ee } = await supabase.from("invoices").select("invoice_number").in("invoice_number", mappedRows.map(r => r.invoice_number));
       if (ee) throw ee;
       const exSet = new Set((ex || []).map(i => i.invoice_number).filter(Boolean));
       const newRows = mappedRows.filter(r => !exSet.has(r.invoice_number));
-      if (!newRows.length) { showToast("All invoices already exist.", "info"); return; }
+      if (!newRows.length) {
+        showToast("All invoices already exist.", "info");
+        return;
+      }
       const { error: ie } = await supabase.from("invoices").upsert(newRows, { onConflict: "invoice_number", ignoreDuplicates: true });
       if (ie) throw ie;
       showToast(`${newRows.length} new invoice(s) added, ${mappedRows.length - newRows.length} skipped.`, "success");
       await loadData();
-    } catch (e: any) { showToast(e.message || "Invoice upload failed.", "error"); }
+    } catch (e: any) {
+      showToast(e.message || "Invoice upload failed.", "error");
+    }
   };
 
   const handleInvoiceExcelChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]; if (!f) return;
-    if (!window.confirm("Are you sure you want to upload this file?")) { if (invoiceInputRef.current) invoiceInputRef.current.value = ""; return; }
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (!window.confirm("Are you sure you want to upload this file?")) {
+      if (invoiceInputRef.current) invoiceInputRef.current.value = "";
+      return;
+    }
     await handleInvoiceExcelUpload(f);
     if (invoiceInputRef.current) invoiceInputRef.current.value = "";
   };
 
   const uploadNewDocument = async (file: File, meta: { category: string; invoice: string; pdf_date: string; file_type: "pdf" | "excel" }) => {
     const fp = `${Date.now()}-${file.name.replace(/\s+/g, "-")}`;
-    const ct = meta.file_type === "excel" ? file.name.toLowerCase().endsWith(".xls") ? "application/vnd.ms-excel" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf";
+    const ct = meta.file_type === "excel"
+      ? file.name.toLowerCase().endsWith(".xls")
+        ? "application/vnd.ms-excel"
+        : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      : "application/pdf";
     const { error: se } = await supabase.storage.from(DOCUMENT_BUCKET).upload(fp, file, { cacheControl: "3600", upsert: false, contentType: ct });
     if (se) throw new Error(`${file.name}: ${se.message}`);
     const { error: de } = await supabase.from("uploads").insert({ file_name: file.name, file_path: fp, file_type: meta.file_type, category: meta.category, invoice: meta.invoice, pdf_date: meta.pdf_date });
@@ -837,7 +987,11 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
     if (!window.confirm(`A document already exists for invoice ${meta.invoice}. Replace with ${file.name}?`)) return { skipped: true };
     if (eu.file_path) await supabase.storage.from(DOCUMENT_BUCKET).remove([eu.file_path]);
     const fp = `${Date.now()}-${file.name.replace(/\s+/g, "-")}`;
-    const ct = meta.file_type === "excel" ? file.name.toLowerCase().endsWith(".xls") ? "application/vnd.ms-excel" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf";
+    const ct = meta.file_type === "excel"
+      ? file.name.toLowerCase().endsWith(".xls")
+        ? "application/vnd.ms-excel"
+        : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      : "application/pdf";
     const { error: se } = await supabase.storage.from(DOCUMENT_BUCKET).upload(fp, file, { cacheControl: "3600", upsert: false, contentType: ct });
     if (se) throw new Error(`${file.name}: ${se.message}`);
     const { error: de } = await supabase.from("uploads").update({ file_name: file.name, file_path: fp, file_type: meta.file_type, category: meta.category, invoice: meta.invoice, pdf_date: meta.pdf_date }).eq("id", eu.id);
@@ -846,69 +1000,6 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
     return { replaced: true };
   };
 
-  const handleDocumentChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []); if (!files.length) return;
-    if (!window.confirm(files.length === 1 ? "Upload this file?" : `Upload ${files.length} files?`)) { if (documentInputRef.current) documentInputRef.current.value = ""; return; }
-    try {
-      let ok = 0, rep = 0, skip = 0, savedRows = 0;
-      const { data: ai, error: aie } = await supabase.from("invoices").select("id,invoice_number");
-      if (aie) throw aie;
-      const il = new Map<string, { id: number; invoice_number: string | null }>();
-      for (const r of ai || []) il.set(normalizeInvoiceNumber(r.invoice_number || ""), r);
-      for (const file of files) {
-        const meta = await extractDocumentMetadata(file);
-        const ni = normalizeInvoiceNumber(meta.invoice);
-        if (meta.invoice === "Unknown" || !ni) { showToast(`${file.name}: invoice reference not found.`, "error"); skip++; continue; }
-        const mi = il.get(ni);
-        if (!mi) { showToast(`${file.name}: invoice ${meta.invoice} not in invoices file.`, "error"); skip++; continue; }
-
-        // ── Check if deduction type is unknown ──
-        const knownTypes = deductionTypes.map(t => t.deduction_type.toLowerCase());
-        const detectedCat = meta.category;
-        const isUnknownType = !detectedCat || detectedCat === "Unknown" || !knownTypes.includes(detectedCat.toLowerCase());
-        if (isUnknownType) {
-          const { data: dup2 } = await supabase.from("uploads").select("*").eq("invoice", mi.invoice_number).limit(1);
-          const eu2 = dup2 && dup2.length > 0 ? dup2[0] : null;
-          setDeductionModal({
-            open: true,
-            detectedName: detectedCat === "Unknown" ? "" : detectedCat,
-            docTypeName: "",
-            deductionName: detectedCat === "Unknown" ? "" : detectedCat,
-            pendingFile: file,
-            pendingMeta: { ...meta, invoice: mi.invoice_number || meta.invoice },
-            pendingIsReplace: !!eu2,
-            pendingExistingUpload: eu2,
-          });
-          if (documentInputRef.current) documentInputRef.current.value = "";
-          return; // pause — modal will continue
-        }
-
-        const { data: dup, error: de } = await supabase.from("uploads").select("*").eq("invoice", mi.invoice_number).limit(1);
-        if (de) { showToast(`${file.name}: failed checking existing.`, "error"); skip++; continue; }
-        const eu = dup && dup.length > 0 ? dup[0] : null;
-        const fm = { ...meta, invoice: mi.invoice_number || meta.invoice };
-        if (eu) {
-          const r = await replaceExistingDocument(eu, file, fm);
-          if (r.skipped) { skip++; continue; }
-          const inserted = await replaceDatasetRowsForInvoice(fm.invoice, fm.pdf_date, file, fm.category || "");
-          savedRows += inserted;
-          // ── Check for unknown UPCs after parsing ──
-          await checkAndPromptUnknownUpcs(fm.invoice, fm.pdf_date, file, fm.category || "");
-          rep++; continue;
-        }
-        await uploadNewDocument(file, fm);
-        const inserted = await replaceDatasetRowsForInvoice(fm.invoice, fm.pdf_date, file, fm.category || "");
-        savedRows += inserted;
-        await checkAndPromptUnknownUpcs(fm.invoice, fm.pdf_date, file, fm.category || "");
-        ok++;
-      }
-      await loadData();
-      if (ok > 0 || rep > 0 || skip > 0) showToast(`${ok} uploaded, ${rep} replaced, ${skip} skipped, ${savedRows} dataset rows saved.`, "success");
-    } catch (e: any) { showToast(e.message || "File upload failed.", "error"); }
-    finally { if (documentInputRef.current) documentInputRef.current.value = ""; }
-  };
-
-  // After upload, check if any parsed UPCs are missing from product_list
   const checkAndPromptUnknownUpcs = async (invoice: string, pdfDate: string, file: File, category: string) => {
     const { fullText } = await extractTextWithPdfJs(file);
     const parsed = await parseDetailRows(file, fullText);
@@ -927,17 +1018,100 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
     });
   };
 
-  // Called when user saves new deduction type from modal
+  const handleDocumentChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    if (!window.confirm(files.length === 1 ? "Upload this file?" : `Upload ${files.length} files?`)) {
+      if (documentInputRef.current) documentInputRef.current.value = "";
+      return;
+    }
+    try {
+      let ok = 0, rep = 0, skip = 0, savedRows = 0;
+      const { data: ai, error: aie } = await supabase.from("invoices").select("id,invoice_number");
+      if (aie) throw aie;
+      const il = new Map<string, { id: number; invoice_number: string | null }>();
+      for (const r of ai || []) il.set(normalizeInvoiceNumber(r.invoice_number || ""), r);
+      for (const file of files) {
+        const meta = await extractDocumentMetadata(file);
+        const ni = normalizeInvoiceNumber(meta.invoice);
+        if (meta.invoice === "Unknown" || !ni) {
+          showToast(`${file.name}: invoice reference not found.`, "error");
+          skip++;
+          continue;
+        }
+        const mi = il.get(ni);
+        if (!mi) {
+          showToast(`${file.name}: invoice ${meta.invoice} not in invoices file.`, "error");
+          skip++;
+          continue;
+        }
+
+        const knownTypes = deductionTypes.map(t => t.deduction_type.toLowerCase());
+        const detectedCat = meta.category;
+        const isUnknownType = !detectedCat || detectedCat === "Unknown" || !knownTypes.includes(detectedCat.toLowerCase());
+        if (isUnknownType) {
+          const { data: dup2 } = await supabase.from("uploads").select("*").eq("invoice", mi.invoice_number).limit(1);
+          const eu2 = dup2 && dup2.length > 0 ? dup2[0] : null;
+          setDeductionModal({
+            open: true,
+            detectedName: detectedCat === "Unknown" ? "" : detectedCat,
+            docTypeName: "",
+            deductionName: detectedCat === "Unknown" ? "" : detectedCat,
+            pendingFile: file,
+            pendingMeta: { ...meta, invoice: mi.invoice_number || meta.invoice },
+            pendingIsReplace: !!eu2,
+            pendingExistingUpload: eu2,
+          });
+          if (documentInputRef.current) documentInputRef.current.value = "";
+          return;
+        }
+
+        const { data: dup, error: de } = await supabase.from("uploads").select("*").eq("invoice", mi.invoice_number).limit(1);
+        if (de) {
+          showToast(`${file.name}: failed checking existing.`, "error");
+          skip++;
+          continue;
+        }
+        const eu = dup && dup.length > 0 ? dup[0] : null;
+        const fm = { ...meta, invoice: mi.invoice_number || meta.invoice };
+        if (eu) {
+          const r = await replaceExistingDocument(eu, file, fm);
+          if (r.skipped) {
+            skip++;
+            continue;
+          }
+          const inserted = await replaceDatasetRowsForInvoice(fm.invoice, fm.pdf_date, file, fm.category || "");
+          savedRows += inserted;
+          await checkAndPromptUnknownUpcs(fm.invoice, fm.pdf_date, file, fm.category || "");
+          rep++;
+          continue;
+        }
+        await uploadNewDocument(file, fm);
+        const inserted = await replaceDatasetRowsForInvoice(fm.invoice, fm.pdf_date, file, fm.category || "");
+        savedRows += inserted;
+        await checkAndPromptUnknownUpcs(fm.invoice, fm.pdf_date, file, fm.category || "");
+        ok++;
+      }
+      await loadData();
+      if (ok > 0 || rep > 0 || skip > 0) showToast(`${ok} uploaded, ${rep} replaced, ${skip} skipped, ${savedRows} dataset rows saved.`, "success");
+    } catch (e: any) {
+      showToast(e.message || "File upload failed.", "error");
+    } finally {
+      if (documentInputRef.current) documentInputRef.current.value = "";
+    }
+  };
+
   const handleSaveDeductionType = async () => {
     const { deductionName, docTypeName, pendingFile, pendingMeta, pendingIsReplace, pendingExistingUpload } = deductionModal;
-    if (!deductionName.trim()) { showToast("Please enter a deduction type name.", "error"); return; }
+    if (!deductionName.trim()) {
+      showToast("Please enter a deduction type name.", "error");
+      return;
+    }
     if (!pendingFile || !pendingMeta) return;
     try {
-      // Save to deduction_types table
       await saveDeductionType(docTypeName.trim() || deductionName.trim(), deductionName.trim());
       const refreshed = await fetchDeductionTypes();
       setDeductionTypes(refreshed);
-      // Continue with upload using the new type
       const fm = { ...pendingMeta, category: deductionName.trim() };
       if (pendingIsReplace && pendingExistingUpload) {
         const r = await replaceExistingDocument(pendingExistingUpload, pendingFile, fm);
@@ -950,10 +1124,11 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
       setDeductionModal(p => ({ ...p, open: false }));
       await loadData();
       showToast(`Deduction type "${deductionName}" saved and file uploaded.`, "success");
-    } catch (e: any) { showToast(e.message || "Failed to save.", "error"); }
+    } catch (e: any) {
+      showToast(e.message || "Failed to save.", "error");
+    }
   };
 
-  // Called when user saves unknown UPCs from modal
   const handleSaveUpcs = async () => {
     const { upcs, pendingInvoice, pendingPdfDate, pendingFile, pendingCategory } = upcModal;
     try {
@@ -963,7 +1138,6 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
           await saveProductListEntry(entry.upc, desc.trim());
         }
       }
-      // Refresh product lookup then re-save dataset rows with new descriptions
       if (pendingFile && pendingInvoice) {
         await replaceDatasetRowsForInvoice(pendingInvoice, pendingPdfDate, pendingFile, pendingCategory);
       }
@@ -972,7 +1146,9 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
       setUpcModal(p => ({ ...p, open: false }));
       await loadData();
       showToast("UPC(s) saved successfully.", "success");
-    } catch (e: any) { showToast(e.message || "Failed to save UPCs.", "error"); }
+    } catch (e: any) {
+      showToast(e.message || "Failed to save UPCs.", "error");
+    }
   };
 
   const handleReprocessAll = () => {
@@ -988,30 +1164,48 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
       const to = reprocessTo || undefined;
       const { processed, failed, totalRows } = await reprocessAllUploads(msg => showToast(msg, "info"), from, to);
       showToast(`Done! ${processed} processed, ${failed} failed, ${totalRows} rows saved.`, "success");
-    } catch (e: any) { showToast(e.message || "Reprocess failed.", "error"); }
-    finally { setReprocessing(false); }
+    } catch (e: any) {
+      showToast(e.message || "Reprocess failed.", "error");
+    } finally {
+      setReprocessing(false);
+    }
   };
 
   const toggleSelectOne = (id: number) => setSelectedIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
 
   const handleDeleteSelected = async () => {
-    if (selectedIds.length === 0 && deleteMonth === "Delete Month") { showToast("No rows selected.", "info"); return; }
+    if (selectedIds.length === 0 && deleteMonth === "Delete Month") {
+      showToast("No rows selected.", "info");
+      return;
+    }
     if (!window.confirm("Are you sure you want to delete the data?")) return;
     try {
-      if (selectedIds.length > 0) { const { error } = await supabase.from("invoices").delete().in("id", selectedIds); if (error) throw error; }
-      else if (deleteMonth !== "Delete Month") { const { error } = await supabase.from("invoices").delete().eq("month", deleteMonth); if (error) throw error; }
-      setSelectedIds([]); setDeleteMonth("Delete Month");
-      showToast("Selected rows deleted.", "success"); await loadData();
-    } catch (e: any) { showToast(e.message || "Delete failed.", "error"); }
+      if (selectedIds.length > 0) {
+        const { error } = await supabase.from("invoices").delete().in("id", selectedIds);
+        if (error) throw error;
+      } else if (deleteMonth !== "Delete Month") {
+        const { error } = await supabase.from("invoices").delete().eq("month", deleteMonth);
+        if (error) throw error;
+      }
+      setSelectedIds([]);
+      setDeleteMonth("Delete Month");
+      showToast("Selected rows deleted.", "success");
+      await loadData();
+    } catch (e: any) {
+      showToast(e.message || "Delete failed.", "error");
+    }
   };
 
   return (
     <div className="space-y-6">
       <input ref={invoiceInputRef} type="file" accept=".xlsx,.xls" hidden onChange={handleInvoiceExcelChange} />
       <input ref={documentInputRef} type="file" accept="application/pdf,.xlsx,.xls" multiple hidden onChange={handleDocumentChange} />
+
       {toast.show && (
         <div className="fixed right-6 top-6 z-[100]">
-          <div className={`rounded-2xl border px-4 py-3 text-sm shadow-lg ${toast.type === "success" ? "border-green-200 bg-green-50 text-green-700" : toast.type === "error" ? "border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-700"}`}>{toast.text}</div>
+          <div className={`rounded-2xl border px-4 py-3 text-sm shadow-lg ${toast.type === "success" ? "border-green-200 bg-green-50 text-green-700" : toast.type === "error" ? "border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-700"}`}>
+            {toast.text}
+          </div>
         </div>
       )}
 
@@ -1040,7 +1234,6 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
         </div>
       )}
 
-      {/* ── New Deduction Type Modal ── */}
       {deductionModal.open && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40">
           <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
@@ -1075,9 +1268,12 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
                     <p className="text-xs text-slate-400 mb-1">Or pick existing:</p>
                     <div className="flex flex-wrap gap-1">
                       {deductionTypes.map(t => (
-                        <button key={t.id} type="button"
+                        <button
+                          key={t.id}
+                          type="button"
                           onClick={() => setDeductionModal(p => ({ ...p, deductionName: t.deduction_type, docTypeName: t.document_type }))}
-                          className={`rounded-full px-2 py-0.5 text-xs border ${deductionModal.deductionName === t.deduction_type ? "bg-slate-900 text-white border-slate-900" : "border-slate-200 hover:bg-slate-50"}`}>
+                          className={`rounded-full px-2 py-0.5 text-xs border ${deductionModal.deductionName === t.deduction_type ? "bg-slate-900 text-white border-slate-900" : "border-slate-200 hover:bg-slate-50"}`}
+                        >
                           {t.deduction_type}
                         </button>
                       ))}
@@ -1094,7 +1290,6 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
         </div>
       )}
 
-      {/* ── New UPC Modal ── */}
       {upcModal.open && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40">
           <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
@@ -1109,19 +1304,23 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
                       <input
                         type="text"
                         value={entry.descEditValue}
-                        onChange={e => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, descEditValue: e.target.value } : u) }))}
+                        onChange={e => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u, i) => i === idx ? { ...u, descEditValue: e.target.value } : u) }))}
                         placeholder="Enter item description"
                         className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-slate-400"
                         autoFocus
                       />
-                      <button type="button"
-                        onClick={() => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, description: u.descEditValue, descEditMode: false } : u) }))}
-                        className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs text-white">
+                      <button
+                        type="button"
+                        onClick={() => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u, i) => i === idx ? { ...u, description: u.descEditValue, descEditMode: false } : u) }))}
+                        className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs text-white"
+                      >
                         ✓
                       </button>
-                      <button type="button"
-                        onClick={() => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, descEditMode: false } : u) }))}
-                        className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u, i) => i === idx ? { ...u, descEditMode: false } : u) }))}
+                        className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs"
+                      >
                         ✕
                       </button>
                     </div>
@@ -1132,9 +1331,9 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
                         onChange={e => {
                           const val = e.target.value;
                           if (val === "__add_new__") {
-                            setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, descEditMode: true, descEditValue: "" } : u) }));
+                            setUpcModal(p => ({ ...p, upcs: p.upcs.map((u, i) => i === idx ? { ...u, descEditMode: true, descEditValue: "" } : u) }));
                           } else {
-                            setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, description: val } : u) }));
+                            setUpcModal(p => ({ ...p, upcs: p.upcs.map((u, i) => i === idx ? { ...u, description: val } : u) }));
                           }
                         }}
                         className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-slate-400"
@@ -1143,11 +1342,13 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
                         {existingDescriptions.map(d => <option key={d} value={d}>{d}</option>)}
                         <option value="__add_new__">+ Add new description...</option>
                       </select>
-                      {entry.description && (
-                        <button type="button"
-                          onClick={() => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u,i) => i===idx ? { ...u, descEditMode: true, descEditValue: u.description } : u) }))}
+                      {entry.description && !entry.descEditMode && (
+                        <button
+                          type="button"
+                          onClick={() => setUpcModal(p => ({ ...p, upcs: p.upcs.map((u, i) => i === idx ? { ...u, descEditMode: true, descEditValue: u.description } : u) }))}
                           className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs hover:bg-slate-50"
-                          title="Edit selected description">
+                          title="Edit selected description"
+                        >
                           ✏️
                         </button>
                       )}
@@ -1166,6 +1367,7 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
           </div>
         </div>
       )}
+
       <div className="sticky top-0 z-40 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
         <Card className="rounded-3xl">
           <CardContent className="space-y-4 pt-6">
@@ -1174,35 +1376,77 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <Input placeholder="Search invoice, DC, status, type..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9" />
               </div>
+
               <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-                <option value="Month">Month</option>{monthOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                <option value="Month">Month</option>
+                {monthOptions.map(o => <option key={o} value={o}>{o}</option>)}
               </select>
+
               <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-                <option value="Type">Type</option>{typeOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                <option value="Type">Type</option>
+                {typeOptions.map(o => <option key={o} value={o}>{o}</option>)}
               </select>
+
               <div className="relative">
                 <select value={documentFilter} onChange={e => setDocumentFilter(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 text-sm">
                   <option value="Documents">Documents</option>
                   <option value="With Document">With Document</option>
                   <option value="Without Document">Without Document{withoutDocumentCount > 0 ? ` (${withoutDocumentCount})` : ""}</option>
                 </select>
-                {withoutDocumentCount > 0 && <button type="button" onClick={() => setDocumentFilter("Without Document")} className="absolute right-8 top-1/2 -translate-y-1/2 rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-red-600">{withoutDocumentCount > 99 ? "99+" : withoutDocumentCount}</button>}
+                {withoutDocumentCount > 0 && (
+                  <button type="button" onClick={() => setDocumentFilter("Without Document")} className="absolute right-8 top-1/2 -translate-y-1/2 rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-red-600">
+                    {withoutDocumentCount > 99 ? "99+" : withoutDocumentCount}
+                  </button>
+                )}
               </div>
-              {selectMode && <select value={deleteMonth} onChange={e => setDeleteMonth(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"><option value="Delete Month">Delete Month</option>{monthOptions.map(o => <option key={o} value={o}>{o}</option>)}</select>}
-              <Button type="button" variant="outline" onClick={handleReprocessAll} disabled={reprocessing} className="flex items-center gap-2">
-                <RefreshCw className={`h-4 w-4 ${reprocessing ? "animate-spin" : ""}`} />{reprocessing ? "Processing..." : "Reprocess All"}
-              </Button>
+
+              {selectMode && (
+                <select value={deleteMonth} onChange={e => setDeleteMonth(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                  <option value="Delete Month">Delete Month</option>
+                  {monthOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              )}
+
+              {canReprocess && isAdmin && (
+                <Button type="button" variant="outline" onClick={handleReprocessAll} disabled={reprocessing} className="flex items-center gap-2">
+                  <RefreshCw className={`h-4 w-4 ${reprocessing ? "animate-spin" : ""}`} />
+                  {reprocessing ? "Processing..." : "Reprocess All"}
+                </Button>
+              )}
+
               <div className="flex gap-2">
-                <Button type="button" variant={selectMode ? "default" : "outline"} onClick={() => setSelectMode(p => { const n = !p; if (!n) { setSelectedIds([]); setDeleteMonth("Delete Month"); } return n; })} className="flex-1">Select</Button>
-                <Button type="button" variant="destructive" onClick={handleDeleteSelected} disabled={!selectMode} className="flex-1"><Trash2 className="mr-2 h-4 w-4" />Delete</Button>
+                <Button
+                  type="button"
+                  variant={selectMode ? "default" : "outline"}
+                  onClick={() => setSelectMode(p => {
+                    const n = !p;
+                    if (!n) {
+                      setSelectedIds([]);
+                      setDeleteMonth("Delete Month");
+                    }
+                    return n;
+                  })}
+                  className="flex-1"
+                >
+                  Select
+                </Button>
+                <Button type="button" variant="destructive" onClick={handleDeleteSelected} disabled={!selectMode} className="flex-1">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </Button>
               </div>
             </div>
           </CardContent>
         </Card>
       </div>
+
       <Card className="rounded-3xl">
         <CardContent className="pt-6">
-          {loading ? <p className="text-sm text-slate-500">Loading invoices...</p> : filteredRows.length === 0 ? <p className="text-sm text-slate-500">No invoices found.</p> : (
+          {loading ? (
+            <p className="text-sm text-slate-500">Loading invoices...</p>
+          ) : filteredRows.length === 0 ? (
+            <p className="text-sm text-slate-500">No invoices found.</p>
+          ) : (
             <div className="overflow-x-auto rounded-2xl border">
               <table className="min-w-full text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-100">
@@ -1227,7 +1471,11 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
                     const displayMonth = formatMonthShort(row.check_date) || row.month || "";
                     return (
                       <tr key={row.id} className="border-t">
-                        {selectMode && <td className="px-4 py-3"><input type="checkbox" checked={selectedIds.includes(row.id)} onChange={() => toggleSelectOne(row.id)} /></td>}
+                        {selectMode && (
+                          <td className="px-4 py-3">
+                            <input type="checkbox" checked={selectedIds.includes(row.id)} onChange={() => toggleSelectOne(row.id)} />
+                          </td>
+                        )}
                         <td className="px-4 py-3">{displayMonth}</td>
                         <td className="px-4 py-3">{row.check_date || ""}</td>
                         <td className="px-4 py-3">{row.check_number || ""}</td>
@@ -1240,7 +1488,7 @@ export default function InvoicesView({ invoiceUploadSignal, documentUploadSignal
                         <td className="px-4 py-3">
                           {hasDoc ? (
                             <button type="button" onClick={() => openDocumentByInvoice(row.invoice_number)} className="text-red-600 hover:text-red-700" title={ur?.file_type === "excel" ? "Open Excel" : "Open PDF"}>
-                              {ur?.file_type === "excel" ? <FileSpreadsheet className="h-5 w-5" /> : <FileText className="h-5 w-5" />}
+                              {ur?.file_type === "excel" ? <FileSpreadsheet className="h-5 w-5 text-green-600" /> : <FileText className="h-5 w-5 text-red-600" />}
                             </button>
                           ) : <XCircle className="h-5 w-5 text-red-600" />}
                         </td>

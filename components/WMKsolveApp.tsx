@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronDown,
@@ -13,6 +13,7 @@ import {
   Menu,
   LogOut,
   BarChart3,
+  Shield,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -27,45 +28,29 @@ import ProductListView from "@/components/Views/ProductListView";
 import LocationsView from "@/components/Views/LocationsView";
 import DeductionTypesView from "@/components/Views/DeductionTypesView";
 
-const sidebarItems = [
-  { label: "Dashboard", icon: LayoutDashboard, key: "dashboard" },
-  {
-    label: "Broker Commission",
-    icon: Receipt,
-    key: "broker-commission",
-    children: [
-      { label: "Broker Commission Summary", key: "broker-commission-summary" },
-      { label: "Data Sets", key: "broker-commission-data-sets" },
-    ],
-  },
-  {
-    label: "Accounting",
-    icon: BadgeDollarSign,
-    key: "accounting",
-    children: [
-      { label: "Summary", key: "accounting-summary" },
-      { label: "Check Details", key: "accounting-check-details" },
-    ],
-  },
-  {
-    label: "Reporting",
-    icon: BarChart3,
-    key: "reporting",
-    children: [{ label: "Report XXX", key: "reporting-report-xxx" }],
-  },
-  {
-    label: "Database",
-    icon: Database,
-    key: "database",
-    children: [
-      { label: "Ksolve Invoices", key: "database-ksolve-invoices" },
-      { label: "KeHe Velocity", key: "database-kehe-velocity" },
-      { label: "Product List", key: "database-product-list" },
-      { label: "Locations", key: "database-locations" },
-      { label: "Deduction Type", key: "database-deduction-type" },
-    ],
-  },
-];
+type Permissions = {
+  email: string;
+  can_view_dashboard: boolean;
+
+  can_view_broker_commission_summary: boolean;
+  can_view_broker_commission_data_sets: boolean;
+
+  can_view_accounting_summary: boolean;
+  can_view_accounting_check_details: boolean;
+
+  can_view_reporting_report_xxx: boolean;
+
+  can_view_database_ksolve_invoices: boolean;
+  can_view_database_kehe_velocity: boolean;
+  can_view_database_product_list: boolean;
+  can_view_database_locations: boolean;
+  can_view_database_deduction_type: boolean;
+
+  can_view_admin: boolean;
+  can_view_user_account: boolean;
+
+  can_reprocess_invoices: boolean;
+};
 
 function SidebarItem({
   item,
@@ -149,6 +134,18 @@ function PlaceholderView({ title }: { title: string }) {
   );
 }
 
+function UserAccountView() {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="text-lg font-semibold text-slate-900">User Account</div>
+      <p className="mt-2 text-sm text-slate-500">
+        Manage user access here. Next step is connecting this page to the
+        user_permissions table.
+      </p>
+    </div>
+  );
+}
+
 export default function WMKsolveApp() {
   const router = useRouter();
 
@@ -159,11 +156,14 @@ export default function WMKsolveApp() {
     accounting: false,
     reporting: false,
     database: false,
+    admin: false,
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [invoiceUploadSignal, setInvoiceUploadSignal] = useState(0);
   const [documentUploadSignal, setDocumentUploadSignal] = useState(0);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+  const [permissions, setPermissions] = useState<Permissions | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -179,6 +179,43 @@ export default function WMKsolveApp() {
         router.replace("/login");
         return;
       }
+
+      const email = session.user.email || "";
+      setUserEmail(email);
+
+      const { data: permissionRow } = await supabase
+        .from("user_permissions")
+        .select("*")
+        .eq("email", email)
+        .maybeSingle();
+
+      const isAdmin = email.toLowerCase() === "kevin@wondermonday.com";
+
+      setPermissions(
+        permissionRow || {
+          email,
+          can_view_dashboard: true,
+
+          can_view_broker_commission_summary: false,
+          can_view_broker_commission_data_sets: false,
+
+          can_view_accounting_summary: false,
+          can_view_accounting_check_details: false,
+
+          can_view_reporting_report_xxx: false,
+
+          can_view_database_ksolve_invoices: false,
+          can_view_database_kehe_velocity: false,
+          can_view_database_product_list: false,
+          can_view_database_locations: false,
+          can_view_database_deduction_type: false,
+
+          can_view_admin: isAdmin,
+          can_view_user_account: isAdmin,
+
+          can_reprocess_invoices: isAdmin,
+        }
+      );
 
       setCheckingSession(false);
     };
@@ -210,6 +247,111 @@ export default function WMKsolveApp() {
     }
   };
 
+  const sidebarItems = useMemo(() => {
+    if (!permissions) return [];
+
+    const items: any[] = [];
+
+    if (permissions.can_view_dashboard) {
+      items.push({ label: "Dashboard", icon: LayoutDashboard, key: "dashboard" });
+    }
+
+    const brokerChildren = [
+      permissions.can_view_broker_commission_summary
+        ? { label: "Broker Commission Summary", key: "broker-commission-summary" }
+        : null,
+      permissions.can_view_broker_commission_data_sets
+        ? { label: "Data Sets", key: "broker-commission-data-sets" }
+        : null,
+    ].filter(Boolean);
+
+    if (brokerChildren.length) {
+      items.push({
+        label: "Broker Commission",
+        icon: Receipt,
+        key: "broker-commission",
+        children: brokerChildren,
+      });
+    }
+
+    const accountingChildren = [
+      permissions.can_view_accounting_summary
+        ? { label: "Summary", key: "accounting-summary" }
+        : null,
+      permissions.can_view_accounting_check_details
+        ? { label: "Check Details", key: "accounting-check-details" }
+        : null,
+    ].filter(Boolean);
+
+    if (accountingChildren.length) {
+      items.push({
+        label: "Accounting",
+        icon: BadgeDollarSign,
+        key: "accounting",
+        children: accountingChildren,
+      });
+    }
+
+    const reportingChildren = [
+      permissions.can_view_reporting_report_xxx
+        ? { label: "Report XXX", key: "reporting-report-xxx" }
+        : null,
+    ].filter(Boolean);
+
+    if (reportingChildren.length) {
+      items.push({
+        label: "Reporting",
+        icon: BarChart3,
+        key: "reporting",
+        children: reportingChildren,
+      });
+    }
+
+    const databaseChildren = [
+      permissions.can_view_database_ksolve_invoices
+        ? { label: "Ksolve Invoices", key: "database-ksolve-invoices" }
+        : null,
+      permissions.can_view_database_kehe_velocity
+        ? { label: "KeHe Velocity", key: "database-kehe-velocity" }
+        : null,
+      permissions.can_view_database_product_list
+        ? { label: "Product List", key: "database-product-list" }
+        : null,
+      permissions.can_view_database_locations
+        ? { label: "Locations", key: "database-locations" }
+        : null,
+      permissions.can_view_database_deduction_type
+        ? { label: "Deduction Type", key: "database-deduction-type" }
+        : null,
+    ].filter(Boolean);
+
+    if (databaseChildren.length) {
+      items.push({
+        label: "Database",
+        icon: Database,
+        key: "database",
+        children: databaseChildren,
+      });
+    }
+
+    const adminChildren = [
+      permissions.can_view_user_account
+        ? { label: "User Account", key: "admin-user-account" }
+        : null,
+    ].filter(Boolean);
+
+    if (permissions.can_view_admin && adminChildren.length) {
+      items.push({
+        label: "Admin",
+        icon: Shield,
+        key: "admin",
+        children: adminChildren,
+      });
+    }
+
+    return items;
+  }, [permissions]);
+
   const titleMap: Record<string, string> = {
     dashboard: "Dashboard",
     "broker-commission-summary": "Broker Commission Summary",
@@ -222,6 +364,7 @@ export default function WMKsolveApp() {
     "database-product-list": "Product List",
     "database-locations": "Locations",
     "database-deduction-type": "Deduction Type",
+    "admin-user-account": "User Account",
   };
 
   const renderContent = () => {
@@ -243,6 +386,8 @@ export default function WMKsolveApp() {
           <InvoicesView
             invoiceUploadSignal={invoiceUploadSignal}
             documentUploadSignal={documentUploadSignal}
+            canReprocess={!!permissions?.can_reprocess_invoices}
+            isAdmin={userEmail.toLowerCase() === "kevin@wondermonday.com"}
           />
         );
       case "database-kehe-velocity":
@@ -253,6 +398,8 @@ export default function WMKsolveApp() {
         return <LocationsView />;
       case "database-deduction-type":
         return <DeductionTypesView />;
+      case "admin-user-account":
+        return <UserAccountView />;
       default:
         return <DashboardView />;
     }
@@ -328,11 +475,7 @@ export default function WMKsolveApp() {
                     type="button"
                     variant="outline"
                     className="rounded-2xl border-slate-200"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setInvoiceUploadSignal((prev) => prev + 1);
-                    }}
+                    onClick={() => setInvoiceUploadSignal((prev) => prev + 1)}
                   >
                     <Upload className="mr-2 h-4 w-4" />
                     Upload Ksolve Invoices
@@ -341,11 +484,7 @@ export default function WMKsolveApp() {
                   <Button
                     type="button"
                     className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setDocumentUploadSignal((prev) => prev + 1);
-                    }}
+                    onClick={() => setDocumentUploadSignal((prev) => prev + 1)}
                   >
                     <Upload className="mr-2 h-4 w-4" />
                     Upload Files
