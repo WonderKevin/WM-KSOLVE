@@ -332,6 +332,21 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
 function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
   const lines = text.replace(/\u00a0/g," ").replace(/\r/g,"\n").replace(/[ \t]+/g," ").split("\n").map(l=>l.trim()).filter(Boolean);
+
+  // Extract DC# for customer (same logic as New Item Setup)
+  let dcCustomer = "";
+  for (let i = 0; i < lines.length; i++) {
+    const sameLine = lines[i].match(/dc\s*#\s*[:\-]?\s*(\d+)/i);
+    if (sameLine) { dcCustomer = `DC ${sameLine[1]}`; break; }
+    if (/^dc\s*#\s*[:\-]?\s*$/i.test(lines[i])) {
+      for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
+        const next = lines[j].match(/^(\d+)$/);
+        if (next) { dcCustomer = `DC ${next[1]}`; break; }
+      }
+      if (dcCustomer) break;
+    }
+  }
+
   let epFee=0;
   for (const l of lines) { if (/ep\s*fee/i.test(l)) { const m=l.match(/\$(\d*\.\d{2})/); if (m) epFee=parseFloat(m[1]); } }
   const raw: Array<{upc:string;qty:number;amt:number}> = [];
@@ -344,7 +359,7 @@ function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
   }
   if (!raw.length) return rows;
   const tq=raw.reduce((s,r)=>s+r.qty,0);
-  for (const r of raw) rows.push({ upc:r.upc, item:"", cust_name:"", amt:Math.round((r.amt+(tq>0?r.qty/tq*epFee:0))*100)/100 });
+  for (const r of raw) rows.push({ upc:r.upc, item:"", cust_name:dcCustomer, amt:Math.round((r.amt+(tq>0?r.qty/tq*epFee:0))*100)/100 });
   return rows;
 }
 
@@ -538,31 +553,41 @@ function parseNewItemSetupPdfRows(text: string): DatasetRow[] {
   const lines = text.replace(/\u00a0/g, " ").replace(/\r/g, "\n").replace(/[ \t]+/g, " ").split("\n").map(l => l.trim()).filter(Boolean);
   console.log("[NewItemSetup] total lines:", lines.length);
 
+  // DC# detection — handles various OCR formats:
+  // "DC#: 19" | "DC #: 19" | "DC#:      19" | "DC#" on one line, number on next
   let dcCustomer = "";
-  for (const line of lines) {
-    const m = line.match(/^dc\s*#\s*[:\-]?\s*(\d+)/i);
-    if (m) { dcCustomer = `DC ${m[1]}`; break; }
-  }
-
-  let invoiceTotal = 0;
-  for (const line of lines) {
-    if (/invoice\s+total/i.test(line)) {
-      const m = line.match(/\$\s*([\d,]+\.\d{2})/);
-      if (m) { invoiceTotal = parseFloat(m[1].replace(/,/g, "")); break; }
-    }
-  }
-  if (!invoiceTotal) {
-    for (let i = 0; i < lines.length; i++) {
-      if (/invoice\s+total/i.test(lines[i])) {
-        for (let j = i; j < Math.min(i + 4, lines.length); j++) {
-          const m = lines[j].match(/^\$?\s*([\d,]+\.\d{2})$/);
-          if (m) { invoiceTotal = parseFloat(m[1].replace(/,/g, "")); break; }
-        }
-        break;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Same line: "DC#: 19" or "DC#:19" or "DC # : 19"
+    const sameLine = line.match(/dc\s*#\s*[:\-]?\s*(\d+)/i);
+    if (sameLine) { dcCustomer = `DC ${sameLine[1]}`; break; }
+    // DC# label alone, number on next line
+    if (/^dc\s*#\s*[:\-]?\s*$/i.test(line)) {
+      for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
+        const next = lines[j].match(/^(\d+)$/);
+        if (next) { dcCustomer = `DC ${next[1]}`; break; }
       }
+      if (dcCustomer) break;
     }
   }
 
+  // Invoice Total — same line or next line after label
+  let invoiceTotal = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (/invoice\s+total/i.test(lines[i])) {
+      // Check same line first
+      const m = lines[i].match(/\$?\s*([\d,]+\.\d{2})/);
+      if (m) { invoiceTotal = parseFloat(m[1].replace(/,/g, "")); break; }
+      // Then check next few lines
+      for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+        const m2 = lines[j].match(/^\$?\s*([\d,]+\.\d{2})$/);
+        if (m2) { invoiceTotal = parseFloat(m2[1].replace(/,/g, "")); break; }
+      }
+      if (invoiceTotal) break;
+    }
+  }
+
+  // UPCs — 10-14 digit numbers (skip invoice numbers, dates, DC numbers)
   const upcs: string[] = [];
   const seen = new Set<string>();
   for (const line of lines) {
@@ -570,7 +595,6 @@ function parseNewItemSetupPdfRows(text: string): DatasetRow[] {
     for (const m of matches) {
       const upc = m[1];
       if (seen.has(upc)) continue;
-      if (upc.length < 10) continue;
       seen.add(upc);
       upcs.push(upc);
     }
