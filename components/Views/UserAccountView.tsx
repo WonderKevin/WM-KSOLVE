@@ -1,288 +1,221 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Save, Search, UserPlus } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, UserPlus } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-type UserPermissionRow = {
-  id: string;
-  email: string;
-  can_view_dashboard: boolean;
-  can_view_broker_commission_summary: boolean;
-  can_view_broker_commission_data_sets: boolean;
-  can_view_accounting_summary: boolean;
-  can_view_accounting_check_details: boolean;
-  can_view_reporting_report_xxx: boolean;
-  can_view_database_ksolve_invoices: boolean;
-  can_view_database_kehe_velocity: boolean;
-  can_view_database_product_list: boolean;
-  can_view_database_locations: boolean;
-  can_view_database_deduction_type: boolean;
-  can_view_admin: boolean;
-  can_view_user_account: boolean;
-  can_reprocess_invoices: boolean;
-  created_at?: string;
-  updated_at?: string;
-};
+type Row = any;
 
-const PERMISSION_FIELDS: Array<{
-  key: keyof UserPermissionRow;
-  label: string;
-}> = [
-  { key: "can_view_dashboard", label: "Dashboard" },
-  { key: "can_view_broker_commission_summary", label: "Broker Commission Summary" },
-  { key: "can_view_broker_commission_data_sets", label: "Broker Commission Data Sets" },
-  { key: "can_view_accounting_summary", label: "Accounting Summary" },
-  { key: "can_view_accounting_check_details", label: "Accounting Check Details" },
-  { key: "can_view_reporting_report_xxx", label: "Reporting / Report XXX" },
-  { key: "can_view_database_ksolve_invoices", label: "Database / Ksolve Invoices" },
-  { key: "can_view_database_kehe_velocity", label: "Database / KeHe Velocity" },
-  { key: "can_view_database_product_list", label: "Database / Product List" },
-  { key: "can_view_database_locations", label: "Database / Locations" },
-  { key: "can_view_database_deduction_type", label: "Database / Deduction Type" },
-  { key: "can_view_admin", label: "Admin Menu" },
-  { key: "can_view_user_account", label: "Admin / User Account" },
-  { key: "can_reprocess_invoices", label: "Reprocess Invoices" },
+// 🔥 GROUPED PERMISSIONS (MATCHES SIDEBAR)
+const PERMISSION_GROUPS = [
+  {
+    label: "Dashboard",
+    children: ["can_view_dashboard"],
+  },
+  {
+    label: "Broker Commission",
+    children: [
+      "can_view_broker_commission_summary",
+      "can_view_broker_commission_data_sets",
+    ],
+  },
+  {
+    label: "Accounting",
+    children: [
+      "can_view_accounting_summary",
+      "can_view_accounting_check_details",
+    ],
+  },
+  {
+    label: "Reporting",
+    children: ["can_view_reporting_report_xxx"],
+  },
+  {
+    label: "Database",
+    children: [
+      "can_view_database_ksolve_invoices",
+      "can_view_database_kehe_velocity",
+      "can_view_database_product_list",
+      "can_view_database_locations",
+      "can_view_database_deduction_type",
+    ],
+  },
+  {
+    label: "Admin",
+    children: ["can_view_admin", "can_view_user_account"],
+  },
+  {
+    label: "Special",
+    children: ["can_reprocess_invoices"],
+  },
 ];
 
 export default function UserAccountView() {
-  const [rows, setRows] = useState<UserPermissionRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [savingEmail, setSavingEmail] = useState<string | null>(null);
+  const [rows, setRows] = useState<Row[]>([]);
   const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState<string[]>([]);
   const [newEmail, setNewEmail] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [expandedEmails, setExpandedEmails] = useState<string[]>([]);
-
-  const loadRows = async () => {
-    try {
-      setLoading(true);
-
-      const { data, error } = await supabase
-        .from("user_permissions")
-        .select("*")
-        .order("email", { ascending: true });
-
-      if (error) throw error;
-
-      setRows(data || []);
-    } catch (error) {
-      console.error("Failed to load user permissions:", error);
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   useEffect(() => {
-    loadRows();
+    load();
   }, []);
 
-  const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((row) => row.email.toLowerCase().includes(q));
-  }, [rows, search]);
+  const load = async () => {
+    const { data } = await supabase
+      .from("user_permissions")
+      .select("*")
+      .order("email");
 
-  const updateLocalRow = (
-    email: string,
-    field: keyof UserPermissionRow,
-    value: boolean
-  ) => {
-    setRows((prev) =>
-      prev.map((row) =>
-        row.email === email ? { ...row, [field]: value } : row
-      )
-    );
+    setRows(data || []);
   };
 
-  const handleToggle = async (
-    email: string,
-    field: keyof UserPermissionRow,
-    value: boolean
-  ) => {
-    updateLocalRow(email, field, value);
-    setSavingEmail(email);
-
-    try {
-      const { error } = await supabase
-        .from("user_permissions")
-        .update({
-          [field]: value,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("email", email);
-
-      if (error) throw error;
-    } catch (error) {
-      console.error("Failed to update permission:", error);
-      updateLocalRow(email, field, !value);
-      alert("Failed to save permission change.");
-    } finally {
-      setSavingEmail(null);
-    }
-  };
-
-  const handleAddUser = async () => {
-    const email = newEmail.trim().toLowerCase();
-    if (!email) return;
-
-    setAdding(true);
-
-    try {
-      const { error } = await supabase.from("user_permissions").insert({
-        email,
-        can_view_dashboard: false,
-        can_view_broker_commission_summary: false,
-        can_view_broker_commission_data_sets: false,
-        can_view_accounting_summary: false,
-        can_view_accounting_check_details: false,
-        can_view_reporting_report_xxx: false,
-        can_view_database_ksolve_invoices: false,
-        can_view_database_kehe_velocity: false,
-        can_view_database_product_list: false,
-        can_view_database_locations: false,
-        can_view_database_deduction_type: false,
-        can_view_admin: false,
-        can_view_user_account: false,
-        can_reprocess_invoices: false,
-      });
-
-      if (error) throw error;
-
-      setNewEmail("");
-      await loadRows();
-    } catch (error: any) {
-      alert(error.message || "Failed to add user.");
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  const toggleExpanded = (email: string) => {
-    setExpandedEmails((prev) =>
+  const toggleExpand = (email: string) => {
+    setExpanded((prev) =>
       prev.includes(email)
-        ? prev.filter((item) => item !== email)
+        ? prev.filter((e) => e !== email)
         : [...prev, email]
     );
   };
 
+  const update = async (email: string, field: string, value: boolean) => {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.email === email ? { ...r, [field]: value } : r
+      )
+    );
+
+    await supabase
+      .from("user_permissions")
+      .update({ [field]: value })
+      .eq("email", email);
+  };
+
+  // 🔥 GROUP TOGGLE (MAIN FEATURE)
+  const toggleGroup = (row: Row, group: any, value: boolean) => {
+    group.children.forEach((field: string) => {
+      update(row.email, field, value);
+    });
+  };
+
+  // 🔥 AUTO CHECK GROUP STATE
+  const isGroupChecked = (row: Row, group: any) => {
+    return group.children.every((f: string) => row[f]);
+  };
+
+  const filtered = rows.filter((r) =>
+    r.email.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const addUser = async () => {
+    if (!newEmail) return;
+
+    await supabase.from("user_permissions").insert({
+      email: newEmail.toLowerCase(),
+    });
+
+    setNewEmail("");
+    load();
+  };
+
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <div className="rounded-3xl border bg-white p-6">
+      {/* HEADER */}
+      <div className="flex justify-between mb-6">
         <div>
-          <h2 className="text-xl font-bold text-slate-900">User Account</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Manage access per user and control which menus they can see.
+          <h2 className="text-xl font-bold">User Account</h2>
+          <p className="text-sm text-gray-500">
+            Control access by menu
           </p>
         </div>
 
-        <div className="flex w-full max-w-xl flex-col gap-3 sm:flex-row">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by email"
-              className="rounded-2xl pl-10"
-            />
-          </div>
-
+        <div className="flex gap-2">
           <Input
+            placeholder="Search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <Input
+            placeholder="Email"
             value={newEmail}
             onChange={(e) => setNewEmail(e.target.value)}
-            placeholder="Add user email"
-            className="rounded-2xl sm:w-64"
           />
-
-          <Button
-            type="button"
-            className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-            onClick={handleAddUser}
-            disabled={adding}
-          >
-            <UserPlus className="mr-2 h-4 w-4" />
-            {adding ? "Adding..." : "Add User"}
+          <Button onClick={addUser}>
+            <UserPlus className="h-4 w-4 mr-1" /> Add
           </Button>
         </div>
       </div>
 
-      {loading ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-          Loading user permissions...
-        </div>
-      ) : filteredRows.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-          No users found.
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {filteredRows.map((row) => {
-            const isExpanded = expandedEmails.includes(row.email);
+      {/* USERS */}
+      <div className="space-y-4">
+        {filtered.map((row) => {
+          const open = expanded.includes(row.email);
 
-            return (
+          return (
+            <div key={row.id} className="border rounded-xl">
+              {/* USER HEADER */}
               <div
-                key={row.id}
-                className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
+                onClick={() => toggleExpand(row.email)}
+                className="flex justify-between p-4 cursor-pointer hover:bg-gray-50"
               >
-                <button
-                  type="button"
-                  onClick={() => toggleExpanded(row.email)}
-                  className="flex w-full items-center justify-between px-4 py-4 text-left hover:bg-slate-50"
-                >
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">
-                      {row.email}
-                    </div>
-                    <div className="text-xs text-slate-400">
-                      {savingEmail === row.email ? "Saving..." : "Click to view access"}
-                    </div>
+                <div>
+                  <div className="font-semibold">{row.email}</div>
+                  <div className="text-xs text-gray-400">
+                    Click to manage access
                   </div>
+                </div>
 
-                  <div className="flex items-center gap-2 text-slate-500">
-                    {isExpanded ? (
-                      <ChevronDown className="h-4 w-4" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4" />
-                    )}
-                  </div>
-                </button>
+                {open ? <ChevronDown /> : <ChevronRight />}
+              </div>
 
-                {isExpanded && (
-                  <div className="border-t border-slate-200 px-4 py-4">
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {PERMISSION_FIELDS.map((permission) => (
-                        <label
-                          key={String(permission.key)}
-                          className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                        >
-                          <span className="pr-3 text-slate-700">
-                            {permission.label}
-                          </span>
+              {/* PERMISSIONS */}
+              {open && (
+                <div className="p-4 border-t space-y-4">
+                  {PERMISSION_GROUPS.map((group) => {
+                    const checked = isGroupChecked(row, group);
+
+                    return (
+                      <div key={group.label} className="border rounded-lg p-3">
+                        {/* MAIN MENU CHECK */}
+                        <div className="flex justify-between mb-2">
+                          <span className="font-semibold">{group.label}</span>
                           <input
                             type="checkbox"
-                            checked={Boolean(row[permission.key])}
+                            checked={checked}
                             onChange={(e) =>
-                              handleToggle(
-                                row.email,
-                                permission.key,
-                                e.target.checked
-                              )
+                              toggleGroup(row, group, e.target.checked)
                             }
-                            className="h-4 w-4"
                           />
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+                        </div>
+
+                        {/* SUB MENU */}
+                        <div className="grid grid-cols-2 gap-2">
+                          {group.children.map((field: string) => (
+                            <label
+                              key={field}
+                              className="flex justify-between border p-2 rounded"
+                            >
+                              <span className="text-sm">{field.replace("can_view_", "")}</span>
+                              <input
+                                type="checkbox"
+                                checked={row[field] || false}
+                                onChange={(e) =>
+                                  update(row.email, field, e.target.checked)
+                                }
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
