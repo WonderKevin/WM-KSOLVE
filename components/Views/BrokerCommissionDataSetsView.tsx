@@ -129,7 +129,6 @@ function findRetailer(custName: string, locations: LocationRow[]) {
   const firstTwoCustomer = getFirstTwoWords(trimmed);
 
   if (!firstTwoCustomer) return "";
-
   if (/^DC\s*\d+$/i.test(trimmed)) return "";
 
   const match = locations.find((loc) => {
@@ -146,6 +145,7 @@ export default function BrokerCommissionDataSetsView() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
+  const [bulkSaving, setBulkSaving] = useState(false);
 
   const [selectedType, setSelectedType] = useState("All Types");
   const [selectedRetailer, setSelectedRetailer] = useState("All Retailers");
@@ -164,6 +164,11 @@ export default function BrokerCommissionDataSetsView() {
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [editRetailerChoice, setEditRetailerChoice] = useState("");
   const [customRetailer, setCustomRetailer] = useState("");
+
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [bulkRetailerChoice, setBulkRetailerChoice] = useState("Fresh Thyme");
+  const [bulkCustomRetailer, setBulkCustomRetailer] = useState("");
 
   const notifRef = useRef<HTMLDivElement | null>(null);
   const typeFilterRef = useRef<HTMLDivElement | null>(null);
@@ -361,11 +366,37 @@ export default function BrokerCommissionDataSetsView() {
         row.retailer.toLowerCase().includes(keyword) ||
         row.amt.toFixed(2).includes(keyword);
 
-      return (
-        matchesType && matchesRetailer && matchesMonth && matchesSearch
-      );
+      return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
   }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
+
+  const visibleRowIds = useMemo(() => data.map((row) => row.id), [data]);
+
+  const allVisibleSelected =
+    visibleRowIds.length > 0 &&
+    visibleRowIds.every((id) => selectedRowIds.includes(id));
+
+  const someVisibleSelected =
+    visibleRowIds.some((id) => selectedRowIds.includes(id)) && !allVisibleSelected;
+
+  const toggleRowSelection = (rowId: string) => {
+    setSelectedRowIds((prev) =>
+      prev.includes(rowId)
+        ? prev.filter((id) => id !== rowId)
+        : [...prev, rowId]
+    );
+  };
+
+  const toggleSelectAllVisible = () => {
+    if (allVisibleSelected) {
+      setSelectedRowIds((prev) =>
+        prev.filter((id) => !visibleRowIds.includes(id))
+      );
+      return;
+    }
+
+    setSelectedRowIds((prev) => Array.from(new Set([...prev, ...visibleRowIds])));
+  };
 
   const startEditing = (row: Row) => {
     setEditingRowId(row.id);
@@ -429,6 +460,59 @@ export default function BrokerCommissionDataSetsView() {
 
     setSavingRowId(null);
     cancelEditing();
+  };
+
+  const openBulkEdit = () => {
+    setBulkRetailerChoice("Fresh Thyme");
+    setBulkCustomRetailer("");
+    setBulkEditOpen(true);
+  };
+
+  const cancelBulkEdit = () => {
+    setBulkEditOpen(false);
+    setBulkRetailerChoice("Fresh Thyme");
+    setBulkCustomRetailer("");
+  };
+
+  const saveBulkRetailerEdit = async () => {
+    const finalRetailer =
+      bulkRetailerChoice === "Add new retailer..."
+        ? bulkCustomRetailer.trim()
+        : bulkRetailerChoice.trim();
+
+    if (!finalRetailer || selectedRowIds.length === 0) return;
+
+    setBulkSaving(true);
+
+    const payload = selectedRowIds.map((rowId) => ({
+      dataset_id: rowId,
+      retailer: finalRetailer,
+      updated_at: new Date().toISOString(),
+    }));
+
+    const { error } = await supabase
+      .from("retailer_overrides")
+      .upsert(payload, { onConflict: "dataset_id" });
+
+    if (error) {
+      console.error("Failed to save bulk retailer overrides:", error);
+      setBulkSaving(false);
+      return;
+    }
+
+    setRows((prev) =>
+      prev.map((row) =>
+        selectedRowIds.includes(row.id)
+          ? { ...row, retailer: finalRetailer }
+          : row
+      )
+    );
+
+    setBulkSaving(false);
+    setBulkEditOpen(false);
+    setSelectedRowIds([]);
+    setBulkRetailerChoice("Fresh Thyme");
+    setBulkCustomRetailer("");
   };
 
   return (
@@ -622,6 +706,94 @@ export default function BrokerCommissionDataSetsView() {
         </div>
       </div>
 
+      {selectedRowIds.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <div className="text-sm font-medium text-slate-700">
+            {selectedRowIds.length} row{selectedRowIds.length > 1 ? "s" : ""} selected
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-2xl"
+              onClick={openBulkEdit}
+            >
+              Edit selected
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-2xl"
+              onClick={() => setSelectedRowIds([])}
+            >
+              Clear selection
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {bulkEditOpen && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3">
+            <h3 className="text-sm font-semibold text-slate-900">
+              Edit retailer for {selectedRowIds.length} selected row{selectedRowIds.length > 1 ? "s" : ""}
+            </h3>
+          </div>
+
+          <div className="flex flex-wrap items-start gap-3">
+            <select
+              value={bulkRetailerChoice}
+              onChange={(e) => setBulkRetailerChoice(e.target.value)}
+              className="min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+            >
+              {EDITABLE_RETAILERS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+
+            {bulkRetailerChoice === "Add new retailer..." && (
+              <input
+                type="text"
+                value={bulkCustomRetailer}
+                onChange={(e) => setBulkCustomRetailer(e.target.value)}
+                placeholder="Enter retailer"
+                className="min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+              />
+            )}
+
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                className="rounded-2xl"
+                onClick={saveBulkRetailerEdit}
+                disabled={
+                  bulkSaving ||
+                  !(
+                    bulkRetailerChoice &&
+                    (bulkRetailerChoice !== "Add new retailer..." ||
+                      bulkCustomRetailer.trim())
+                  )
+                }
+              >
+                Save selected
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-2xl"
+                onClick={cancelBulkEdit}
+                disabled={bulkSaving}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div
         className="overflow-auto rounded-2xl border bg-white"
         style={{ maxHeight: "70vh" }}
@@ -629,6 +801,17 @@ export default function BrokerCommissionDataSetsView() {
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 bg-gray-50 shadow-sm">
             <tr>
+              <th className="w-[52px] p-3 text-left">
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someVisibleSelected;
+                  }}
+                  onChange={toggleSelectAllVisible}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+              </th>
               <th className="p-3 text-left font-semibold">Type</th>
               <th className="p-3 text-left font-semibold">Month</th>
               <th className="p-3 text-left font-semibold">Invoice</th>
@@ -643,13 +826,13 @@ export default function BrokerCommissionDataSetsView() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="p-6 text-center text-gray-500">
+                <td colSpan={10} className="p-6 text-center text-gray-500">
                   Loading data...
                 </td>
               </tr>
             ) : data.length === 0 ? (
               <tr>
-                <td colSpan={9} className="p-6 text-center text-gray-500">
+                <td colSpan={10} className="p-6 text-center text-gray-500">
                   No data found.
                 </td>
               </tr>
@@ -657,9 +840,18 @@ export default function BrokerCommissionDataSetsView() {
               data.map((row) => {
                 const isEditing = editingRowId === row.id;
                 const isSaving = savingRowId === row.id;
+                const isSelected = selectedRowIds.includes(row.id);
 
                 return (
                   <tr key={row.id} className="border-t">
+                    <td className="p-3">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleRowSelection(row.id)}
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                    </td>
                     <td className="p-3">{row.type}</td>
                     <td className="p-3">{formatMonthShort(row.month)}</td>
                     <td className="p-3 font-medium">{row.invoice}</td>
