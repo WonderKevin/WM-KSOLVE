@@ -4,6 +4,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
+type RetailerName =
+  | "Fresh Thyme"
+  | "Kroger"
+  | "INFRA & Others"
+  | "HEB"
+  | "";
+
 type DatasetRow = {
   id: string;
   month: string;
@@ -26,25 +33,11 @@ type LocationRow = {
   retailer: string;
 };
 
-type VelocityRowRaw = Record<string, any>;
-
-type VelocityRow = {
-  invoiceNumber: string;
-  month: string;
-  totalCheckAmount: number;
-};
-
-type RetailerName =
-  | "Fresh Thyme"
-  | "Kroger"
-  | "INFRA & Others"
-  | "HEB"
-  | "";
-
 type DetailLine = {
   label: string;
   amount: number;
-  kind: "invoice" | "deduction";
+  kind: "invoice-summary" | "invoice-detail" | "deduction";
+  children?: DetailLine[];
 };
 
 type RetailerBlock = {
@@ -97,8 +90,7 @@ function parseMonthOrder(value: string) {
   };
 
   const trimmed = String(value || "").trim();
-
-  let match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
+  const match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
   if (!match) return -1;
 
   const monthName = match[1].toLowerCase();
@@ -107,9 +99,7 @@ function parseMonthOrder(value: string) {
 
   if (monthIndex === undefined) return -1;
 
-  const year =
-    yearRaw.length === 2 ? Number(`20${yearRaw}`) : Number(yearRaw);
-
+  const year = yearRaw.length === 2 ? Number(`20${yearRaw}`) : Number(yearRaw);
   return year * 100 + monthIndex;
 }
 
@@ -210,21 +200,13 @@ function inferRetailer(
   return categorizeRetailerName(match.retailer);
 }
 
-function getDeductionBucket(type: string) {
+function isWmInvoiceType(type: string) {
   const t = normalizeText(type);
-
-  if (t.includes("SPOIL")) return "Spoils";
-  if (t.includes("PASS THRU")) return "Pass Thru Deduction";
-  if (t.includes("PULL OUT")) return "Pull Out";
-  if (t.includes("SETUP")) return "Setup Fee";
-  if (t.includes("ALLOWANCE")) return "Allowance";
-
-  return type || "Deduction";
+  return t === "WMINVOICE" || t === "WM INVOICE";
 }
 
-function isDeductionType(type: string) {
-  const t = normalizeText(type);
-  return !t.includes("WM INVOICE");
+function getTypeLabel(type: string) {
+  return String(type || "").trim() || "Deduction";
 }
 
 function isHebPullout(type: string, retailer: RetailerName) {
@@ -232,71 +214,39 @@ function isHebPullout(type: string, retailer: RetailerName) {
   return retailer === "HEB" && t.includes("PULL OUT");
 }
 
-function mapVelocityRow(raw: VelocityRowRaw): VelocityRow | null {
-  const invoiceNumber =
-    raw.invoice_number ??
-    raw.invoice ??
-    raw.wm_invoice ??
-    raw.wm_invoice_number ??
-    raw.invoice_no ??
-    raw["Invoice Number"] ??
-    raw["Invoice"] ??
-    "";
-
-  const month =
-    raw.month ??
-    raw.invoice_month ??
-    raw.statement_month ??
-    raw["Month"] ??
-    "";
-
-  const totalCheckAmount = Number(
-    raw.total_check_amount ??
-      raw.check_amount ??
-      raw.amount ??
-      raw.total ??
-      raw["Total Check Amount"] ??
-      raw["Check Amount"] ??
-      0
-  );
-
-  if (!invoiceNumber) return null;
-
-  return {
-    invoiceNumber: normalizeInvoice(invoiceNumber),
-    month: month ?? "",
-    totalCheckAmount,
-  };
+function retailerSortValue(retailer: RetailerName) {
+  if (retailer === "Kroger") return 0;
+  if (retailer === "Fresh Thyme") return 1;
+  if (retailer === "INFRA & Others") return 2;
+  if (retailer === "HEB") return 3;
+  return 9;
 }
 
-function mergeDetailLines(lines: DetailLine[]) {
+function mergeByLabel(lines: DetailLine[]) {
   const map = new Map<string, DetailLine>();
 
   for (const line of lines) {
-    const key = `${line.kind}__${line.label}`;
-    const existing = map.get(key);
-
+    const existing = map.get(line.label);
     if (existing) {
       existing.amount += line.amount;
     } else {
-      map.set(key, { ...line });
+      map.set(line.label, { ...line });
     }
   }
 
-  return Array.from(map.values()).sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === "invoice" ? -1 : 1;
-    return a.label.localeCompare(b.label);
-  });
+  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
 }
 
 export default function BrokerCommissionSummaryView() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<DatasetRow[]>([]);
-  const [velocityRows, setVelocityRows] = useState<VelocityRow[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState("All Months");
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>(
     {}
   );
-  const [selectedMonth, setSelectedMonth] = useState("All Months");
+  const [expandedInvoiceRows, setExpandedInvoiceRows] = useState<
+    Record<string, boolean>
+  >({});
 
   useEffect(() => {
     const load = async () => {
@@ -306,20 +256,17 @@ export default function BrokerCommissionSummaryView() {
         { data: datasetData, error: datasetError },
         { data: overrideData, error: overrideError },
         { data: locationData, error: locationError },
-        { data: velocityData, error: velocityError },
       ] = await Promise.all([
         supabase
           .from("broker_commission_datasets")
           .select("id, month, invoice, type, upc, item, cust_name, amt"),
         supabase.from("retailer_overrides").select("dataset_id, retailer"),
         supabase.from("locations").select("customer, retailer"),
-        supabase.from("kehe_velocity").select("*"),
       ]);
 
       if (datasetError) console.error("Failed to load datasets:", datasetError);
       if (overrideError) console.error("Failed to load overrides:", overrideError);
       if (locationError) console.error("Failed to load locations:", locationError);
-      if (velocityError) console.error("Failed to load kehe_velocity:", velocityError);
 
       const overrides = new Map<string, string>(
         ((overrideData ?? []) as RetailerOverrideRow[]).map((r) => [
@@ -340,7 +287,7 @@ export default function BrokerCommissionSummaryView() {
         return {
           id: r.id,
           month: r.month ?? "",
-          invoice: r.invoice ?? "",
+          invoice: normalizeInvoice(r.invoice ?? ""),
           type: r.type ?? "",
           upc: r.upc ?? "",
           item: r.item ?? "",
@@ -350,12 +297,7 @@ export default function BrokerCommissionSummaryView() {
         };
       });
 
-      const normalizedVelocity = (velocityData ?? [])
-        .map(mapVelocityRow)
-        .filter(Boolean) as VelocityRow[];
-
       setRows(hydratedRows);
-      setVelocityRows(normalizedVelocity);
 
       const months = Array.from(
         new Set(hydratedRows.map((r) => r.month).filter(Boolean))
@@ -382,14 +324,6 @@ export default function BrokerCommissionSummaryView() {
       selectedMonth === "All Months"
         ? rows
         : rows.filter((r) => r.month === selectedMonth);
-
-    const velocityByInvoice = new Map<string, VelocityRow[]>();
-    for (const row of velocityRows) {
-      const key = normalizeInvoice(row.invoiceNumber);
-      const existing = velocityByInvoice.get(key) ?? [];
-      existing.push(row);
-      velocityByInvoice.set(key, existing);
-    }
 
     const monthMap = new Map<string, MonthSummary>();
 
@@ -426,62 +360,34 @@ export default function BrokerCommissionSummaryView() {
       return block;
     };
 
-    const wmInvoiceRetailersByMonth = new Map<
+    const wmInvoiceGroups = new Map<
       string,
-      Map<string, Set<RetailerName>>
+      Map<RetailerName, Map<string, number>>
     >();
 
     for (const row of datasetRows) {
       const retailer = (row.retailer ?? "") as RetailerName;
       if (!retailer) continue;
+      if (!isWmInvoiceType(row.type)) continue;
 
-      const monthKey = row.month;
-      const invoiceKey = normalizeInvoice(row.invoice);
-
-      if (!wmInvoiceRetailersByMonth.has(monthKey)) {
-        wmInvoiceRetailersByMonth.set(monthKey, new Map());
+      if (!wmInvoiceGroups.has(row.month)) {
+        wmInvoiceGroups.set(row.month, new Map());
       }
+      const monthRetailers = wmInvoiceGroups.get(row.month)!;
 
-      const invoiceMap = wmInvoiceRetailersByMonth.get(monthKey)!;
-      if (!invoiceMap.has(invoiceKey)) {
-        invoiceMap.set(invoiceKey, new Set());
+      if (!monthRetailers.has(retailer)) {
+        monthRetailers.set(retailer, new Map());
       }
+      const invoiceMap = monthRetailers.get(retailer)!;
 
-      invoiceMap.get(invoiceKey)!.add(retailer);
-    }
-
-    for (const [month, invoiceMap] of wmInvoiceRetailersByMonth.entries()) {
-      const monthSummary = ensureMonth(month);
-
-      for (const [invoiceKey, retailers] of invoiceMap.entries()) {
-        const velocityMatches = velocityByInvoice.get(invoiceKey) ?? [];
-        const totalCheckAmount = velocityMatches.reduce(
-          (sum, v) => sum + v.totalCheckAmount,
-          0
-        );
-
-        if (!totalCheckAmount) continue;
-
-        retailers.forEach((retailer) => {
-          const block = ensureRetailerBlock(monthSummary, retailer);
-          block.wmInvoiceTotal += totalCheckAmount;
-          block.details.push({
-            label: `WM Invoice ${invoiceKey}`,
-            amount: totalCheckAmount,
-            kind: "invoice",
-          });
-        });
-      }
+      invoiceMap.set(row.invoice, (invoiceMap.get(row.invoice) ?? 0) + row.amt);
     }
 
     const krogerFirstInvoiceByMonth = new Map<string, string | null>();
-
-    for (const [month, invoiceMap] of wmInvoiceRetailersByMonth.entries()) {
-      const krogerInvoices = Array.from(invoiceMap.entries())
-        .filter(([, retailers]) => retailers.has("Kroger"))
-        .map(([invoice]) => invoice)
-        .sort();
-
+    for (const [month, monthRetailers] of wmInvoiceGroups.entries()) {
+      const krogerInvoices = Array.from(
+        monthRetailers.get("Kroger")?.keys() ?? []
+      ).sort();
       krogerFirstInvoiceByMonth.set(month, krogerInvoices[0] ?? null);
     }
 
@@ -495,55 +401,96 @@ export default function BrokerCommissionSummaryView() {
     for (const row of datasetRows) {
       const retailer = (row.retailer ?? "") as RetailerName;
       if (!retailer) continue;
-      if (!isDeductionType(row.type)) continue;
 
       const monthSummary = ensureMonth(row.month);
+      const block = ensureRetailerBlock(monthSummary, retailer);
+
+      if (isWmInvoiceType(row.type)) {
+        continue;
+      }
 
       let targetRetailer: RetailerName = retailer;
-      let targetLabel = getDeductionBucket(row.type);
+      let typeLabel = getTypeLabel(row.type);
 
       if (retailer === "INFRA & Others") {
         targetRetailer = "Kroger";
-        const firstKrogerInvoice = krogerFirstInvoiceByMonth.get(row.month);
-        if (firstKrogerInvoice) {
-          targetLabel = `${targetLabel} (allocated to WM Invoice ${firstKrogerInvoice})`;
-        }
       }
 
       if (isHebPullout(row.type, retailer)) {
         const hasDc19 = dc19ByMonth.get(row.month) ?? false;
         if (!hasDc19) {
           const firstInvoice = Array.from(
-            wmInvoiceRetailersByMonth.get(row.month)?.keys() ?? []
-          ).sort()[0];
+            wmInvoiceGroups.get(row.month)?.values() ?? []
+          )
+            .flatMap((invoiceMap) => Array.from(invoiceMap.keys()))
+            .sort()[0];
 
           if (firstInvoice) {
-            targetLabel = `${targetLabel} (allocated to WM Invoice ${firstInvoice})`;
+            typeLabel = `${typeLabel} (allocated to WM Invoice ${firstInvoice})`;
           }
         } else {
-          targetLabel = `${targetLabel} (DC19)`;
+          typeLabel = `${typeLabel} (DC19)`;
         }
       }
 
-      const block = ensureRetailerBlock(monthSummary, targetRetailer);
-      block.deductionsTotal += row.amt;
-      block.details.push({
-        label: targetLabel,
+      const targetBlock = ensureRetailerBlock(monthSummary, targetRetailer);
+      targetBlock.deductionsTotal += row.amt;
+      targetBlock.details.push({
+        label: typeLabel,
         amount: -Math.abs(row.amt),
         kind: "deduction",
       });
     }
 
+    for (const [month, monthRetailers] of wmInvoiceGroups.entries()) {
+      const monthSummary = ensureMonth(month);
+
+      for (const [retailer, invoiceMap] of monthRetailers.entries()) {
+        const block = ensureRetailerBlock(monthSummary, retailer);
+
+        const invoiceChildren: DetailLine[] = Array.from(invoiceMap.entries())
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([invoice, amount]) => ({
+            label: `WM Invoice ${invoice}`,
+            amount,
+            kind: "invoice-detail",
+          }));
+
+        const wmInvoiceTotal = invoiceChildren.reduce(
+          (sum, line) => sum + line.amount,
+          0
+        );
+
+        block.wmInvoiceTotal += wmInvoiceTotal;
+        block.details.push({
+          label: "WM Invoice",
+          amount: wmInvoiceTotal,
+          kind: "invoice-summary",
+          children: invoiceChildren,
+        });
+      }
+    }
+
     for (const monthSummary of monthMap.values()) {
       for (const block of monthSummary.retailers) {
-        block.details = mergeDetailLines(block.details);
+        const invoiceSummaryLines = block.details.filter(
+          (d) => d.kind === "invoice-summary"
+        );
+
+        const deductionLines = mergeByLabel(
+          block.details.filter((d) => d.kind === "deduction")
+        );
+
+        block.details = [...invoiceSummaryLines, ...deductionLines];
         block.total = block.wmInvoiceTotal - block.deductionsTotal;
         block.brokerFee = block.retailer === "Kroger" ? block.total * 0.04 : 0;
       }
 
-      monthSummary.retailers.sort((a, b) =>
-        a.retailer.localeCompare(b.retailer)
-      );
+      monthSummary.retailers.sort((a, b) => {
+        const diff = retailerSortValue(a.retailer) - retailerSortValue(b.retailer);
+        if (diff !== 0) return diff;
+        return a.retailer.localeCompare(b.retailer);
+      });
 
       monthSummary.grandWmInvoiceTotal = monthSummary.retailers.reduce(
         (sum, r) => sum + r.wmInvoiceTotal,
@@ -566,7 +513,7 @@ export default function BrokerCommissionSummaryView() {
     return Array.from(monthMap.values()).sort(
       (a, b) => parseMonthOrder(b.month) - parseMonthOrder(a.month)
     );
-  }, [rows, velocityRows, selectedMonth]);
+  }, [rows, selectedMonth]);
 
   return (
     <div className="space-y-6">
@@ -576,7 +523,7 @@ export default function BrokerCommissionSummaryView() {
             Broker Commission Summary
           </h2>
           <p className="text-sm text-slate-500">
-            WM Invoice totals, deductions, net, and broker fee.
+            Summary by month and retailer.
           </p>
         </div>
 
@@ -698,9 +645,7 @@ export default function BrokerCommissionSummaryView() {
                           </div>
                         </div>
                         <div>
-                          <div className="text-xs text-slate-500">
-                            4% Broker Fee
-                          </div>
+                          <div className="text-xs text-slate-500">4% Broker Fee</div>
                           <div className="font-semibold text-emerald-700">
                             {formatMoney(block.brokerFee)}
                           </div>
@@ -720,20 +665,65 @@ export default function BrokerCommissionSummaryView() {
                             </tr>
                           </thead>
                           <tbody>
-                            {block.details.map((detail, idx) => (
-                              <tr key={`${detail.label}-${idx}`} className="border-t">
-                                <td className="px-4 py-3">{detail.label}</td>
-                                <td
-                                  className={`px-4 py-3 text-right font-medium ${
-                                    detail.kind === "deduction"
-                                      ? "text-red-600"
-                                      : "text-slate-900"
-                                  }`}
-                                >
-                                  {formatMoney(detail.amount)}
-                                </td>
-                              </tr>
-                            ))}
+                            {block.details.map((detail, idx) => {
+                              if (detail.kind === "invoice-summary") {
+                                const key = `${monthSummary.month}-${block.retailer}-wm-${idx}`;
+                                const rowExpanded = expandedInvoiceRows[key] ?? false;
+
+                                return (
+                                  <React.Fragment key={key}>
+                                    <tr className="border-t">
+                                      <td className="px-4 py-3">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setExpandedInvoiceRows((prev) => ({
+                                              ...prev,
+                                              [key]: !rowExpanded,
+                                            }))
+                                          }
+                                          className="flex items-center gap-2 font-medium text-slate-900"
+                                        >
+                                          {rowExpanded ? (
+                                            <ChevronDown className="h-4 w-4 text-slate-500" />
+                                          ) : (
+                                            <ChevronRight className="h-4 w-4 text-slate-500" />
+                                          )}
+                                          {detail.label}
+                                        </button>
+                                      </td>
+                                      <td className="px-4 py-3 text-right font-medium text-slate-900">
+                                        {formatMoney(detail.amount)}
+                                      </td>
+                                    </tr>
+
+                                    {rowExpanded &&
+                                      (detail.children ?? []).map((child, childIdx) => (
+                                        <tr
+                                          key={`${key}-child-${childIdx}`}
+                                          className="border-t bg-slate-50/50"
+                                        >
+                                          <td className="px-4 py-3 pl-10 text-slate-700">
+                                            {child.label}
+                                          </td>
+                                          <td className="px-4 py-3 text-right font-medium text-slate-700">
+                                            {formatMoney(child.amount)}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                  </React.Fragment>
+                                );
+                              }
+
+                              return (
+                                <tr key={`${detail.label}-${idx}`} className="border-t">
+                                  <td className="px-4 py-3">{detail.label}</td>
+                                  <td className="px-4 py-3 text-right font-medium text-red-600">
+                                    {formatMoney(detail.amount)}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
