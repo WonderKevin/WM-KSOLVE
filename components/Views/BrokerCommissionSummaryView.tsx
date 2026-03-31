@@ -383,14 +383,6 @@ export default function BrokerCommissionSummaryView() {
       invoiceMap.set(row.invoice, (invoiceMap.get(row.invoice) ?? 0) + row.amt);
     }
 
-    const krogerFirstInvoiceByMonth = new Map<string, string | null>();
-    for (const [month, monthRetailers] of wmInvoiceGroups.entries()) {
-      const krogerInvoices = Array.from(
-        monthRetailers.get("Kroger")?.keys() ?? []
-      ).sort();
-      krogerFirstInvoiceByMonth.set(month, krogerInvoices[0] ?? null);
-    }
-
     const dc19ByMonth = new Map<string, boolean>();
     for (const row of datasetRows) {
       if (normalizeText(row.cust_name) === "DC19") {
@@ -403,7 +395,6 @@ export default function BrokerCommissionSummaryView() {
       if (!retailer) continue;
 
       const monthSummary = ensureMonth(row.month);
-      const block = ensureRetailerBlock(monthSummary, retailer);
 
       if (isWmInvoiceType(row.type)) {
         continue;
@@ -412,10 +403,8 @@ export default function BrokerCommissionSummaryView() {
       let targetRetailer: RetailerName = retailer;
       let typeLabel = getTypeLabel(row.type);
 
-      if (retailer === "INFRA & Others") {
-        targetRetailer = "Kroger";
-      }
-
+      // Keep INFRA & Others in its own block.
+      // Do not reroute its totals into Kroger.
       if (isHebPullout(row.type, retailer)) {
         const hasDc19 = dc19ByMonth.get(row.month) ?? false;
         if (!hasDc19) {
@@ -697,8 +686,8 @@ export default function BrokerCommissionSummaryView() {
                                       </td>
                                     </tr>
 
-                                    {rowExpanded &&
-                                      (detail.children ?? []).map((child, childIdx) => (
+                                    {detail.children?.map((child, childIdx) =>
+                                      rowExpanded ? (
                                         <tr
                                           key={`${key}-child-${childIdx}`}
                                           className="border-t bg-slate-50/50"
@@ -710,7 +699,8 @@ export default function BrokerCommissionSummaryView() {
                                             {formatMoney(child.amount)}
                                           </td>
                                         </tr>
-                                      ))}
+                                      ) : null
+                                    )}
                                   </React.Fragment>
                                 );
                               }
