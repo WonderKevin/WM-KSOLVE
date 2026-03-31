@@ -19,7 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
 import DashboardView from "@/components/Views/DashboardView";
-import BrokerCommissionView from "@/components/Views/BrokerCommissionView";
+import BrokerCommissionSummaryView from "@/components/Views/BrokerCommissionSummaryView";
 import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDataSetsView";
 import AccountingSummaryView from "@/components/Views/AccountingSummaryView";
 import CheckDetailsView from "@/components/Views/CheckDetailsView";
@@ -65,7 +65,9 @@ function SidebarItem({
   const isOpen = openGroups[item.key];
   const isActive = activeKey === item.key;
   const Icon = item.icon;
-  const hasActiveChild = item.children?.some((child: any) => child.key === activeKey);
+  const hasActiveChild = item.children?.some(
+    (child: any) => child.key === activeKey
+  );
 
   if (!isGroup) {
     return (
@@ -95,14 +97,20 @@ function SidebarItem({
           }))
         }
         className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
-          hasActiveChild ? "bg-slate-100 text-slate-900" : "text-slate-700 hover:bg-slate-100"
+          hasActiveChild
+            ? "bg-slate-100 text-slate-900"
+            : "text-slate-700 hover:bg-slate-100"
         }`}
       >
         <div className="flex items-center gap-3">
           <Icon className="h-4 w-4" />
           <span>{item.label}</span>
         </div>
-        {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        {isOpen ? (
+          <ChevronDown className="h-4 w-4" />
+        ) : (
+          <ChevronRight className="h-4 w-4" />
+        )}
       </button>
 
       {isOpen && (
@@ -131,7 +139,9 @@ function PlaceholderView({ title }: { title: string }) {
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
       <div className="text-lg font-semibold text-slate-900">{title}</div>
-      <p className="mt-2 text-sm text-slate-500">This page is ready for the next build.</p>
+      <p className="mt-2 text-sm text-slate-500">
+        This page is ready for the next build.
+      </p>
     </div>
   );
 }
@@ -232,17 +242,39 @@ export default function WMKsolveApp() {
     const allowedKeys: string[] = [];
 
     if (permissions.can_view_dashboard) allowedKeys.push("dashboard");
-    if (permissions.can_view_broker_commission_summary) allowedKeys.push("broker-commission-summary");
-    if (permissions.can_view_broker_commission_data_sets) allowedKeys.push("broker-commission-data-sets");
-    if (permissions.can_view_accounting_summary) allowedKeys.push("accounting-summary");
-    if (permissions.can_view_accounting_check_details) allowedKeys.push("accounting-check-details");
-    if (permissions.can_view_reporting_report_xxx) allowedKeys.push("reporting-report-xxx");
-    if (permissions.can_view_database_ksolve_invoices) allowedKeys.push("database-ksolve-invoices");
-    if (permissions.can_view_database_kehe_velocity) allowedKeys.push("database-kehe-velocity");
-    if (permissions.can_view_database_product_list) allowedKeys.push("database-product-list");
-    if (permissions.can_view_database_locations) allowedKeys.push("database-locations");
-    if (permissions.can_view_database_deduction_type) allowedKeys.push("database-deduction-type");
-    if (permissions.can_view_user_account) allowedKeys.push("admin-user-account");
+    if (permissions.can_view_broker_commission_summary) {
+      allowedKeys.push("broker-commission-summary");
+    }
+    if (permissions.can_view_broker_commission_data_sets) {
+      allowedKeys.push("broker-commission-data-sets");
+    }
+    if (permissions.can_view_accounting_summary) {
+      allowedKeys.push("accounting-summary");
+    }
+    if (permissions.can_view_accounting_check_details) {
+      allowedKeys.push("accounting-check-details");
+    }
+    if (permissions.can_view_reporting_report_xxx) {
+      allowedKeys.push("reporting-report-xxx");
+    }
+    if (permissions.can_view_database_ksolve_invoices) {
+      allowedKeys.push("database-ksolve-invoices");
+    }
+    if (permissions.can_view_database_kehe_velocity) {
+      allowedKeys.push("database-kehe-velocity");
+    }
+    if (permissions.can_view_database_product_list) {
+      allowedKeys.push("database-product-list");
+    }
+    if (permissions.can_view_database_locations) {
+      allowedKeys.push("database-locations");
+    }
+    if (permissions.can_view_database_deduction_type) {
+      allowedKeys.push("database-deduction-type");
+    }
+    if (permissions.can_view_user_account) {
+      allowedKeys.push("admin-user-account");
+    }
 
     if (!allowedKeys.includes(activeKey)) {
       setActiveKey(allowedKeys[0] || "dashboard");
@@ -266,12 +298,19 @@ export default function WMKsolveApp() {
     const items: any[] = [];
 
     if (permissions.can_view_dashboard) {
-      items.push({ label: "Dashboard", icon: LayoutDashboard, key: "dashboard" });
+      items.push({
+        label: "Dashboard",
+        icon: LayoutDashboard,
+        key: "dashboard",
+      });
     }
 
     const brokerChildren = [
       permissions.can_view_broker_commission_summary
-        ? { label: "Broker Commission Summary", key: "broker-commission-summary" }
+        ? {
+            label: "Broker Commission Summary",
+            key: "broker-commission-summary",
+          }
         : null,
       permissions.can_view_broker_commission_data_sets
         ? { label: "Data Sets", key: "broker-commission-data-sets" }
@@ -385,7 +424,7 @@ export default function WMKsolveApp() {
       case "dashboard":
         return <DashboardView />;
       case "broker-commission-summary":
-        return <BrokerCommissionView />;
+        return <BrokerCommissionSummaryView />;
       case "broker-commission-data-sets":
         return <BrokerCommissionDataSetsView />;
       case "accounting-summary":
@@ -403,8 +442,8 @@ export default function WMKsolveApp() {
             isAdmin={userEmail.toLowerCase() === "kevin@wondermonday.com"}
           />
         );
-        case "database-kehe-velocity":
-          return <KeHeVelocityView />;
+      case "database-kehe-velocity":
+        return <KeHeVelocityView />;
       case "database-product-list":
         return <ProductListView />;
       case "database-locations":
