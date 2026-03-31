@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, MapPin, Loader2, X } from "lucide-react";
+import { Plus, MapPin, Loader2, X, Search } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
 interface Location {
@@ -21,6 +21,7 @@ export default function LocationsView() {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
   const [form, setForm] = useState({
     customer: "",
@@ -30,28 +31,28 @@ export default function LocationsView() {
 
   const fetchLocations = async () => {
     setLoading(true);
-  
+
     try {
       const pageSize = 1000;
       let from = 0;
       let allRows: Location[] = [];
-  
+
       while (true) {
         const { data, error } = await supabase
           .from("locations")
           .select("*")
           .order("customer", { ascending: true })
           .range(from, from + pageSize - 1);
-  
+
         if (error) throw error;
-  
+
         const batch = data ?? [];
         allRows = [...allRows, ...batch];
-  
+
         if (batch.length < pageSize) break;
         from += pageSize;
       }
-  
+
       setLocations(allRows);
     } catch (error) {
       console.error("Error fetching locations:", error);
@@ -64,6 +65,19 @@ export default function LocationsView() {
   useEffect(() => {
     fetchLocations();
   }, []);
+
+  const filteredLocations = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    if (!query) return locations;
+
+    return locations.filter((loc) =>
+      [loc.customer, loc.retailer_area, loc.retailer]
+        .join(" ")
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [locations, search]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
@@ -111,11 +125,13 @@ export default function LocationsView() {
   return (
     <>
       <Card className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="mb-6 flex items-center justify-between">
+        <div className="mb-6 flex items-center justify-between gap-4">
           <div>
             <h2 className="text-xl font-bold text-slate-900">Locations</h2>
             <p className="mt-1 text-sm text-slate-500">
-              {locations.length.toLocaleString()} location{locations.length !== 1 ? "s" : ""}
+              {filteredLocations.length.toLocaleString()} of{" "}
+              {locations.length.toLocaleString()} location
+              {locations.length !== 1 ? "s" : ""}
             </p>
           </div>
 
@@ -139,25 +155,50 @@ export default function LocationsView() {
             <p className="text-sm">No locations yet. Add one to get started.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-100">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  <th className="px-4 py-3">Customer</th>
-                  <th className="px-4 py-3">Retailer Area</th>
-                  <th className="px-4 py-3">Retailer</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {locations.map((loc) => (
-                  <tr key={loc.id} className="transition-colors hover:bg-slate-50">
-                    <td className="px-4 py-3 font-medium text-slate-800">{loc.customer}</td>
-                    <td className="px-4 py-3 text-slate-600">{loc.retailer_area}</td>
-                    <td className="px-4 py-3 text-slate-600">{loc.retailer}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="rounded-xl border border-slate-100 bg-white">
+            <div className="sticky top-0 z-20 rounded-t-xl border-b border-slate-100 bg-white">
+              <div className="p-4">
+                <div className="relative max-w-md">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search customer, retailer area, or retailer..."
+                    className="rounded-xl pl-10"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4 bg-slate-50 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                <div>Customer</div>
+                <div>Retailer Area</div>
+                <div>Retailer</div>
+              </div>
+            </div>
+
+            <div className="max-h-[560px] overflow-y-auto overflow-x-auto">
+              {filteredLocations.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-16 text-slate-400">
+                  <Search className="h-8 w-8" />
+                  <p className="text-sm">No matching locations found.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {filteredLocations.map((loc) => (
+                    <div
+                      key={loc.id}
+                      className="grid grid-cols-3 gap-4 px-4 py-3 text-sm transition-colors hover:bg-slate-50"
+                    >
+                      <div className="font-medium text-slate-800">
+                        {loc.customer}
+                      </div>
+                      <div className="text-slate-600">{loc.retailer_area}</div>
+                      <div className="text-slate-600">{loc.retailer}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </Card>
