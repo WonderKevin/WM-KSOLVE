@@ -399,9 +399,37 @@ export default function BrokerCommissionDataSetsView() {
   };
 
   const startEditing = (row: Row) => {
-    setEditingRowId(row.id);
     setMenuRowId(null);
-
+  
+    const shouldEditSelected =
+      selectedRowIds.length > 1 && selectedRowIds.includes(row.id);
+  
+    if (shouldEditSelected) {
+      const selectedRows = rows.filter((r) => selectedRowIds.includes(r.id));
+      const firstRetailer = selectedRows[0]?.retailer ?? "";
+  
+      if (
+        firstRetailer === "Fresh Thyme" ||
+        firstRetailer === "Kroger" ||
+        firstRetailer === "INFRA & Others" ||
+        firstRetailer === "HEB"
+      ) {
+        setBulkRetailerChoice(firstRetailer);
+        setBulkCustomRetailer("");
+      } else if (firstRetailer) {
+        setBulkRetailerChoice("Add new retailer...");
+        setBulkCustomRetailer(firstRetailer);
+      } else {
+        setBulkRetailerChoice("Fresh Thyme");
+        setBulkCustomRetailer("");
+      }
+  
+      setBulkEditOpen(true);
+      return;
+    }
+  
+    setEditingRowId(row.id);
+  
     if (
       row.retailer === "Fresh Thyme" ||
       row.retailer === "Kroger" ||
