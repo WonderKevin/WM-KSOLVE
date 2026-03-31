@@ -13,6 +13,7 @@ type Row = {
   upc: string;
   item: string;
   custName: string;
+  retailer: string;
   amt: number;
 };
 
@@ -20,7 +21,6 @@ type InvoiceRow = {
   invoice_number: string;
 };
 
-// "March '26" format
 function formatMonthShort(value: string): string {
   if (!value) return value;
   if (/^[A-Za-z]+ '\d{2}$/.test(value.trim())) return value.trim();
@@ -61,8 +61,8 @@ export default function BrokerCommissionDataSetsView() {
         { data: invoiceData, error: invoiceError },
       ] = await Promise.all([
         supabase
-          .from("broker_commission_datasets")
-          .select("id, month, invoice, type, upc, item, cust_name, amt")
+          .from("broker_commission_datasets_with_retailer")
+          .select("id, month, invoice, type, upc, item, cust_name, retailer, amt")
           .order("invoice", { ascending: false }),
         supabase.from("invoices").select("invoice_number"),
       ]);
@@ -80,6 +80,7 @@ export default function BrokerCommissionDataSetsView() {
             upc: row.upc ?? "",
             item: row.item ?? "",
             custName: row.cust_name ?? "",
+            retailer: row.retailer ?? "",
             amt: Number(row.amt ?? 0),
           }))
         );
@@ -150,6 +151,7 @@ export default function BrokerCommissionDataSetsView() {
         row.upc.toLowerCase().includes(keyword) ||
         row.item.toLowerCase().includes(keyword) ||
         row.custName.toLowerCase().includes(keyword) ||
+        row.retailer.toLowerCase().includes(keyword) ||
         row.amt.toFixed(2).includes(keyword);
 
       return matchesType && matchesSearch;
@@ -168,7 +170,7 @@ export default function BrokerCommissionDataSetsView() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search type, invoice, UPC, item, customer..."
+              placeholder="Search type, invoice, UPC, item, customer, retailer..."
               className="w-full rounded-2xl border border-slate-200 bg-white py-2 pl-10 pr-10 text-sm outline-none transition focus:border-slate-300"
             />
             {search && (
@@ -286,19 +288,20 @@ export default function BrokerCommissionDataSetsView() {
               <th className="p-3 text-left font-semibold">UPC</th>
               <th className="p-3 text-left font-semibold">Item</th>
               <th className="p-3 text-left font-semibold">Customer</th>
+              <th className="p-3 text-left font-semibold">Retailer</th>
               <th className="p-3 text-left font-semibold">Amount</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={7} className="p-6 text-center text-gray-500">
+                <td colSpan={8} className="p-6 text-center text-gray-500">
                   Loading data...
                 </td>
               </tr>
             ) : data.length === 0 ? (
               <tr>
-                <td colSpan={7} className="p-6 text-center text-gray-500">
+                <td colSpan={8} className="p-6 text-center text-gray-500">
                   No data found.
                 </td>
               </tr>
@@ -311,6 +314,7 @@ export default function BrokerCommissionDataSetsView() {
                   <td className="p-3">{row.upc}</td>
                   <td className="p-3">{row.item}</td>
                   <td className="p-3">{row.custName}</td>
+                  <td className="p-3">{row.retailer || "-"}</td>
                   <td className="p-3">${row.amt.toFixed(2)}</td>
                 </tr>
               ))
