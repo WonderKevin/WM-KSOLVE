@@ -73,149 +73,73 @@ function normalizeText(value: string) {
     .trim();
 }
 
-function normalizeToken(token: string) {
-  const map: Record<string, string> = {
-    MKT: "MARKET",
-    MKTB: "MARKET",
-    MRKT: "MARKET",
-    CTR: "CENTER",
-    CTRS: "CENTER",
-    COOP: "COOPERATIVE",
-    CO OP: "COOPERATIVE",
-    FRMR: "FARMER",
-    FRMRS: "FARMERS",
-    FT: "FORT",
-    ST: "SAINT",
-    CS: "",
-    DBA: "DBA",
-    I: "",
-    IN: "IN",
-    TX: "TX",
-  };
-
-  return map[token] ?? token;
-}
-
-function tokenize(value: string) {
+function getFirstTwoWords(value: string) {
   return normalizeText(value)
     .split(" ")
-    .map(normalizeToken)
-    .filter(Boolean);
-}
-
-function hasToken(tokens: string[], token: string) {
-  return tokens.includes(token);
-}
-
-function commonPrefixCount(a: string[], b: string[]) {
-  let count = 0;
-  const max = Math.min(a.length, b.length);
-  for (let i = 0; i < max; i += 1) {
-    if (a[i] !== b[i]) break;
-    count += 1;
-  }
-  return count;
-}
-
-function overlapCount(a: string[], b: string[]) {
-  const bSet = new Set(b);
-  return a.filter((token) => bSet.has(token)).length;
-}
-
-function scoreLocationMatch(custName: string, locationCustomer: string) {
-  const a = tokenize(custName);
-  const b = tokenize(locationCustomer);
-
-  if (!a.length || !b.length) return -1;
-
-  const aJoined = a.join(" ");
-  const bJoined = b.join(" ");
-
-  if (aJoined === bJoined) return 5000;
-
-  const prefix = commonPrefixCount(a, b);
-  const overlap = overlapCount(a, b);
-  const aNums = a.filter((t) => /^\d+$/.test(t));
-  const bSet = new Set(b);
-  const numericMatches = aNums.filter((n) => bSet.has(n)).length;
-
-  let score = 0;
-
-  score += prefix * 220;
-  score += overlap * 35;
-  score += numericMatches * 160;
-
-  if (bJoined.includes(aJoined) || aJoined.includes(bJoined)) score += 220;
-
-  const firstTwoA = a.slice(0, 2).join(" ");
-  const firstTwoB = b.slice(0, 2).join(" ");
-  if (firstTwoA && firstTwoA === firstTwoB) score += 180;
-
-  const firstThreeA = a.slice(0, 3).join(" ");
-  const firstThreeB = b.slice(0, 3).join(" ");
-  if (firstThreeA && firstThreeA === firstThreeB) score += 260;
-
-  const lastA = a[a.length - 1];
-  if (lastA && bSet.has(lastA)) score += 60;
-
-  return score;
-}
-
-function categorizeRetailerName(rawRetailer: string) {
-  const normalized = normalizeText(rawRetailer);
-
-  if (!normalized) return "";
-
-  if (normalized.includes("KROGER") || normalized === "KRO") return "Kroger";
-  if (normalized.includes("FRESH THYME")) return "Fresh Thyme";
-  if (normalized === "HEB" || normalized.includes("H E B")) return "HEB";
-
-  return "INFRA & Others";
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" ");
 }
 
 function directRetailerFromCustomer(custName: string) {
-  const tokens = tokenize(custName);
+  const customer = normalizeText(custName);
 
-  if (!tokens.length) return "";
-
-  if (hasToken(tokens, "KROGER") || hasToken(tokens, "KRO")) return "Kroger";
+  if (!customer) return "";
 
   if (
-    tokens.includes("FRESH") && tokens.includes("THYME")
+    customer.startsWith("KROGER ") ||
+    customer.startsWith("KRO ") ||
+    customer.includes(" KROGER ") ||
+    customer.includes(" KRO ")
+  ) {
+    return "Kroger";
+  }
+
+  if (
+    customer.includes("FRESH THYME") ||
+    customer.includes("FRSH THYME") ||
+    customer.includes("FRMR MKT")
   ) {
     return "Fresh Thyme";
   }
 
-  if (tokens.includes("HEB") || (tokens.includes("H") && tokens.includes("E") && tokens.includes("B"))) {
+  if (customer === "HEB" || customer.startsWith("HEB ")) {
     return "HEB";
   }
 
   return "";
 }
 
+function categorizeRetailerName(rawRetailer: string) {
+  const retailer = normalizeText(rawRetailer);
+
+  if (!retailer) return "";
+  if (retailer.includes("KROGER") || retailer === "KRO") return "Kroger";
+  if (retailer.includes("FRESH THYME")) return "Fresh Thyme";
+  if (retailer === "HEB" || retailer.includes(" HEB ")) return "HEB";
+
+  return "INFRA & Others";
+}
+
 function findRetailer(custName: string, locations: LocationRow[]) {
   const directRetailer = directRetailerFromCustomer(custName);
   if (directRetailer) return directRetailer;
 
-  const normalizedCustomer = normalizeText(custName);
-  if (!normalizedCustomer) return "";
+  const trimmed = custName.trim();
+  const firstTwoCustomer = getFirstTwoWords(trimmed);
 
-  if (/^DC\s*\d+$/i.test(custName.trim())) return "";
+  if (!firstTwoCustomer) return "";
 
-  let bestRetailer = "";
-  let bestScore = -1;
+  if (/^DC\s*\d+$/i.test(trimmed)) return "";
 
-  for (const loc of locations) {
-    const score = scoreLocationMatch(custName, loc.customer);
-    if (score > bestScore) {
-      bestScore = score;
-      bestRetailer = loc.retailer || "";
-    }
-  }
+  const match = locations.find((loc) => {
+    const firstTwoLocation = getFirstTwoWords(loc.customer);
+    return firstTwoCustomer === firstTwoLocation;
+  });
 
-  if (bestScore < 320) return "";
+  if (!match) return "";
 
-  return categorizeRetailerName(bestRetailer);
+  return categorizeRetailerName(match.retailer);
 }
 
 export default function BrokerCommissionDataSetsView() {
