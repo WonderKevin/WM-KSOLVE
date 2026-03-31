@@ -13,6 +13,7 @@ type DatasetRow = {
   item: string;
   cust_name: string;
   amt: number;
+  retailer?: RetailerName;
 };
 
 type RetailerOverrideRow = {
@@ -58,6 +59,10 @@ type RetailerBlock = {
 type MonthSummary = {
   month: string;
   retailers: RetailerBlock[];
+  grandWmInvoiceTotal: number;
+  grandDeductionsTotal: number;
+  grandNetTotal: number;
+  grandBrokerFeeTotal: number;
 };
 
 function formatMoney(value: number) {
@@ -73,6 +78,39 @@ function formatMonthShort(value: string): string {
   const m = value.trim().match(/^([A-Za-z]+)\s+(\d{4})$/);
   if (m) return `${m[1]} '${m[2].slice(-2)}`;
   return value;
+}
+
+function parseMonthOrder(value: string) {
+  const monthMap: Record<string, number> = {
+    january: 0,
+    february: 1,
+    march: 2,
+    april: 3,
+    may: 4,
+    june: 5,
+    july: 6,
+    august: 7,
+    september: 8,
+    october: 9,
+    november: 10,
+    december: 11,
+  };
+
+  const trimmed = String(value || "").trim();
+
+  let match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
+  if (!match) return -1;
+
+  const monthName = match[1].toLowerCase();
+  const yearRaw = match[2];
+  const monthIndex = monthMap[monthName];
+
+  if (monthIndex === undefined) return -1;
+
+  const year =
+    yearRaw.length === 2 ? Number(`20${yearRaw}`) : Number(yearRaw);
+
+  return year * 100 + monthIndex;
 }
 
 function normalizeText(value: string) {
@@ -189,25 +227,27 @@ function isDeductionType(type: string) {
   return !t.includes("WM INVOICE");
 }
 
-function isHehPullout(type: string, retailer: RetailerName) {
+function isHebPullout(type: string, retailer: RetailerName) {
   const t = normalizeText(type);
   return retailer === "HEB" && t.includes("PULL OUT");
 }
 
 function mapVelocityRow(raw: VelocityRowRaw): VelocityRow | null {
-  // Adjust these field names only if your kehe_velocity schema differs.
   const invoiceNumber =
     raw.invoice_number ??
     raw.invoice ??
     raw.wm_invoice ??
     raw.wm_invoice_number ??
     raw.invoice_no ??
+    raw["Invoice Number"] ??
+    raw["Invoice"] ??
     "";
 
   const month =
     raw.month ??
     raw.invoice_month ??
     raw.statement_month ??
+    raw["Month"] ??
     "";
 
   const totalCheckAmount = Number(
@@ -215,6 +255,8 @@ function mapVelocityRow(raw: VelocityRowRaw): VelocityRow | null {
       raw.check_amount ??
       raw.amount ??
       raw.total ??
+      raw["Total Check Amount"] ??
+      raw["Check Amount"] ??
       0
   );
 
@@ -222,9 +264,29 @@ function mapVelocityRow(raw: VelocityRowRaw): VelocityRow | null {
 
   return {
     invoiceNumber: normalizeInvoice(invoiceNumber),
-    month,
+    month: month ?? "",
     totalCheckAmount,
   };
+}
+
+function mergeDetailLines(lines: DetailLine[]) {
+  const map = new Map<string, DetailLine>();
+
+  for (const line of lines) {
+    const key = `${line.kind}__${line.label}`;
+    const existing = map.get(key);
+
+    if (existing) {
+      existing.amount += line.amount;
+    } else {
+      map.set(key, { ...line });
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "invoice" ? -1 : 1;
+    return a.label.localeCompare(b.label);
+  });
 }
 
 export default function BrokerCommissionSummaryView() {
@@ -234,6 +296,7 @@ export default function BrokerCommissionSummaryView() {
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>(
     {}
   );
+  const [selectedMonth, setSelectedMonth] = useState("All Months");
 
   useEffect(() => {
     const load = async () => {
@@ -248,15 +311,9 @@ export default function BrokerCommissionSummaryView() {
         supabase
           .from("broker_commission_datasets")
           .select("id, month, invoice, type, upc, item, cust_name, amt"),
-        supabase
-          .from("retailer_overrides")
-          .select("dataset_id, retailer"),
-        supabase
-          .from("locations")
-          .select("customer, retailer"),
-        supabase
-          .from("kehe_velocity")
-          .select("*"),
+        supabase.from("retailer_overrides").select("dataset_id, retailer"),
+        supabase.from("locations").select("customer, retailer"),
+        supabase.from("kehe_velocity").select("*"),
       ]);
 
       if (datasetError) console.error("Failed to load datasets:", datasetError);
@@ -287,36 +344,44 @@ export default function BrokerCommissionSummaryView() {
           type: r.type ?? "",
           upc: r.upc ?? "",
           item: r.item ?? "",
-          cust_name: override || inferred ? r.cust_name ?? "" : r.cust_name ?? "",
+          cust_name: r.cust_name ?? "",
           amt: Number(r.amt ?? 0),
-          retailer: (override || inferred || "") as any,
-        } as DatasetRow & { retailer: RetailerName };
+          retailer: (override || inferred || "") as RetailerName,
+        };
       });
 
       const normalizedVelocity = (velocityData ?? [])
         .map(mapVelocityRow)
         .filter(Boolean) as VelocityRow[];
 
-      setRows(hydratedRows as any);
+      setRows(hydratedRows);
       setVelocityRows(normalizedVelocity);
 
       const months = Array.from(
         new Set(hydratedRows.map((r) => r.month).filter(Boolean))
-      );
-      setExpandedMonths(
-        Object.fromEntries(months.map((m) => [m, true]))
-      );
+      ).sort((a, b) => parseMonthOrder(b) - parseMonthOrder(a));
 
+      setExpandedMonths(Object.fromEntries(months.map((m) => [m, true])));
       setLoading(false);
     };
 
     load();
   }, []);
 
-  const summary = useMemo(() => {
-    type HydratedDatasetRow = DatasetRow & { retailer?: RetailerName };
+  const monthOptions = useMemo(() => {
+    return [
+      "All Months",
+      ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean))).sort(
+        (a, b) => parseMonthOrder(b) - parseMonthOrder(a)
+      ),
+    ];
+  }, [rows]);
 
-    const datasetRows = rows as HydratedDatasetRow[];
+  const summary = useMemo(() => {
+    const datasetRows =
+      selectedMonth === "All Months"
+        ? rows
+        : rows.filter((r) => r.month === selectedMonth);
 
     const velocityByInvoice = new Map<string, VelocityRow[]>();
     for (const row of velocityRows) {
@@ -333,12 +398,19 @@ export default function BrokerCommissionSummaryView() {
         monthMap.set(month, {
           month,
           retailers: [],
+          grandWmInvoiceTotal: 0,
+          grandDeductionsTotal: 0,
+          grandNetTotal: 0,
+          grandBrokerFeeTotal: 0,
         });
       }
       return monthMap.get(month)!;
     };
 
-    const ensureRetailerBlock = (monthSummary: MonthSummary, retailer: RetailerName) => {
+    const ensureRetailerBlock = (
+      monthSummary: MonthSummary,
+      retailer: RetailerName
+    ) => {
       let block = monthSummary.retailers.find((r) => r.retailer === retailer);
       if (!block) {
         block = {
@@ -354,11 +426,13 @@ export default function BrokerCommissionSummaryView() {
       return block;
     };
 
-    // 1) Build WM invoice totals from velocity
-    const wmInvoiceRetailersByMonth = new Map<string, Map<string, Set<RetailerName>>>();
+    const wmInvoiceRetailersByMonth = new Map<
+      string,
+      Map<string, Set<RetailerName>>
+    >();
 
     for (const row of datasetRows) {
-      const retailer = (row as any).retailer as RetailerName;
+      const retailer = (row.retailer ?? "") as RetailerName;
       if (!retailer) continue;
 
       const monthKey = row.month;
@@ -400,7 +474,6 @@ export default function BrokerCommissionSummaryView() {
       }
     }
 
-    // 2) Deductions from Data Sets
     const krogerFirstInvoiceByMonth = new Map<string, string | null>();
 
     for (const [month, invoiceMap] of wmInvoiceRetailersByMonth.entries()) {
@@ -420,7 +493,7 @@ export default function BrokerCommissionSummaryView() {
     }
 
     for (const row of datasetRows) {
-      const retailer = ((row as any).retailer ?? "") as RetailerName;
+      const retailer = (row.retailer ?? "") as RetailerName;
       if (!retailer) continue;
       if (!isDeductionType(row.type)) continue;
 
@@ -437,12 +510,13 @@ export default function BrokerCommissionSummaryView() {
         }
       }
 
-      if (isHehPullout(row.type, retailer)) {
+      if (isHebPullout(row.type, retailer)) {
         const hasDc19 = dc19ByMonth.get(row.month) ?? false;
         if (!hasDc19) {
           const firstInvoice = Array.from(
             wmInvoiceRetailersByMonth.get(row.month)?.keys() ?? []
           ).sort()[0];
+
           if (firstInvoice) {
             targetLabel = `${targetLabel} (allocated to WM Invoice ${firstInvoice})`;
           }
@@ -460,30 +534,68 @@ export default function BrokerCommissionSummaryView() {
       });
     }
 
-    // 3) Final totals
     for (const monthSummary of monthMap.values()) {
       for (const block of monthSummary.retailers) {
+        block.details = mergeDetailLines(block.details);
         block.total = block.wmInvoiceTotal - block.deductionsTotal;
-        block.brokerFee = block.total * 0.04;
-
-        block.details.sort((a, b) => {
-          if (a.kind !== b.kind) return a.kind === "invoice" ? -1 : 1;
-          return a.label.localeCompare(b.label);
-        });
+        block.brokerFee = block.retailer === "Kroger" ? block.total * 0.04 : 0;
       }
 
       monthSummary.retailers.sort((a, b) =>
         a.retailer.localeCompare(b.retailer)
       );
+
+      monthSummary.grandWmInvoiceTotal = monthSummary.retailers.reduce(
+        (sum, r) => sum + r.wmInvoiceTotal,
+        0
+      );
+      monthSummary.grandDeductionsTotal = monthSummary.retailers.reduce(
+        (sum, r) => sum + r.deductionsTotal,
+        0
+      );
+      monthSummary.grandNetTotal = monthSummary.retailers.reduce(
+        (sum, r) => sum + r.total,
+        0
+      );
+      monthSummary.grandBrokerFeeTotal = monthSummary.retailers.reduce(
+        (sum, r) => sum + r.brokerFee,
+        0
+      );
     }
 
-    return Array.from(monthMap.values()).sort((a, b) =>
-      a.month.localeCompare(b.month)
+    return Array.from(monthMap.values()).sort(
+      (a, b) => parseMonthOrder(b.month) - parseMonthOrder(a.month)
     );
-  }, [rows, velocityRows]);
+  }, [rows, velocityRows, selectedMonth]);
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white px-4 py-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">
+            Broker Commission Summary
+          </h2>
+          <p className="text-sm text-slate-500">
+            WM Invoice totals, deductions, net, and broker fee.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-slate-500">Month</label>
+          <select
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+          >
+            {monthOptions.map((month) => (
+              <option key={month} value={month}>
+                {month === "All Months" ? month : formatMonthShort(month)}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {loading ? (
         <div className="rounded-2xl border bg-white p-6 text-sm text-slate-500">
           Loading broker commission summary...
@@ -524,12 +636,42 @@ export default function BrokerCommissionSummaryView() {
                     </div>
                   </div>
                 </div>
+
+                <div className="grid grid-cols-2 gap-4 text-right md:grid-cols-4">
+                  <div>
+                    <div className="text-xs text-slate-500">WM Invoice</div>
+                    <div className="font-semibold text-slate-900">
+                      {formatMoney(monthSummary.grandWmInvoiceTotal)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Deductions</div>
+                    <div className="font-semibold text-red-600">
+                      {formatMoney(-monthSummary.grandDeductionsTotal)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Net</div>
+                    <div className="font-semibold text-slate-900">
+                      {formatMoney(monthSummary.grandNetTotal)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">4% Fee</div>
+                    <div className="font-semibold text-emerald-700">
+                      {formatMoney(monthSummary.grandBrokerFeeTotal)}
+                    </div>
+                  </div>
+                </div>
               </button>
 
               {isExpanded && (
                 <div className="space-y-4 border-t px-5 py-5">
                   {monthSummary.retailers.map((block) => (
-                    <div key={`${monthSummary.month}-${block.retailer}`} className="rounded-2xl border border-slate-200">
+                    <div
+                      key={`${monthSummary.month}-${block.retailer}`}
+                      className="rounded-2xl border border-slate-200"
+                    >
                       <div className="grid grid-cols-1 gap-4 border-b px-4 py-4 md:grid-cols-5">
                         <div>
                           <div className="text-xs text-slate-500">Retailer</div>
@@ -556,7 +698,9 @@ export default function BrokerCommissionSummaryView() {
                           </div>
                         </div>
                         <div>
-                          <div className="text-xs text-slate-500">4% Broker Fee</div>
+                          <div className="text-xs text-slate-500">
+                            4% Broker Fee
+                          </div>
                           <div className="font-semibold text-emerald-700">
                             {formatMoney(block.brokerFee)}
                           </div>
@@ -567,8 +711,12 @@ export default function BrokerCommissionSummaryView() {
                         <table className="w-full text-sm">
                           <thead className="bg-slate-50">
                             <tr>
-                              <th className="px-4 py-3 text-left font-semibold">Line Item</th>
-                              <th className="px-4 py-3 text-right font-semibold">Amount</th>
+                              <th className="px-4 py-3 text-left font-semibold">
+                                Line Item
+                              </th>
+                              <th className="px-4 py-3 text-right font-semibold">
+                                Amount
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
