@@ -35,11 +35,11 @@ type LocationRow = {
 
 type VelocityRowRaw = Record<string, any>;
 
-type VelocityRow = {
-  invoiceNumber: string;
+type VelocitySplitRow = {
   month: string;
+  invoice: string;
   retailer: RetailerName;
-  totalCheckAmount: number;
+  amount: number;
 };
 
 type DetailLine = {
@@ -246,8 +246,8 @@ function mergeByLabel(lines: DetailLine[]) {
   return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
 }
 
-function mapVelocityRow(raw: VelocityRowRaw): VelocityRow | null {
-  const invoiceNumber =
+function mapVelocityRow(raw: VelocityRowRaw): VelocitySplitRow | null {
+  const invoice =
     raw.invoice_number ??
     raw.invoice ??
     raw.wm_invoice ??
@@ -255,6 +255,13 @@ function mapVelocityRow(raw: VelocityRowRaw): VelocityRow | null {
     raw.invoice_no ??
     raw["Invoice Number"] ??
     raw["Invoice"] ??
+    "";
+
+  const month =
+    raw.month ??
+    raw.invoice_month ??
+    raw.statement_month ??
+    raw["Month"] ??
     "";
 
   const retailerRaw =
@@ -266,14 +273,7 @@ function mapVelocityRow(raw: VelocityRowRaw): VelocityRow | null {
     raw["Customer"] ??
     "";
 
-  const month =
-    raw.month ??
-    raw.invoice_month ??
-    raw.statement_month ??
-    raw["Month"] ??
-    "";
-
-  const totalCheckAmount = Number(
+  const amount = Number(
     raw.total_check_amount ??
       raw.check_amount ??
       raw.amount ??
@@ -283,20 +283,20 @@ function mapVelocityRow(raw: VelocityRowRaw): VelocityRow | null {
       0
   );
 
-  if (!invoiceNumber) return null;
+  if (!invoice) return null;
 
   return {
-    invoiceNumber: normalizeInvoice(invoiceNumber),
     month: String(month || ""),
+    invoice: normalizeInvoice(invoice),
     retailer: categorizeRetailerName(retailerRaw),
-    totalCheckAmount,
+    amount,
   };
 }
 
 export default function BrokerCommissionSummaryView() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<DatasetRow[]>([]);
-  const [velocityRows, setVelocityRows] = useState<VelocityRow[]>([]);
+  const [velocityRows, setVelocityRows] = useState<VelocitySplitRow[]>([]);
   const [selectedMonth, setSelectedMonth] = useState("All Months");
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>(
     {}
@@ -359,7 +359,7 @@ export default function BrokerCommissionSummaryView() {
 
       const normalizedVelocity = (velocityData ?? [])
         .map(mapVelocityRow)
-        .filter(Boolean) as VelocityRow[];
+        .filter(Boolean) as VelocitySplitRow[];
 
       setRows(hydratedRows);
       setVelocityRows(normalizedVelocity);
@@ -430,35 +430,81 @@ export default function BrokerCommissionSummaryView() {
       return block;
     };
 
-    const wmInvoicesSeen = new Set<string>();
+    // 1) Full WM invoice totals from Data Sets
+    const wmInvoiceTotalsByMonthInvoice = new Map<string, number>();
 
-    // WM invoice totals come from Kehe Velocity and split by retailer there.
+    for (const row of datasetRows) {
+      if (!isWmInvoiceType(row.type)) continue;
+      const key = `${row.month}__${row.invoice}`;
+      wmInvoiceTotalsByMonthInvoice.set(
+        key,
+        (wmInvoiceTotalsByMonthInvoice.get(key) ?? 0) + row.amt
+      );
+    }
+
+    // 2) Carveouts from Kehe Velocity for non-Kroger retailers only
+    const carveoutsByMonthInvoiceRetailer = new Map<string, number>();
+
     for (const row of velocityRowsForMonth) {
-      if (!row.retailer) continue;
+      if (!row.retailer || row.retailer === "Kroger") continue;
 
-      const monthSummary = ensureMonth(row.month);
-      const block = ensureRetailerBlock(monthSummary, row.retailer);
+      const key = `${row.month}__${row.invoice}__${row.retailer}`;
+      carveoutsByMonthInvoiceRetailer.set(
+        key,
+        (carveoutsByMonthInvoiceRetailer.get(key) ?? 0) + row.amount
+      );
+    }
 
-      block.wmInvoiceTotal += row.totalCheckAmount;
+    // 3) Build WM Invoice blocks:
+    //    non-Kroger gets carveout amount from Velocity
+    //    Kroger gets remainder
+    for (const [monthInvoiceKey, totalAmount] of wmInvoiceTotalsByMonthInvoice.entries()) {
+      const [month, invoice] = monthInvoiceKey.split("__");
+      const monthSummary = ensureMonth(month);
 
-      const invoiceKey = `${row.month}__${row.retailer}__${row.invoiceNumber}`;
-      if (!wmInvoicesSeen.has(invoiceKey)) {
-        wmInvoicesSeen.add(invoiceKey);
+      const carveouts: Array<{ retailer: RetailerName; amount: number }> = [];
+
+      (["Fresh Thyme", "INFRA & Others", "HEB"] as RetailerName[]).forEach(
+        (retailer) => {
+          const carveoutKey = `${month}__${invoice}__${retailer}`;
+          const amount = carveoutsByMonthInvoiceRetailer.get(carveoutKey) ?? 0;
+          if (amount > 0) {
+            carveouts.push({ retailer, amount });
+          }
+        }
+      );
+
+      const carveoutTotal = carveouts.reduce((sum, c) => sum + c.amount, 0);
+      const krogerAmount = Math.max(totalAmount - carveoutTotal, 0);
+
+      const allocations: Array<{ retailer: RetailerName; amount: number }> = [];
+
+      if (krogerAmount > 0) {
+        allocations.push({ retailer: "Kroger", amount: krogerAmount });
+      }
+
+      carveouts.forEach((c) => allocations.push(c));
+
+      allocations.forEach((allocation) => {
+        const block = ensureRetailerBlock(monthSummary, allocation.retailer);
+        block.wmInvoiceTotal += allocation.amount;
+
         block.details.push({
           label: "WM Invoice",
-          amount: row.totalCheckAmount,
+          amount: allocation.amount,
           kind: "invoice-summary",
           children: [
             {
-              label: `WM Invoice ${row.invoiceNumber}`,
-              amount: row.totalCheckAmount,
+              label: `WM Invoice ${invoice}`,
+              amount: allocation.amount,
               kind: "invoice-detail",
             },
           ],
         });
-      }
+      });
     }
 
+    // 4) Deductions from Data Sets stay in their own retailer block
     const dc19ByMonth = new Map<string, boolean>();
     for (const row of datasetRows) {
       if (normalizeText(row.cust_name) === "DC19") {
@@ -479,9 +525,9 @@ export default function BrokerCommissionSummaryView() {
       if (isHebPullout(row.type, retailer)) {
         const hasDc19 = dc19ByMonth.get(row.month) ?? false;
         if (!hasDc19) {
-          const firstInvoice = velocityRowsForMonth
-            .filter((v) => v.month === row.month)
-            .map((v) => v.invoiceNumber)
+          const firstInvoice = Array.from(wmInvoiceTotalsByMonthInvoice.keys())
+            .filter((key) => key.startsWith(`${row.month}__`))
+            .map((key) => key.split("__")[1])
             .sort()[0];
 
           if (firstInvoice) {
@@ -500,6 +546,7 @@ export default function BrokerCommissionSummaryView() {
       });
     }
 
+    // 5) Finalize
     for (const monthSummary of monthMap.values()) {
       for (const block of monthSummary.retailers) {
         const invoiceSummaryLines = block.details.filter(
@@ -511,7 +558,10 @@ export default function BrokerCommissionSummaryView() {
             const existing = acc.find((a) => a.label === line.label);
             if (existing) {
               existing.amount += line.amount;
-              existing.children = [...(existing.children ?? []), ...(line.children ?? [])];
+              existing.children = [
+                ...(existing.children ?? []),
+                ...(line.children ?? []),
+              ];
             } else {
               acc.push({
                 ...line,
@@ -575,7 +625,7 @@ export default function BrokerCommissionSummaryView() {
             Broker Commission Summary
           </h2>
           <p className="text-sm text-slate-500">
-            WM invoices split from Kehe Velocity, deductions from Data Sets.
+            Data Sets drives totals. Kehe Velocity only splits WM Invoice by retailer.
           </p>
         </div>
 
