@@ -53,11 +53,7 @@ function normalizeText(value: string) {
 
 function retailerFromPrefix(custName: string) {
   const value = normalizeText(custName);
-
-  if (value.startsWith("KROGER ") || value.startsWith("KRO ")) {
-    return "Kroger";
-  }
-
+  if (value.startsWith("KROGER ") || value.startsWith("KRO ")) return "Kroger";
   return "";
 }
 
@@ -66,7 +62,6 @@ function scoreLocationMatch(custName: string, locationCustomer: string) {
   const b = normalizeText(locationCustomer);
 
   if (!a || !b) return -1;
-
   if (a === b) return 1000;
 
   const aTokens = a.split(" ").filter(Boolean);
@@ -115,7 +110,12 @@ export default function BrokerCommissionDataSetsView() {
   const [loading, setLoading] = useState(true);
 
   const [selectedType, setSelectedType] = useState("All Types");
-  const [filterOpen, setFilterOpen] = useState(false);
+  const [selectedRetailer, setSelectedRetailer] = useState("All Retailers");
+  const [selectedMonth, setSelectedMonth] = useState("All Months");
+
+  const [typeFilterOpen, setTypeFilterOpen] = useState(false);
+  const [retailerFilterOpen, setRetailerFilterOpen] = useState(false);
+  const [monthFilterOpen, setMonthFilterOpen] = useState(false);
 
   const [search, setSearch] = useState("");
 
@@ -123,7 +123,9 @@ export default function BrokerCommissionDataSetsView() {
   const [notifOpen, setNotifOpen] = useState(false);
 
   const notifRef = useRef<HTMLDivElement | null>(null);
-  const filterRef = useRef<HTMLDivElement | null>(null);
+  const typeFilterRef = useRef<HTMLDivElement | null>(null);
+  const retailerFilterRef = useRef<HTMLDivElement | null>(null);
+  const monthFilterRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -205,9 +207,14 @@ export default function BrokerCommissionDataSetsView() {
       if (notifRef.current && !notifRef.current.contains(target)) {
         setNotifOpen(false);
       }
-
-      if (filterRef.current && !filterRef.current.contains(target)) {
-        setFilterOpen(false);
+      if (typeFilterRef.current && !typeFilterRef.current.contains(target)) {
+        setTypeFilterOpen(false);
+      }
+      if (retailerFilterRef.current && !retailerFilterRef.current.contains(target)) {
+        setRetailerFilterOpen(false);
+      }
+      if (monthFilterRef.current && !monthFilterRef.current.contains(target)) {
+        setMonthFilterOpen(false);
       }
     };
 
@@ -220,12 +227,28 @@ export default function BrokerCommissionDataSetsView() {
     [rows]
   );
 
+  const retailers = useMemo(
+    () => ["All Retailers", ...Array.from(new Set(rows.map((r) => r.retailer).filter(Boolean))).sort()],
+    [rows]
+  );
+
+  const months = useMemo(
+    () => ["All Months", ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean)))],
+    [rows]
+  );
+
   const data = useMemo(() => {
     const keyword = search.trim().toLowerCase();
 
     return rows.filter((row) => {
       const matchesType =
         selectedType === "All Types" || row.type === selectedType;
+
+      const matchesRetailer =
+        selectedRetailer === "All Retailers" || row.retailer === selectedRetailer;
+
+      const matchesMonth =
+        selectedMonth === "All Months" || row.month === selectedMonth;
 
       const matchesSearch =
         !keyword ||
@@ -238,9 +261,9 @@ export default function BrokerCommissionDataSetsView() {
         row.retailer.toLowerCase().includes(keyword) ||
         row.amt.toFixed(2).includes(keyword);
 
-      return matchesType && matchesSearch;
+      return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
-  }, [rows, selectedType, search]);
+  }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
 
   return (
     <div className="space-y-6">
@@ -269,10 +292,14 @@ export default function BrokerCommissionDataSetsView() {
             )}
           </div>
 
-          <div className="relative" ref={filterRef}>
+          <div className="relative" ref={typeFilterRef}>
             <Button
               type="button"
-              onClick={() => setFilterOpen((prev) => !prev)}
+              onClick={() => {
+                setTypeFilterOpen((prev) => !prev);
+                setRetailerFilterOpen(false);
+                setMonthFilterOpen(false);
+              }}
               variant="outline"
               className="rounded-2xl"
             >
@@ -281,7 +308,7 @@ export default function BrokerCommissionDataSetsView() {
               <ChevronDown className="ml-2 h-4 w-4" />
             </Button>
 
-            {filterOpen && (
+            {typeFilterOpen && (
               <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
                 {types.map((t) => (
                   <button
@@ -289,11 +316,79 @@ export default function BrokerCommissionDataSetsView() {
                     type="button"
                     onClick={() => {
                       setSelectedType(t);
-                      setFilterOpen(false);
+                      setTypeFilterOpen(false);
                     }}
                     className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
                   >
                     {t}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="relative" ref={retailerFilterRef}>
+            <Button
+              type="button"
+              onClick={() => {
+                setRetailerFilterOpen((prev) => !prev);
+                setTypeFilterOpen(false);
+                setMonthFilterOpen(false);
+              }}
+              variant="outline"
+              className="rounded-2xl"
+            >
+              {selectedRetailer}
+              <ChevronDown className="ml-2 h-4 w-4" />
+            </Button>
+
+            {retailerFilterOpen && (
+              <div className="absolute right-0 z-20 mt-2 max-h-72 w-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                {retailers.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => {
+                      setSelectedRetailer(r);
+                      setRetailerFilterOpen(false);
+                    }}
+                    className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="relative" ref={monthFilterRef}>
+            <Button
+              type="button"
+              onClick={() => {
+                setMonthFilterOpen((prev) => !prev);
+                setTypeFilterOpen(false);
+                setRetailerFilterOpen(false);
+              }}
+              variant="outline"
+              className="rounded-2xl"
+            >
+              {selectedMonth === "All Months" ? selectedMonth : formatMonthShort(selectedMonth)}
+              <ChevronDown className="ml-2 h-4 w-4" />
+            </Button>
+
+            {monthFilterOpen && (
+              <div className="absolute right-0 z-20 mt-2 max-h-72 w-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                {months.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => {
+                      setSelectedMonth(m);
+                      setMonthFilterOpen(false);
+                    }}
+                    className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
+                  >
+                    {m === "All Months" ? m : formatMonthShort(m)}
                   </button>
                 ))}
               </div>
