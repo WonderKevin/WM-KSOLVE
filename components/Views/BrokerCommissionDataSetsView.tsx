@@ -1,7 +1,15 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Bell, ChevronDown, Filter, Search, X } from "lucide-react";
+import {
+  Bell,
+  Check,
+  ChevronDown,
+  Filter,
+  MoreHorizontal,
+  Search,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
 
@@ -26,6 +34,19 @@ type LocationRow = {
   retailer: string;
 };
 
+type RetailerOverrideRow = {
+  dataset_id: string;
+  retailer: string;
+};
+
+const EDITABLE_RETAILERS = [
+  "Fresh Thyme",
+  "Kroger",
+  "INFRA & Others",
+  "HEB",
+  "Add new retailer...",
+] as const;
+
 function formatMonthShort(value: string): string {
   if (!value) return value;
   if (/^[A-Za-z]+ '\d{2}$/.test(value.trim())) return value.trim();
@@ -46,94 +67,140 @@ function normalizeText(value: string) {
   return String(value || "")
     .toUpperCase()
     .replace(/&/g, " AND ")
+    .replace(/\*/g, " ")
     .replace(/[^A-Z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function hasToken(text: string, token: string) {
-  return ` ${text} `.includes(` ${token} `);
+function normalizeToken(token: string) {
+  const map: Record<string, string> = {
+    MKT: "MARKET",
+    MKTB: "MARKET",
+    MRKT: "MARKET",
+    CTR: "CENTER",
+    CTRS: "CENTER",
+    COOP: "COOPERATIVE",
+    CO OP: "COOPERATIVE",
+    FRMR: "FARMER",
+    FRMRS: "FARMERS",
+    FT: "FORT",
+    ST: "SAINT",
+    CS: "",
+    DBA: "DBA",
+    I: "",
+    IN: "IN",
+    TX: "TX",
+  };
+
+  return map[token] ?? token;
 }
 
-function getRetailerFromCustomerName(custName: string) {
-  const customer = normalizeText(custName);
+function tokenize(value: string) {
+  return normalizeText(value)
+    .split(" ")
+    .map(normalizeToken)
+    .filter(Boolean);
+}
 
-  if (!customer) return "";
+function hasToken(tokens: string[], token: string) {
+  return tokens.includes(token);
+}
 
-  if (
-    customer.startsWith("KROGER ") ||
-    customer.startsWith("KRO ") ||
-    hasToken(customer, "KROGER") ||
-    hasToken(customer, "KRO")
-  ) {
-    return "Kroger";
+function commonPrefixCount(a: string[], b: string[]) {
+  let count = 0;
+  const max = Math.min(a.length, b.length);
+  for (let i = 0; i < max; i += 1) {
+    if (a[i] !== b[i]) break;
+    count += 1;
   }
+  return count;
+}
+
+function overlapCount(a: string[], b: string[]) {
+  const bSet = new Set(b);
+  return a.filter((token) => bSet.has(token)).length;
+}
+
+function scoreLocationMatch(custName: string, locationCustomer: string) {
+  const a = tokenize(custName);
+  const b = tokenize(locationCustomer);
+
+  if (!a.length || !b.length) return -1;
+
+  const aJoined = a.join(" ");
+  const bJoined = b.join(" ");
+
+  if (aJoined === bJoined) return 5000;
+
+  const prefix = commonPrefixCount(a, b);
+  const overlap = overlapCount(a, b);
+  const aNums = a.filter((t) => /^\d+$/.test(t));
+  const bSet = new Set(b);
+  const numericMatches = aNums.filter((n) => bSet.has(n)).length;
+
+  let score = 0;
+
+  score += prefix * 220;
+  score += overlap * 35;
+  score += numericMatches * 160;
+
+  if (bJoined.includes(aJoined) || aJoined.includes(bJoined)) score += 220;
+
+  const firstTwoA = a.slice(0, 2).join(" ");
+  const firstTwoB = b.slice(0, 2).join(" ");
+  if (firstTwoA && firstTwoA === firstTwoB) score += 180;
+
+  const firstThreeA = a.slice(0, 3).join(" ");
+  const firstThreeB = b.slice(0, 3).join(" ");
+  if (firstThreeA && firstThreeA === firstThreeB) score += 260;
+
+  const lastA = a[a.length - 1];
+  if (lastA && bSet.has(lastA)) score += 60;
+
+  return score;
+}
+
+function categorizeRetailerName(rawRetailer: string) {
+  const normalized = normalizeText(rawRetailer);
+
+  if (!normalized) return "";
+
+  if (normalized.includes("KROGER") || normalized === "KRO") return "Kroger";
+  if (normalized.includes("FRESH THYME")) return "Fresh Thyme";
+  if (normalized === "HEB" || normalized.includes("H E B")) return "HEB";
+
+  return "INFRA & Others";
+}
+
+function directRetailerFromCustomer(custName: string) {
+  const tokens = tokenize(custName);
+
+  if (!tokens.length) return "";
+
+  if (hasToken(tokens, "KROGER") || hasToken(tokens, "KRO")) return "Kroger";
 
   if (
-    customer.includes("FRESH THYME") ||
-    customer.includes("FRSH THYME") ||
-    customer.includes("FRMR MKT")
+    tokens.includes("FRESH") && tokens.includes("THYME")
   ) {
     return "Fresh Thyme";
+  }
+
+  if (tokens.includes("HEB") || (tokens.includes("H") && tokens.includes("E") && tokens.includes("B"))) {
+    return "HEB";
   }
 
   return "";
 }
 
-function categorizeLocationRetailer(rawRetailer: string) {
-  const retailer = normalizeText(rawRetailer);
-
-  if (!retailer) return "";
-  if (retailer.includes("KROGER") || retailer === "KRO") return "Kroger";
-  if (retailer.includes("FRESH THYME")) return "Fresh Thyme";
-
-  return "INFRA & Others";
-}
-
-function scoreLocationMatch(custName: string, locationCustomer: string) {
-  const a = normalizeText(custName);
-  const b = normalizeText(locationCustomer);
-
-  if (!a || !b) return -1;
-  if (a === b) return 1000;
-
-  const aTokens = a.split(" ").filter(Boolean);
-  const bTokens = b.split(" ").filter(Boolean);
-
-  let score = 0;
-
-  if (b.startsWith(a) || a.startsWith(b)) score += 250;
-  if (b.includes(a) || a.includes(b)) score += 150;
-
-  for (const token of aTokens) {
-    if (bTokens.includes(token)) score += 20;
-  }
-
-  const numericTokens = aTokens.filter((t) => /^\d+$/.test(t));
-  for (const token of numericTokens) {
-    if (bTokens.includes(token)) score += 120;
-  }
-
-  const lastWord = aTokens[aTokens.length - 1];
-  if (lastWord && bTokens.includes(lastWord)) score += 100;
-
-  return score;
-}
-
 function findRetailer(custName: string, locations: LocationRow[]) {
-  const directRetailer = getRetailerFromCustomerName(custName);
+  const directRetailer = directRetailerFromCustomer(custName);
   if (directRetailer) return directRetailer;
 
   const normalizedCustomer = normalizeText(custName);
+  if (!normalizedCustomer) return "";
 
-  // Keep obvious internal/DC-style codes blank
-  if (
-    /^DC\d+$/i.test(custName.trim()) ||
-    /^DC \d+$/i.test(custName.trim()) ||
-    normalizedCustomer.startsWith("DC ")
-  ) {
-    return "";
-  }
+  if (/^DC\s*\d+$/i.test(custName.trim())) return "";
 
   let bestRetailer = "";
   let bestScore = -1;
@@ -146,15 +213,15 @@ function findRetailer(custName: string, locations: LocationRow[]) {
     }
   }
 
-  // Be conservative. If not a confident match, leave blank.
-  if (bestScore < 220) return "";
+  if (bestScore < 320) return "";
 
-  return categorizeLocationRetailer(bestRetailer);
+  return categorizeRetailerName(bestRetailer);
 }
 
 export default function BrokerCommissionDataSetsView() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
 
   const [selectedType, setSelectedType] = useState("All Types");
   const [selectedRetailer, setSelectedRetailer] = useState("All Retailers");
@@ -169,39 +236,57 @@ export default function BrokerCommissionDataSetsView() {
   const [missingInvoices, setMissingInvoices] = useState<string[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
 
+  const [menuRowId, setMenuRowId] = useState<string | null>(null);
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
+  const [editRetailerChoice, setEditRetailerChoice] = useState("");
+  const [customRetailer, setCustomRetailer] = useState("");
+
   const notifRef = useRef<HTMLDivElement | null>(null);
   const typeFilterRef = useRef<HTMLDivElement | null>(null);
   const retailerFilterRef = useRef<HTMLDivElement | null>(null);
   const monthFilterRef = useRef<HTMLDivElement | null>(null);
+  const actionMenuRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
+  const loadData = async () => {
+    setLoading(true);
 
-      const [
-        { data: datasetData, error: datasetError },
-        { data: invoiceData, error: invoiceError },
-        { data: locationsData, error: locationsError },
-      ] = await Promise.all([
-        supabase
-          .from("broker_commission_datasets")
-          .select("id, month, invoice, type, upc, item, cust_name, amt")
-          .order("invoice", { ascending: false }),
-        supabase.from("invoices").select("invoice_number"),
-        supabase.from("locations").select("customer, retailer"),
-      ]);
+    const [
+      { data: datasetData, error: datasetError },
+      { data: invoiceData, error: invoiceError },
+      { data: locationsData, error: locationsError },
+      { data: overrideData, error: overrideError },
+    ] = await Promise.all([
+      supabase
+        .from("broker_commission_datasets")
+        .select("id, month, invoice, type, upc, item, cust_name, amt")
+        .order("invoice", { ascending: false }),
+      supabase.from("invoices").select("invoice_number"),
+      supabase.from("locations").select("customer, retailer"),
+      supabase.from("retailer_overrides").select("dataset_id, retailer"),
+    ]);
 
-      const locations: LocationRow[] = (locationsData ?? []).map((row: any) => ({
-        customer: row.customer ?? "",
-        retailer: row.retailer ?? "",
-      }));
+    const locations: LocationRow[] = (locationsData ?? []).map((row: any) => ({
+      customer: row.customer ?? "",
+      retailer: row.retailer ?? "",
+    }));
 
-      if (datasetError) {
-        console.error("Failed to load datasets:", datasetError);
-        setRows([]);
-      } else {
-        setRows(
-          (datasetData ?? []).map((row: any) => ({
+    const overrideMap = new Map(
+      ((overrideData ?? []) as RetailerOverrideRow[]).map((row) => [
+        row.dataset_id,
+        row.retailer,
+      ])
+    );
+
+    if (datasetError) {
+      console.error("Failed to load datasets:", datasetError);
+      setRows([]);
+    } else {
+      setRows(
+        (datasetData ?? []).map((row: any) => {
+          const inferredRetailer = findRetailer(row.cust_name ?? "", locations);
+          const overrideRetailer = overrideMap.get(row.id) ?? "";
+
+          return {
             id: row.id,
             month: row.month ?? "",
             invoice: row.invoice ?? "",
@@ -209,41 +294,49 @@ export default function BrokerCommissionDataSetsView() {
             upc: row.upc ?? "",
             item: row.item ?? "",
             custName: row.cust_name ?? "",
-            retailer: findRetailer(row.cust_name ?? "", locations),
+            retailer: overrideRetailer || inferredRetailer || "",
             amt: Number(row.amt ?? 0),
-          }))
-        );
-      }
+          };
+        })
+      );
+    }
 
-      if (locationsError) {
-        console.error("Failed to load locations:", locationsError);
-      }
+    if (locationsError) {
+      console.error("Failed to load locations:", locationsError);
+    }
 
-      if (invoiceError) {
-        console.error("Failed to load invoices:", invoiceError);
-        setMissingInvoices([]);
-      } else {
-        const datasetInvoiceSet = new Set(
-          (datasetData ?? [])
-            .map((row: any) => normalizeInvoice(row.invoice))
+    if (overrideError) {
+      console.error("Failed to load retailer overrides:", overrideError);
+    }
+
+    if (invoiceError) {
+      console.error("Failed to load invoices:", invoiceError);
+      setMissingInvoices([]);
+    } else {
+      const datasetInvoiceSet = new Set(
+        (datasetData ?? [])
+          .map((row: any) => normalizeInvoice(row.invoice))
+          .filter(Boolean)
+      );
+
+      const invoiceList = Array.from(
+        new Set(
+          (invoiceData ?? [])
+            .map((row: InvoiceRow) => normalizeInvoice(row.invoice_number))
             .filter(Boolean)
-        );
+        )
+      );
 
-        const invoiceList = Array.from(
-          new Set(
-            (invoiceData ?? [])
-              .map((row: InvoiceRow) => normalizeInvoice(row.invoice_number))
-              .filter(Boolean)
-          )
-        );
+      const missing = invoiceList.filter(
+        (invoice) => !datasetInvoiceSet.has(invoice)
+      );
+      setMissingInvoices(missing.sort((a, b) => a.localeCompare(b)));
+    }
 
-        const missing = invoiceList.filter((invoice) => !datasetInvoiceSet.has(invoice));
-        setMissingInvoices(missing.sort((a, b) => a.localeCompare(b)));
-      }
+    setLoading(false);
+  };
 
-      setLoading(false);
-    };
-
+  useEffect(() => {
     loadData();
   }, []);
 
@@ -257,39 +350,56 @@ export default function BrokerCommissionDataSetsView() {
       if (typeFilterRef.current && !typeFilterRef.current.contains(target)) {
         setTypeFilterOpen(false);
       }
-      if (retailerFilterRef.current && !retailerFilterRef.current.contains(target)) {
+      if (
+        retailerFilterRef.current &&
+        !retailerFilterRef.current.contains(target)
+      ) {
         setRetailerFilterOpen(false);
       }
       if (monthFilterRef.current && !monthFilterRef.current.contains(target)) {
         setMonthFilterOpen(false);
       }
+
+      if (menuRowId) {
+        const menuRef = actionMenuRefs.current[menuRowId];
+        if (menuRef && !menuRef.contains(target)) {
+          setMenuRowId(null);
+        }
+      }
     };
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [menuRowId]);
 
   const types = useMemo(
-    () => ["All Types", ...Array.from(new Set(rows.map((r) => r.type).filter(Boolean)))],
+    () => [
+      "All Types",
+      ...Array.from(new Set(rows.map((r) => r.type).filter(Boolean))),
+    ],
     [rows]
   );
 
   const months = useMemo(
-    () => ["All Months", ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean)))],
+    () => [
+      "All Months",
+      ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean))),
+    ],
     [rows]
   );
 
   const retailerOptions = useMemo(() => {
     const options = ["All Retailers"];
-
     const hasFreshThyme = rows.some((r) => r.retailer === "Fresh Thyme");
     const hasKroger = rows.some((r) => r.retailer === "Kroger");
-    const hasInfraOthers = rows.some((r) => r.retailer === "INFRA & Others");
+    const hasInfra = rows.some((r) => r.retailer === "INFRA & Others");
+    const hasHeb = rows.some((r) => r.retailer === "HEB");
     const hasBlank = rows.some((r) => !r.retailer);
 
     if (hasFreshThyme) options.push("Fresh Thyme");
     if (hasKroger) options.push("Kroger");
-    if (hasInfraOthers) options.push("INFRA & Others");
+    if (hasInfra) options.push("INFRA & Others");
+    if (hasHeb) options.push("HEB");
     if (hasBlank) options.push("Blank");
 
     return options;
@@ -327,9 +437,75 @@ export default function BrokerCommissionDataSetsView() {
         row.retailer.toLowerCase().includes(keyword) ||
         row.amt.toFixed(2).includes(keyword);
 
-      return matchesType && matchesRetailer && matchesMonth && matchesSearch;
+      return (
+        matchesType && matchesRetailer && matchesMonth && matchesSearch
+      );
     });
   }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
+
+  const startEditing = (row: Row) => {
+    setEditingRowId(row.id);
+    setMenuRowId(null);
+
+    if (
+      row.retailer === "Fresh Thyme" ||
+      row.retailer === "Kroger" ||
+      row.retailer === "INFRA & Others" ||
+      row.retailer === "HEB"
+    ) {
+      setEditRetailerChoice(row.retailer);
+      setCustomRetailer("");
+    } else if (row.retailer) {
+      setEditRetailerChoice("Add new retailer...");
+      setCustomRetailer(row.retailer);
+    } else {
+      setEditRetailerChoice("Fresh Thyme");
+      setCustomRetailer("");
+    }
+  };
+
+  const cancelEditing = () => {
+    setEditingRowId(null);
+    setEditRetailerChoice("");
+    setCustomRetailer("");
+  };
+
+  const saveRetailerEdit = async (rowId: string) => {
+    const finalRetailer =
+      editRetailerChoice === "Add new retailer..."
+        ? customRetailer.trim()
+        : editRetailerChoice.trim();
+
+    if (!finalRetailer) return;
+
+    setSavingRowId(rowId);
+
+    const { error } = await supabase
+      .from("retailer_overrides")
+      .upsert(
+        {
+          dataset_id: rowId,
+          retailer: finalRetailer,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "dataset_id" }
+      );
+
+    if (error) {
+      console.error("Failed to save retailer override:", error);
+      setSavingRowId(null);
+      return;
+    }
+
+    setRows((prev) =>
+      prev.map((row) =>
+        row.id === rowId ? { ...row, retailer: finalRetailer } : row
+      )
+    );
+
+    setSavingRowId(null);
+    cancelEditing();
+  };
 
   return (
     <div className="space-y-6">
@@ -438,7 +614,9 @@ export default function BrokerCommissionDataSetsView() {
               variant="outline"
               className="rounded-2xl"
             >
-              {selectedMonth === "All Months" ? selectedMonth : formatMonthShort(selectedMonth)}
+              {selectedMonth === "All Months"
+                ? selectedMonth
+                : formatMonthShort(selectedMonth)}
               <ChevronDown className="ml-2 h-4 w-4" />
             </Button>
 
@@ -535,34 +713,138 @@ export default function BrokerCommissionDataSetsView() {
               <th className="p-3 text-left font-semibold">Customer</th>
               <th className="p-3 text-left font-semibold">Retailer</th>
               <th className="p-3 text-left font-semibold">Amount</th>
+              <th className="w-[56px] p-3 text-left font-semibold"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="p-6 text-center text-gray-500">
+                <td colSpan={9} className="p-6 text-center text-gray-500">
                   Loading data...
                 </td>
               </tr>
             ) : data.length === 0 ? (
               <tr>
-                <td colSpan={8} className="p-6 text-center text-gray-500">
+                <td colSpan={9} className="p-6 text-center text-gray-500">
                   No data found.
                 </td>
               </tr>
             ) : (
-              data.map((row) => (
-                <tr key={row.id} className="border-t">
-                  <td className="p-3">{row.type}</td>
-                  <td className="p-3">{formatMonthShort(row.month)}</td>
-                  <td className="p-3 font-medium">{row.invoice}</td>
-                  <td className="p-3">{row.upc}</td>
-                  <td className="p-3">{row.item}</td>
-                  <td className="p-3">{row.custName}</td>
-                  <td className="p-3">{row.retailer || "-"}</td>
-                  <td className="p-3">${row.amt.toFixed(2)}</td>
-                </tr>
-              ))
+              data.map((row) => {
+                const isEditing = editingRowId === row.id;
+                const isSaving = savingRowId === row.id;
+
+                return (
+                  <tr key={row.id} className="border-t">
+                    <td className="p-3">{row.type}</td>
+                    <td className="p-3">{formatMonthShort(row.month)}</td>
+                    <td className="p-3 font-medium">{row.invoice}</td>
+                    <td className="p-3">{row.upc}</td>
+                    <td className="p-3">{row.item}</td>
+                    <td className="p-3">{row.custName}</td>
+
+                    <td className="p-3">
+                      {isEditing ? (
+                        <div className="space-y-2">
+                          <select
+                            value={editRetailerChoice}
+                            onChange={(e) =>
+                              setEditRetailerChoice(e.target.value)
+                            }
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+                          >
+                            {EDITABLE_RETAILERS.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+
+                          {editRetailerChoice === "Add new retailer..." && (
+                            <input
+                              type="text"
+                              value={customRetailer}
+                              onChange={(e) =>
+                                setCustomRetailer(e.target.value)
+                              }
+                              placeholder="Enter retailer"
+                              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        row.retailer || "-"
+                      )}
+                    </td>
+
+                    <td className="p-3">${row.amt.toFixed(2)}</td>
+
+                    <td className="p-3">
+                      {isEditing ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={
+                              isSaving ||
+                              !(
+                                editRetailerChoice &&
+                                (editRetailerChoice !== "Add new retailer..." ||
+                                  customRetailer.trim())
+                              )
+                            }
+                            onClick={() => saveRetailerEdit(row.id)}
+                            className="rounded-md p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                            title="Save"
+                          >
+                            <Check className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isSaving}
+                            onClick={cancelEditing}
+                            className="rounded-md p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                            title="Cancel"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          className="relative"
+                          ref={(el) => {
+                            actionMenuRefs.current[row.id] = el;
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setMenuRowId((prev) =>
+                                prev === row.id ? null : row.id
+                              )
+                            }
+                            className="rounded-md p-2 text-slate-600 hover:bg-slate-100"
+                            title="Actions"
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+
+                          {menuRowId === row.id && (
+                            <div className="absolute right-0 z-20 mt-2 w-32 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                              <button
+                                type="button"
+                                onClick={() => startEditing(row)}
+                                className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
