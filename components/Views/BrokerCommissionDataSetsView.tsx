@@ -26,14 +26,6 @@ type LocationRow = {
   retailer: string;
 };
 
-const RETAILER_OPTIONS = [
-  "All Retailers",
-  "Fresh Thyme",
-  "Kroger",
-  "INFRA & Others",
-  "Blank",
-] as const;
-
 function formatMonthShort(value: string): string {
   if (!value) return value;
   if (/^[A-Za-z]+ '\d{2}$/.test(value.trim())) return value.trim();
@@ -59,40 +51,39 @@ function normalizeText(value: string) {
     .trim();
 }
 
-function titleCase(value: string) {
-  return value
-    .toLowerCase()
-    .split(" ")
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
+function hasToken(text: string, token: string) {
+  return ` ${text} `.includes(` ${token} `);
 }
 
-function categorizeRetailer(rawRetailer: string, custName: string) {
-  const retailer = normalizeText(rawRetailer);
+function getRetailerFromCustomerName(custName: string) {
   const customer = normalizeText(custName);
 
-  if (!retailer) {
-    if (
-      customer.startsWith("KROGER ") ||
-      customer.startsWith("KRO ") ||
-      customer.includes(" KROGER ") ||
-      customer.includes(" KRO ")
-    ) {
-      return "Kroger";
-    }
+  if (!customer) return "";
 
-    if (
-      customer.includes("FRESH THYME") ||
-      customer.includes("FRSH THYME") ||
-      customer.includes("FRMR MKT")
-    ) {
-      return "Fresh Thyme";
-    }
-
-    return "";
+  if (
+    customer.startsWith("KROGER ") ||
+    customer.startsWith("KRO ") ||
+    hasToken(customer, "KROGER") ||
+    hasToken(customer, "KRO")
+  ) {
+    return "Kroger";
   }
 
+  if (
+    customer.includes("FRESH THYME") ||
+    customer.includes("FRSH THYME") ||
+    customer.includes("FRMR MKT")
+  ) {
+    return "Fresh Thyme";
+  }
+
+  return "";
+}
+
+function categorizeLocationRetailer(rawRetailer: string) {
+  const retailer = normalizeText(rawRetailer);
+
+  if (!retailer) return "";
   if (retailer.includes("KROGER") || retailer === "KRO") return "Kroger";
   if (retailer.includes("FRESH THYME")) return "Fresh Thyme";
 
@@ -130,6 +121,20 @@ function scoreLocationMatch(custName: string, locationCustomer: string) {
 }
 
 function findRetailer(custName: string, locations: LocationRow[]) {
+  const directRetailer = getRetailerFromCustomerName(custName);
+  if (directRetailer) return directRetailer;
+
+  const normalizedCustomer = normalizeText(custName);
+
+  // Keep obvious internal/DC-style codes blank
+  if (
+    /^DC\d+$/i.test(custName.trim()) ||
+    /^DC \d+$/i.test(custName.trim()) ||
+    normalizedCustomer.startsWith("DC ")
+  ) {
+    return "";
+  }
+
   let bestRetailer = "";
   let bestScore = -1;
 
@@ -141,7 +146,10 @@ function findRetailer(custName: string, locations: LocationRow[]) {
     }
   }
 
-  return categorizeRetailer(bestRetailer, custName);
+  // Be conservative. If not a confident match, leave blank.
+  if (bestScore < 220) return "";
+
+  return categorizeLocationRetailer(bestRetailer);
 }
 
 export default function BrokerCommissionDataSetsView() {
@@ -271,6 +279,28 @@ export default function BrokerCommissionDataSetsView() {
     [rows]
   );
 
+  const retailerOptions = useMemo(() => {
+    const options = ["All Retailers"];
+
+    const hasFreshThyme = rows.some((r) => r.retailer === "Fresh Thyme");
+    const hasKroger = rows.some((r) => r.retailer === "Kroger");
+    const hasInfraOthers = rows.some((r) => r.retailer === "INFRA & Others");
+    const hasBlank = rows.some((r) => !r.retailer);
+
+    if (hasFreshThyme) options.push("Fresh Thyme");
+    if (hasKroger) options.push("Kroger");
+    if (hasInfraOthers) options.push("INFRA & Others");
+    if (hasBlank) options.push("Blank");
+
+    return options;
+  }, [rows]);
+
+  useEffect(() => {
+    if (!retailerOptions.includes(selectedRetailer)) {
+      setSelectedRetailer("All Retailers");
+    }
+  }, [retailerOptions, selectedRetailer]);
+
   const data = useMemo(() => {
     const keyword = search.trim().toLowerCase();
 
@@ -346,17 +376,17 @@ export default function BrokerCommissionDataSetsView() {
 
             {typeFilterOpen && (
               <div className="absolute right-0 z-20 mt-2 max-h-72 w-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
-                {types.map((t) => (
+                {types.map((type) => (
                   <button
-                    key={t}
+                    key={type}
                     type="button"
                     onClick={() => {
-                      setSelectedType(t);
+                      setSelectedType(type);
                       setTypeFilterOpen(false);
                     }}
                     className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
                   >
-                    {t}
+                    {type}
                   </button>
                 ))}
               </div>
@@ -380,7 +410,7 @@ export default function BrokerCommissionDataSetsView() {
 
             {retailerFilterOpen && (
               <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
-                {RETAILER_OPTIONS.map((retailer) => (
+                {retailerOptions.map((retailer) => (
                   <button
                     key={retailer}
                     type="button"
