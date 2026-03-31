@@ -90,6 +90,29 @@ function roundCases(shipped: number) {
   return Math.round(shipped / SHIP_DIVISOR);
 }
 
+async function fetchAllLocations(): Promise<LocationRow[]> {
+  const pageSize = 1000;
+  let from = 0;
+  let allRows: LocationRow[] = [];
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("locations")
+      .select("*")
+      .range(from, from + pageSize - 1);
+
+    if (error) throw error;
+
+    const batch = data ?? [];
+    allRows = [...allRows, ...batch];
+
+    if (batch.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return allRows;
+}
+
 function findRetailerFromLocations(
   customer: string,
   retailerArea: string,
@@ -344,20 +367,17 @@ export default function KeHeVelocityView() {
     try {
       setUploading(true);
 
-      const [productRes, locationsRes] = await Promise.all([
+      const [productRes, locations] = await Promise.all([
         supabase.from("product_list").select("upc, item_description"),
-        supabase.from("locations").select("*"),
+        fetchAllLocations(),
       ]);
 
       if (productRes.error) throw productRes.error;
-      if (locationsRes.error) throw locationsRes.error;
 
       const productMap = new Map<string, string>();
       ((productRes.data || []) as ProductRow[]).forEach((row) => {
         productMap.set(String(row.upc), row.item_description || "");
       });
-
-      const locations = locationsRes.data || [];
 
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: "array" });
@@ -420,13 +440,8 @@ export default function KeHeVelocityView() {
       const { error } = await supabase.from("locations").insert(rowsToInsert);
       if (error) throw error;
 
-      const { data: refreshedLocations, error: refreshError } = await supabase
-        .from("locations")
-        .select("*");
-
-      if (refreshError) throw refreshError;
-
-      await finishInsert(pendingRows, refreshedLocations || []);
+      const refreshedLocations = await fetchAllLocations();
+      await finishInsert(pendingRows, refreshedLocations);
 
       setShowLocationModal(false);
       setMissingLocations([]);
