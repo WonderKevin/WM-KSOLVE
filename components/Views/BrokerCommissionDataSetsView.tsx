@@ -21,6 +21,11 @@ type InvoiceRow = {
   invoice_number: string;
 };
 
+type LocationRow = {
+  customer: string;
+  retailer: string;
+};
+
 function formatMonthShort(value: string): string {
   if (!value) return value;
   if (/^[A-Za-z]+ '\d{2}$/.test(value.trim())) return value.trim();
@@ -35,6 +40,74 @@ function normalizeInvoice(value: string) {
     .replace(/[.]+$/g, "")
     .trim()
     .toUpperCase();
+}
+
+function normalizeText(value: string) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/&/g, " AND ")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function retailerFromPrefix(custName: string) {
+  const value = normalizeText(custName);
+
+  if (value.startsWith("KROGER ") || value.startsWith("KRO ")) {
+    return "Kroger";
+  }
+
+  return "";
+}
+
+function scoreLocationMatch(custName: string, locationCustomer: string) {
+  const a = normalizeText(custName);
+  const b = normalizeText(locationCustomer);
+
+  if (!a || !b) return -1;
+
+  if (a === b) return 1000;
+
+  const aTokens = a.split(" ").filter(Boolean);
+  const bTokens = b.split(" ").filter(Boolean);
+
+  let score = 0;
+
+  if (b.startsWith(a) || a.startsWith(b)) score += 300;
+  if (b.includes(a) || a.includes(b)) score += 180;
+
+  for (const token of aTokens) {
+    if (bTokens.includes(token)) score += 20;
+  }
+
+  const numericTokens = aTokens.filter((t) => /^\d+$/.test(t));
+  for (const token of numericTokens) {
+    if (bTokens.includes(token)) score += 120;
+  }
+
+  const lastWord = aTokens[aTokens.length - 1];
+  if (lastWord && bTokens.includes(lastWord)) score += 80;
+
+  return score;
+}
+
+function findRetailer(custName: string, locations: LocationRow[]) {
+  const forcedRetailer = retailerFromPrefix(custName);
+  if (forcedRetailer) return forcedRetailer;
+
+  let bestRetailer = "";
+  let bestScore = -1;
+
+  for (const loc of locations) {
+    const score = scoreLocationMatch(custName, loc.customer);
+    if (score > bestScore) {
+      bestScore = score;
+      bestRetailer = loc.retailer || "";
+    }
+  }
+
+  return bestScore >= 140 ? bestRetailer : "";
 }
 
 export default function BrokerCommissionDataSetsView() {
@@ -59,13 +132,20 @@ export default function BrokerCommissionDataSetsView() {
       const [
         { data: datasetData, error: datasetError },
         { data: invoiceData, error: invoiceError },
+        { data: locationsData, error: locationsError },
       ] = await Promise.all([
         supabase
-          .from("broker_commission_datasets_with_retailer")
-          .select("id, month, invoice, type, upc, item, cust_name, retailer, amt")
+          .from("broker_commission_datasets")
+          .select("id, month, invoice, type, upc, item, cust_name, amt")
           .order("invoice", { ascending: false }),
         supabase.from("invoices").select("invoice_number"),
+        supabase.from("locations").select("customer, retailer"),
       ]);
+
+      const locations: LocationRow[] = (locationsData ?? []).map((row: any) => ({
+        customer: row.customer ?? "",
+        retailer: row.retailer ?? "",
+      }));
 
       if (datasetError) {
         console.error("Failed to load datasets:", datasetError);
@@ -80,10 +160,14 @@ export default function BrokerCommissionDataSetsView() {
             upc: row.upc ?? "",
             item: row.item ?? "",
             custName: row.cust_name ?? "",
-            retailer: row.retailer ?? "",
+            retailer: findRetailer(row.cust_name ?? "", locations),
             amt: Number(row.amt ?? 0),
           }))
         );
+      }
+
+      if (locationsError) {
+        console.error("Failed to load locations:", locationsError);
       }
 
       if (invoiceError) {
