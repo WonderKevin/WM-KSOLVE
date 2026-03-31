@@ -26,6 +26,14 @@ type LocationRow = {
   retailer: string;
 };
 
+const RETAILER_OPTIONS = [
+  "All Retailers",
+  "Fresh Thyme",
+  "Kroger",
+  "INFRA & Others",
+  "Blank",
+] as const;
+
 function formatMonthShort(value: string): string {
   if (!value) return value;
   if (/^[A-Za-z]+ '\d{2}$/.test(value.trim())) return value.trim();
@@ -51,10 +59,44 @@ function normalizeText(value: string) {
     .trim();
 }
 
-function retailerFromPrefix(custName: string) {
-  const value = normalizeText(custName);
-  if (value.startsWith("KROGER ") || value.startsWith("KRO ")) return "Kroger";
-  return "";
+function titleCase(value: string) {
+  return value
+    .toLowerCase()
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function categorizeRetailer(rawRetailer: string, custName: string) {
+  const retailer = normalizeText(rawRetailer);
+  const customer = normalizeText(custName);
+
+  if (!retailer) {
+    if (
+      customer.startsWith("KROGER ") ||
+      customer.startsWith("KRO ") ||
+      customer.includes(" KROGER ") ||
+      customer.includes(" KRO ")
+    ) {
+      return "Kroger";
+    }
+
+    if (
+      customer.includes("FRESH THYME") ||
+      customer.includes("FRSH THYME") ||
+      customer.includes("FRMR MKT")
+    ) {
+      return "Fresh Thyme";
+    }
+
+    return "";
+  }
+
+  if (retailer.includes("KROGER") || retailer === "KRO") return "Kroger";
+  if (retailer.includes("FRESH THYME")) return "Fresh Thyme";
+
+  return "INFRA & Others";
 }
 
 function scoreLocationMatch(custName: string, locationCustomer: string) {
@@ -69,8 +111,8 @@ function scoreLocationMatch(custName: string, locationCustomer: string) {
 
   let score = 0;
 
-  if (b.startsWith(a) || a.startsWith(b)) score += 300;
-  if (b.includes(a) || a.includes(b)) score += 180;
+  if (b.startsWith(a) || a.startsWith(b)) score += 250;
+  if (b.includes(a) || a.includes(b)) score += 150;
 
   for (const token of aTokens) {
     if (bTokens.includes(token)) score += 20;
@@ -82,15 +124,12 @@ function scoreLocationMatch(custName: string, locationCustomer: string) {
   }
 
   const lastWord = aTokens[aTokens.length - 1];
-  if (lastWord && bTokens.includes(lastWord)) score += 80;
+  if (lastWord && bTokens.includes(lastWord)) score += 100;
 
   return score;
 }
 
 function findRetailer(custName: string, locations: LocationRow[]) {
-  const forcedRetailer = retailerFromPrefix(custName);
-  if (forcedRetailer) return forcedRetailer;
-
   let bestRetailer = "";
   let bestScore = -1;
 
@@ -102,7 +141,7 @@ function findRetailer(custName: string, locations: LocationRow[]) {
     }
   }
 
-  return bestScore >= 140 ? bestRetailer : "";
+  return categorizeRetailer(bestRetailer, custName);
 }
 
 export default function BrokerCommissionDataSetsView() {
@@ -227,11 +266,6 @@ export default function BrokerCommissionDataSetsView() {
     [rows]
   );
 
-  const retailers = useMemo(
-    () => ["All Retailers", ...Array.from(new Set(rows.map((r) => r.retailer).filter(Boolean))).sort()],
-    [rows]
-  );
-
   const months = useMemo(
     () => ["All Months", ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean)))],
     [rows]
@@ -245,7 +279,9 @@ export default function BrokerCommissionDataSetsView() {
         selectedType === "All Types" || row.type === selectedType;
 
       const matchesRetailer =
-        selectedRetailer === "All Retailers" || row.retailer === selectedRetailer;
+        selectedRetailer === "All Retailers" ||
+        (selectedRetailer === "Blank" && !row.retailer) ||
+        row.retailer === selectedRetailer;
 
       const matchesMonth =
         selectedMonth === "All Months" || row.month === selectedMonth;
@@ -309,7 +345,7 @@ export default function BrokerCommissionDataSetsView() {
             </Button>
 
             {typeFilterOpen && (
-              <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+              <div className="absolute right-0 z-20 mt-2 max-h-72 w-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
                 {types.map((t) => (
                   <button
                     key={t}
@@ -343,18 +379,18 @@ export default function BrokerCommissionDataSetsView() {
             </Button>
 
             {retailerFilterOpen && (
-              <div className="absolute right-0 z-20 mt-2 max-h-72 w-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
-                {retailers.map((r) => (
+              <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                {RETAILER_OPTIONS.map((retailer) => (
                   <button
-                    key={r}
+                    key={retailer}
                     type="button"
                     onClick={() => {
-                      setSelectedRetailer(r);
+                      setSelectedRetailer(retailer);
                       setRetailerFilterOpen(false);
                     }}
                     className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
                   >
-                    {r}
+                    {retailer}
                   </button>
                 ))}
               </div>
@@ -378,17 +414,17 @@ export default function BrokerCommissionDataSetsView() {
 
             {monthFilterOpen && (
               <div className="absolute right-0 z-20 mt-2 max-h-72 w-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
-                {months.map((m) => (
+                {months.map((month) => (
                   <button
-                    key={m}
+                    key={month}
                     type="button"
                     onClick={() => {
-                      setSelectedMonth(m);
+                      setSelectedMonth(month);
                       setMonthFilterOpen(false);
                     }}
                     className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
                   >
-                    {m === "All Months" ? m : formatMonthShort(m)}
+                    {month === "All Months" ? month : formatMonthShort(month)}
                   </button>
                 ))}
               </div>
