@@ -33,6 +33,15 @@ type LocationRow = {
   retailer: string;
 };
 
+type VelocityRowRaw = Record<string, any>;
+
+type VelocityRow = {
+  invoiceNumber: string;
+  month: string;
+  retailer: RetailerName;
+  totalCheckAmount: number;
+};
+
 type DetailLine = {
   label: string;
   amount: number;
@@ -237,9 +246,57 @@ function mergeByLabel(lines: DetailLine[]) {
   return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
 }
 
+function mapVelocityRow(raw: VelocityRowRaw): VelocityRow | null {
+  const invoiceNumber =
+    raw.invoice_number ??
+    raw.invoice ??
+    raw.wm_invoice ??
+    raw.wm_invoice_number ??
+    raw.invoice_no ??
+    raw["Invoice Number"] ??
+    raw["Invoice"] ??
+    "";
+
+  const retailerRaw =
+    raw.retailer ??
+    raw.customer ??
+    raw.account ??
+    raw.banner ??
+    raw["Retailer"] ??
+    raw["Customer"] ??
+    "";
+
+  const month =
+    raw.month ??
+    raw.invoice_month ??
+    raw.statement_month ??
+    raw["Month"] ??
+    "";
+
+  const totalCheckAmount = Number(
+    raw.total_check_amount ??
+      raw.check_amount ??
+      raw.amount ??
+      raw.total ??
+      raw["Total Check Amount"] ??
+      raw["Check Amount"] ??
+      0
+  );
+
+  if (!invoiceNumber) return null;
+
+  return {
+    invoiceNumber: normalizeInvoice(invoiceNumber),
+    month: String(month || ""),
+    retailer: categorizeRetailerName(retailerRaw),
+    totalCheckAmount,
+  };
+}
+
 export default function BrokerCommissionSummaryView() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<DatasetRow[]>([]);
+  const [velocityRows, setVelocityRows] = useState<VelocityRow[]>([]);
   const [selectedMonth, setSelectedMonth] = useState("All Months");
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>(
     {}
@@ -256,17 +313,20 @@ export default function BrokerCommissionSummaryView() {
         { data: datasetData, error: datasetError },
         { data: overrideData, error: overrideError },
         { data: locationData, error: locationError },
+        { data: velocityData, error: velocityError },
       ] = await Promise.all([
         supabase
           .from("broker_commission_datasets")
           .select("id, month, invoice, type, upc, item, cust_name, amt"),
         supabase.from("retailer_overrides").select("dataset_id, retailer"),
         supabase.from("locations").select("customer, retailer"),
+        supabase.from("kehe_velocity").select("*"),
       ]);
 
       if (datasetError) console.error("Failed to load datasets:", datasetError);
       if (overrideError) console.error("Failed to load overrides:", overrideError);
       if (locationError) console.error("Failed to load locations:", locationError);
+      if (velocityError) console.error("Failed to load kehe_velocity:", velocityError);
 
       const overrides = new Map<string, string>(
         ((overrideData ?? []) as RetailerOverrideRow[]).map((r) => [
@@ -297,7 +357,12 @@ export default function BrokerCommissionSummaryView() {
         };
       });
 
+      const normalizedVelocity = (velocityData ?? [])
+        .map(mapVelocityRow)
+        .filter(Boolean) as VelocityRow[];
+
       setRows(hydratedRows);
+      setVelocityRows(normalizedVelocity);
 
       const months = Array.from(
         new Set(hydratedRows.map((r) => r.month).filter(Boolean))
@@ -324,6 +389,11 @@ export default function BrokerCommissionSummaryView() {
       selectedMonth === "All Months"
         ? rows
         : rows.filter((r) => r.month === selectedMonth);
+
+    const velocityRowsForMonth =
+      selectedMonth === "All Months"
+        ? velocityRows
+        : velocityRows.filter((r) => r.month === selectedMonth);
 
     const monthMap = new Map<string, MonthSummary>();
 
@@ -360,27 +430,33 @@ export default function BrokerCommissionSummaryView() {
       return block;
     };
 
-    const wmInvoiceGroups = new Map<
-      string,
-      Map<RetailerName, Map<string, number>>
-    >();
+    const wmInvoicesSeen = new Set<string>();
 
-    for (const row of datasetRows) {
-      const retailer = (row.retailer ?? "") as RetailerName;
-      if (!retailer) continue;
-      if (!isWmInvoiceType(row.type)) continue;
+    // WM invoice totals come from Kehe Velocity and split by retailer there.
+    for (const row of velocityRowsForMonth) {
+      if (!row.retailer) continue;
 
-      if (!wmInvoiceGroups.has(row.month)) {
-        wmInvoiceGroups.set(row.month, new Map());
+      const monthSummary = ensureMonth(row.month);
+      const block = ensureRetailerBlock(monthSummary, row.retailer);
+
+      block.wmInvoiceTotal += row.totalCheckAmount;
+
+      const invoiceKey = `${row.month}__${row.retailer}__${row.invoiceNumber}`;
+      if (!wmInvoicesSeen.has(invoiceKey)) {
+        wmInvoicesSeen.add(invoiceKey);
+        block.details.push({
+          label: "WM Invoice",
+          amount: row.totalCheckAmount,
+          kind: "invoice-summary",
+          children: [
+            {
+              label: `WM Invoice ${row.invoiceNumber}`,
+              amount: row.totalCheckAmount,
+              kind: "invoice-detail",
+            },
+          ],
+        });
       }
-      const monthRetailers = wmInvoiceGroups.get(row.month)!;
-
-      if (!monthRetailers.has(retailer)) {
-        monthRetailers.set(retailer, new Map());
-      }
-      const invoiceMap = monthRetailers.get(retailer)!;
-
-      invoiceMap.set(row.invoice, (invoiceMap.get(row.invoice) ?? 0) + row.amt);
     }
 
     const dc19ByMonth = new Map<string, boolean>();
@@ -393,25 +469,19 @@ export default function BrokerCommissionSummaryView() {
     for (const row of datasetRows) {
       const retailer = (row.retailer ?? "") as RetailerName;
       if (!retailer) continue;
+      if (isWmInvoiceType(row.type)) continue;
 
       const monthSummary = ensureMonth(row.month);
+      const block = ensureRetailerBlock(monthSummary, retailer);
 
-      if (isWmInvoiceType(row.type)) {
-        continue;
-      }
-
-      let targetRetailer: RetailerName = retailer;
       let typeLabel = getTypeLabel(row.type);
 
-      // Keep INFRA & Others in its own block.
-      // Do not reroute its totals into Kroger.
       if (isHebPullout(row.type, retailer)) {
         const hasDc19 = dc19ByMonth.get(row.month) ?? false;
         if (!hasDc19) {
-          const firstInvoice = Array.from(
-            wmInvoiceGroups.get(row.month)?.values() ?? []
-          )
-            .flatMap((invoiceMap) => Array.from(invoiceMap.keys()))
+          const firstInvoice = velocityRowsForMonth
+            .filter((v) => v.month === row.month)
+            .map((v) => v.invoiceNumber)
             .sort()[0];
 
           if (firstInvoice) {
@@ -422,42 +492,12 @@ export default function BrokerCommissionSummaryView() {
         }
       }
 
-      const targetBlock = ensureRetailerBlock(monthSummary, targetRetailer);
-      targetBlock.deductionsTotal += row.amt;
-      targetBlock.details.push({
+      block.deductionsTotal += row.amt;
+      block.details.push({
         label: typeLabel,
         amount: -Math.abs(row.amt),
         kind: "deduction",
       });
-    }
-
-    for (const [month, monthRetailers] of wmInvoiceGroups.entries()) {
-      const monthSummary = ensureMonth(month);
-
-      for (const [retailer, invoiceMap] of monthRetailers.entries()) {
-        const block = ensureRetailerBlock(monthSummary, retailer);
-
-        const invoiceChildren: DetailLine[] = Array.from(invoiceMap.entries())
-          .sort((a, b) => a[0].localeCompare(b[0]))
-          .map(([invoice, amount]) => ({
-            label: `WM Invoice ${invoice}`,
-            amount,
-            kind: "invoice-detail",
-          }));
-
-        const wmInvoiceTotal = invoiceChildren.reduce(
-          (sum, line) => sum + line.amount,
-          0
-        );
-
-        block.wmInvoiceTotal += wmInvoiceTotal;
-        block.details.push({
-          label: "WM Invoice",
-          amount: wmInvoiceTotal,
-          kind: "invoice-summary",
-          children: invoiceChildren,
-        });
-      }
     }
 
     for (const monthSummary of monthMap.values()) {
@@ -466,11 +506,34 @@ export default function BrokerCommissionSummaryView() {
           (d) => d.kind === "invoice-summary"
         );
 
+        const mergedInvoiceSummaries = invoiceSummaryLines.reduce<DetailLine[]>(
+          (acc, line) => {
+            const existing = acc.find((a) => a.label === line.label);
+            if (existing) {
+              existing.amount += line.amount;
+              existing.children = [...(existing.children ?? []), ...(line.children ?? [])];
+            } else {
+              acc.push({
+                ...line,
+                children: [...(line.children ?? [])],
+              });
+            }
+            return acc;
+          },
+          []
+        );
+
+        for (const line of mergedInvoiceSummaries) {
+          line.children = (line.children ?? []).sort((a, b) =>
+            a.label.localeCompare(b.label)
+          );
+        }
+
         const deductionLines = mergeByLabel(
           block.details.filter((d) => d.kind === "deduction")
         );
 
-        block.details = [...invoiceSummaryLines, ...deductionLines];
+        block.details = [...mergedInvoiceSummaries, ...deductionLines];
         block.total = block.wmInvoiceTotal - block.deductionsTotal;
         block.brokerFee = block.retailer === "Kroger" ? block.total * 0.04 : 0;
       }
@@ -502,7 +565,7 @@ export default function BrokerCommissionSummaryView() {
     return Array.from(monthMap.values()).sort(
       (a, b) => parseMonthOrder(b.month) - parseMonthOrder(a.month)
     );
-  }, [rows, selectedMonth]);
+  }, [rows, velocityRows, selectedMonth]);
 
   return (
     <div className="space-y-6">
@@ -512,7 +575,7 @@ export default function BrokerCommissionSummaryView() {
             Broker Commission Summary
           </h2>
           <p className="text-sm text-slate-500">
-            Summary by month and retailer.
+            WM invoices split from Kehe Velocity, deductions from Data Sets.
           </p>
         </div>
 
