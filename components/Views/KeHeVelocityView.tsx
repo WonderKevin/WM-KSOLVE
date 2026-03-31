@@ -288,11 +288,13 @@ export default function KeHeVelocityView() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
 
-  const [month, setMonth] = useState("2");
-  const [year, setYear] = useState("2026");
+  const [monthInput, setMonthInput] = useState("2");
+  const [yearInput, setYearInput] = useState("2026");
   const [showUploadBox, setShowUploadBox] = useState(false);
 
   const [search, setSearch] = useState("");
+  const [retailerFilter, setRetailerFilter] = useState("All Retailers");
+  const [monthFilter, setMonthFilter] = useState("All Months");
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const [missingLocations, setMissingLocations] = useState<MissingLocationEntry[]>([]);
@@ -323,24 +325,51 @@ export default function KeHeVelocityView() {
     loadRows();
   }, []);
 
+  const retailerOptions = useMemo(() => {
+    return [
+      "All Retailers",
+      ...Array.from(new Set(rows.map((r) => r.retailer).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    ];
+  }, [rows]);
+
+  const monthOptions = useMemo(() => {
+    return [
+      "All Months",
+      ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    ];
+  }, [rows]);
+
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
 
-    return rows.filter((row) =>
-      [
-        row.month,
-        row.retailer_area,
-        row.customer,
-        row.upc,
-        row.description,
-        row.retailer,
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(q)
-    );
-  }, [rows, search]);
+    return rows.filter((row) => {
+      const matchesSearch =
+        !q ||
+        [
+          row.month,
+          row.retailer_area,
+          row.customer,
+          row.upc,
+          row.description,
+          row.retailer,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+
+      const matchesRetailer =
+        retailerFilter === "All Retailers" || row.retailer === retailerFilter;
+
+      const matchesMonth =
+        monthFilter === "All Months" || row.month === monthFilter;
+
+      return matchesSearch && matchesRetailer && matchesMonth;
+    });
+  }, [rows, search, retailerFilter, monthFilter]);
 
   const finishInsert = async (parsedRows: VelocityRow[], locations: LocationRow[]) => {
     const finalRows = parsedRows.map((row) => ({
@@ -390,7 +419,7 @@ export default function KeHeVelocityView() {
         raw: false,
       });
 
-      const monthLabel = formatMonthLabel(Number(month), Number(year));
+      const monthLabel = formatMonthLabel(Number(monthInput), Number(yearInput));
       const parsedRows = parseKeheWorksheet(
         rawRows,
         monthLabel,
@@ -458,100 +487,128 @@ export default function KeHeVelocityView() {
   };
 
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900">KeHe Velocity</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Upload KeHE velocity files and transform them into flat rows.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <div className="relative min-w-[280px]">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search month, customer, UPC..."
-              className="rounded-2xl pl-10 pr-10"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-
-          <Button
-            type="button"
-            className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-            onClick={() => setShowUploadBox((prev) => !prev)}
-          >
-            <Upload className="mr-2 h-4 w-4" />
-            Upload File
-          </Button>
-        </div>
-      </div>
-
-      {showUploadBox && (
-        <div className="mb-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <div className="grid gap-4 md:grid-cols-3">
+    <div className="space-y-6">
+      <div className="sticky top-0 z-30 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">
-                Month
-              </label>
+              <h2 className="text-xl font-bold text-slate-900">KeHe Velocity</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Upload KeHE velocity files and transform them into flat rows.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="relative min-w-[280px]">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search month, customer, UPC"
+                  className="rounded-2xl pl-10 pr-10"
+                />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+
               <select
-                value={month}
-                onChange={(e) => setMonth(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                value={retailerFilter}
+                onChange={(e) => setRetailerFilter(e.target.value)}
+                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
               >
-                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                  <option key={m} value={String(m)}>
-                    {new Date(2026, m - 1, 1).toLocaleString("en-US", {
-                      month: "long",
-                    })}
+                {retailerOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
                   </option>
                 ))}
               </select>
-            </div>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">
-                Year
-              </label>
-              <Input
-                value={year}
-                onChange={(e) => setYear(e.target.value)}
-                placeholder="2026"
-                className="rounded-xl"
-              />
-            </div>
+              <select
+                value={monthFilter}
+                onChange={(e) => setMonthFilter(e.target.value)}
+                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                {monthOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">
-                KeHE Velocity File
-              </label>
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={handleFileChange}
-                disabled={uploading}
-                className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-              />
+              <Button
+                type="button"
+                className="rounded-2xl bg-slate-900 hover:bg-slate-800"
+                onClick={() => setShowUploadBox((prev) => !prev)}
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Upload File
+              </Button>
             </div>
           </div>
 
-          <p className="mt-3 text-xs text-slate-500">
-            Cases = Shipped ÷ 36.03, rounded. Eaches = Cases × 12.
-          </p>
+          {showUploadBox && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="grid gap-4 md:grid-cols-3">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Month
+                  </label>
+                  <select
+                    value={monthInput}
+                    onChange={(e) => setMonthInput(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  >
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                      <option key={m} value={String(m)}>
+                        {new Date(2026, m - 1, 1).toLocaleString("en-US", {
+                          month: "long",
+                        })}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Year
+                  </label>
+                  <Input
+                    value={yearInput}
+                    onChange={(e) => setYearInput(e.target.value)}
+                    placeholder="2026"
+                    className="rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    KeHE Velocity File
+                  </label>
+                  <input
+                    ref={inputRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleFileChange}
+                    disabled={uploading}
+                    className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+
+              <p className="mt-3 text-xs text-slate-500">
+                Cases = Shipped ÷ 36.03, rounded. Eaches = Cases × 12.
+              </p>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {showLocationModal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4">
@@ -638,48 +695,50 @@ export default function KeHeVelocityView() {
         </div>
       )}
 
-      {loading ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-          Loading KeHe Velocity...
-        </div>
-      ) : filteredRows.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-          No KeHe Velocity rows found.
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-2xl border border-slate-200">
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Month</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Retailer Area</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Customer</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">UPC</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Description</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Cases</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Eaches</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Retailer</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRows.map((row, index) => (
-                  <tr key={row.id || `${row.upc}-${index}`} className="border-t border-slate-200">
-                    <td className="px-4 py-3 text-slate-700">{row.month}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.retailer_area}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.customer}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.upc}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.description}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.cases}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.eaches}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.retailer}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        {loading ? (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+            Loading KeHe Velocity...
           </div>
-        </div>
-      )}
+        ) : filteredRows.length === 0 ? (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+            No KeHe Velocity rows found.
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <div className="max-h-[70vh] overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Month</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Retailer Area</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Customer</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">UPC</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Description</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Cases</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Eaches</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Retailer</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRows.map((row, index) => (
+                    <tr key={row.id || `${row.upc}-${index}`} className="border-t border-slate-200">
+                      <td className="px-4 py-3 text-slate-700">{row.month}</td>
+                      <td className="px-4 py-3 text-slate-700">{row.retailer_area}</td>
+                      <td className="px-4 py-3 text-slate-700">{row.customer}</td>
+                      <td className="px-4 py-3 text-slate-700">{row.upc}</td>
+                      <td className="px-4 py-3 text-slate-700">{row.description}</td>
+                      <td className="px-4 py-3 text-slate-700">{row.cases}</td>
+                      <td className="px-4 py-3 text-slate-700">{row.eaches}</td>
+                      <td className="px-4 py-3 text-slate-700">{row.retailer}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
