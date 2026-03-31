@@ -121,15 +121,28 @@ function categorizeRetailerName(rawRetailer: string) {
   return "INFRA & Others";
 }
 
-function findRetailer(custName: string, locations: LocationRow[]) {
+function findRetailer(
+  custName: string,
+  itemName: string,
+  locations: LocationRow[]
+) {
+  const trimmedCustomer = custName.trim();
+  const normalizedCustomer = normalizeText(trimmedCustomer);
+  const normalizedItem = normalizeText(itemName);
+
+  // Hard rules first
+  if (normalizedCustomer === "DC16") {
+    if (normalizedItem.startsWith("NSA")) return "Fresh Thyme";
+    if (normalizedItem.startsWith("HP")) return "Kroger";
+  }
+
   const directRetailer = directRetailerFromCustomer(custName);
   if (directRetailer) return directRetailer;
 
-  const trimmed = custName.trim();
-  const firstTwoCustomer = getFirstTwoWords(trimmed);
+  const firstTwoCustomer = getFirstTwoWords(trimmedCustomer);
 
   if (!firstTwoCustomer) return "";
-  if (/^DC\s*\d+$/i.test(trimmed)) return "";
+  if (/^DC\s*\d+$/i.test(trimmedCustomer)) return "";
 
   const match = locations.find((loc) => {
     const firstTwoLocation = getFirstTwoWords(loc.customer);
@@ -212,7 +225,11 @@ export default function BrokerCommissionDataSetsView() {
     } else {
       setRows(
         (datasetData ?? []).map((row: any) => {
-          const inferredRetailer = findRetailer(row.cust_name ?? "", locations);
+          const inferredRetailer = findRetailer(
+            row.cust_name ?? "",
+            row.item ?? "",
+            locations
+          );
           const overrideRetailer = overrideMap.get(row.id) ?? "";
 
           return {
@@ -377,7 +394,8 @@ export default function BrokerCommissionDataSetsView() {
     visibleRowIds.every((id) => selectedRowIds.includes(id));
 
   const someVisibleSelected =
-    visibleRowIds.some((id) => selectedRowIds.includes(id)) && !allVisibleSelected;
+    visibleRowIds.some((id) => selectedRowIds.includes(id)) &&
+    !allVisibleSelected;
 
   const toggleRowSelection = (rowId: string) => {
     setSelectedRowIds((prev) =>
@@ -400,14 +418,14 @@ export default function BrokerCommissionDataSetsView() {
 
   const startEditing = (row: Row) => {
     setMenuRowId(null);
-  
+
     const shouldEditSelected =
       selectedRowIds.length > 1 && selectedRowIds.includes(row.id);
-  
+
     if (shouldEditSelected) {
       const selectedRows = rows.filter((r) => selectedRowIds.includes(r.id));
       const firstRetailer = selectedRows[0]?.retailer ?? "";
-  
+
       if (
         firstRetailer === "Fresh Thyme" ||
         firstRetailer === "Kroger" ||
@@ -423,13 +441,13 @@ export default function BrokerCommissionDataSetsView() {
         setBulkRetailerChoice("Fresh Thyme");
         setBulkCustomRetailer("");
       }
-  
+
       setBulkEditOpen(true);
       return;
     }
-  
+
     setEditingRowId(row.id);
-  
+
     if (
       row.retailer === "Fresh Thyme" ||
       row.retailer === "Kroger" ||
