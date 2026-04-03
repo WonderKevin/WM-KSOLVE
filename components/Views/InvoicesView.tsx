@@ -851,17 +851,19 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     if (!isProductCode(code) || seen.has(code)) continue;
 
     let qty = 1;
-    let amount = "";
+    const amounts: string[] = [];
 
     for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
       const line = lines[j];
       if (DIGITS_RE.test(line) && qty === 1) { qty = parseInt(line, 10); continue; }
-      if (AMT_RE.test(line)) amount = line;
+      if (AMT_RE.test(line)) amounts.push(line);
       if (isProductCode(line) && j > i + 1) break;
     }
 
-    if (!amount) continue;
-    const amtMatch = amount.match(AMT_RE);
+    // Use the LAST dollar amount found — that's the line total (Amount column)
+    // The first dollar amount is the Rate per unit, the last is Rate × Qty
+    if (!amounts.length) continue;
+    const amtMatch = amounts[amounts.length - 1].match(AMT_RE);
     if (!amtMatch) continue;
 
     seen.add(code);
