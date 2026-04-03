@@ -160,6 +160,7 @@ export default function WMKsolveApp() {
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [documentUploadSignal, setDocumentUploadSignal] = useState(0);
+  const [invoiceUploadSignal, setInvoiceUploadSignal] = useState(0);
   const [loggingOut, setLoggingOut] = useState(false);
   const [userEmail, setUserEmail] = useState("");
   const [permissions, setPermissions] = useState<Permissions | null>(null);
@@ -432,6 +433,7 @@ export default function WMKsolveApp() {
       case "database-ksolve-invoices":
         return (
           <InvoicesView
+            invoiceUploadSignal={invoiceUploadSignal}
             documentUploadSignal={documentUploadSignal}
             canReprocess={!!permissions?.can_reprocess_invoices}
             isAdmin={userEmail.toLowerCase() === "kevin@wondermonday.com"}
@@ -516,16 +518,28 @@ export default function WMKsolveApp() {
             </div>
 
             <div className="flex items-center gap-3">
-              {/* Single Upload Files button — triggers document upload in InvoicesView */}
+              {/* Two upload buttons for Ksolve Invoices page */}
               {activeKey === "database-ksolve-invoices" && (
-                <Button
-                  type="button"
-                  className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-                  onClick={() => setDocumentUploadSignal((prev) => prev + 1)}
-                >
-                  <Upload className="mr-2 h-4 w-4" />
-                  Upload Files
-                </Button>
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-2xl border-slate-200"
+                    onClick={() => setInvoiceUploadSignal((prev) => prev + 1)}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload Ksolve Invoices
+                  </Button>
+
+                  <Button
+                    type="button"
+                    className="rounded-2xl bg-slate-900 hover:bg-slate-800"
+                    onClick={() => setDocumentUploadSignal((prev) => prev + 1)}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload Files
+                  </Button>
+                </>
               )}
 
               <Button
