@@ -1306,12 +1306,10 @@ async function syncInvoiceFromUpload(invoice: string, type: string) {
 }
 
 export default function InvoicesView({
-  invoiceUploadSignal,
   documentUploadSignal,
   canReprocess = false,
   isAdmin = false,
 }: {
-  invoiceUploadSignal: number;
   documentUploadSignal: number;
   canReprocess?: boolean;
   isAdmin?: boolean;
@@ -1351,7 +1349,6 @@ export default function InvoicesView({
   const invoiceInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastInvRef = useRef(invoiceUploadSignal);
   const lastDocRef = useRef(documentUploadSignal);
 
   const showToast = (text: string, type: ToastType = "success") => {
@@ -1392,13 +1389,6 @@ export default function InvoicesView({
 
     return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
   }, []);
-
-  useEffect(() => {
-    if (invoiceUploadSignal > 0 && invoiceUploadSignal !== lastInvRef.current) {
-      lastInvRef.current = invoiceUploadSignal;
-      invoiceInputRef.current?.click();
-    }
-  }, [invoiceUploadSignal]);
 
   useEffect(() => {
     if (documentUploadSignal > 0 && documentUploadSignal !== lastDocRef.current) {
@@ -2187,26 +2177,28 @@ export default function InvoicesView({
               </div>
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" onClick={() => invoiceInputRef.current?.click()}
-                className="flex items-center gap-2">
-                <FileSpreadsheet className="h-4 w-4" />
-                Upload Invoice Excel
-              </Button>
-
-              <Button type="button" variant="outline" onClick={() => documentInputRef.current?.click()}
-                className="flex items-center gap-2">
-                <FileText className="h-4 w-4" />
-                Upload Invoice Documents
-              </Button>
-
-              {withoutDocumentCount > 0 && (
+            {withoutDocumentCount > 0 && (
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => invoiceInputRef.current?.click()}
+                  className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                  <FileSpreadsheet className="h-3 w-3" />
+                  Upload Invoice Excel
+                </button>
                 <button type="button" onClick={() => setDocumentFilter("Without Document")}
                   className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
                   Missing documents: {withoutDocumentCount > 99 ? "99+" : withoutDocumentCount}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
+            {withoutDocumentCount === 0 && (
+              <div className="mt-4">
+                <button type="button" onClick={() => invoiceInputRef.current?.click()}
+                  className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                  <FileSpreadsheet className="h-3 w-3" />
+                  Upload Invoice Excel
+                </button>
+              </div>
+            )}
 
             {selectMode && (
               <div className="mt-4 max-w-xs">
