@@ -16,6 +16,7 @@ import { supabase } from "@/lib/supabase/client";
 type Row = {
   id: string;
   month: string;
+  checkDate: string;
   invoice: string;
   type: string;
   upc: string;
@@ -27,6 +28,10 @@ type Row = {
 
 type InvoiceRow = {
   invoice_number: string;
+};
+
+type UploadRow = {
+  invoice: string | null;
 };
 
 type LocationRow = {
@@ -53,6 +58,31 @@ function formatMonthShort(value: string): string {
   const m = value.trim().match(/^([A-Za-z]+)\s+(\d{4})$/);
   if (m) return `${m[1]} '${m[2].slice(-2)}`;
   return value;
+}
+
+function formatMonthFromDate(value: string): string {
+  if (!value) return "";
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+
+  return parsed.toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function formatCheckDate(value: string): string {
+  if (!value) return "-";
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+
+  return parsed.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 function normalizeInvoice(value: string) {
@@ -130,7 +160,6 @@ function findRetailer(
   const normalizedCustomer = normalizeText(trimmedCustomer);
   const normalizedItem = normalizeText(itemName);
 
-  // Hard rules first
   if (normalizedCustomer === "DC16") {
     if (normalizedItem.startsWith("NSA")) return "Fresh Thyme";
     if (normalizedItem.startsWith("HP")) return "Kroger";
@@ -195,14 +224,19 @@ export default function BrokerCommissionDataSetsView() {
     const [
       { data: datasetData, error: datasetError },
       { data: invoiceData, error: invoiceError },
+      { data: uploadData, error: uploadError },
       { data: locationsData, error: locationsError },
       { data: overrideData, error: overrideError },
     ] = await Promise.all([
       supabase
         .from("broker_commission_datasets")
-        .select("id, month, invoice, type, upc, item, cust_name, amt")
+        .select(
+          "id, month, check_date, invoice, type, upc, item, cust_name, amt"
+        )
+        .order("check_date", { ascending: false, nullsFirst: false })
         .order("invoice", { ascending: false }),
       supabase.from("invoices").select("invoice_number"),
+      supabase.from("uploads").select("invoice"),
       supabase.from("locations").select("customer, retailer"),
       supabase.from("retailer_overrides").select("dataset_id, retailer"),
     ]);
@@ -231,10 +265,13 @@ export default function BrokerCommissionDataSetsView() {
             locations
           );
           const overrideRetailer = overrideMap.get(row.id) ?? "";
+          const derivedMonth =
+            formatMonthFromDate(row.check_date ?? "") || (row.month ?? "");
 
           return {
             id: row.id,
-            month: row.month ?? "",
+            month: derivedMonth,
+            checkDate: row.check_date ?? "",
             invoice: row.invoice ?? "",
             type: row.type ?? "",
             upc: row.upc ?? "",
@@ -265,6 +302,12 @@ export default function BrokerCommissionDataSetsView() {
           .filter(Boolean)
       );
 
+      const uploadedInvoiceSet = new Set(
+        (uploadData ?? [])
+          .map((row: UploadRow) => normalizeInvoice(row.invoice || ""))
+          .filter(Boolean)
+      );
+
       const invoiceList = Array.from(
         new Set(
           (invoiceData ?? [])
@@ -274,9 +317,14 @@ export default function BrokerCommissionDataSetsView() {
       );
 
       const missing = invoiceList.filter(
-        (invoice) => !datasetInvoiceSet.has(invoice)
+        (invoice) =>
+          uploadedInvoiceSet.has(invoice) && !datasetInvoiceSet.has(invoice)
       );
       setMissingInvoices(missing.sort((a, b) => a.localeCompare(b)));
+    }
+
+    if (uploadError) {
+      console.error("Failed to load uploads:", uploadError);
     }
 
     setLoading(false);
@@ -376,6 +424,7 @@ export default function BrokerCommissionDataSetsView() {
         !keyword ||
         row.type.toLowerCase().includes(keyword) ||
         formatMonthShort(row.month).toLowerCase().includes(keyword) ||
+        formatCheckDate(row.checkDate).toLowerCase().includes(keyword) ||
         row.invoice.toLowerCase().includes(keyword) ||
         row.upc.toLowerCase().includes(keyword) ||
         row.item.toLowerCase().includes(keyword) ||
@@ -783,7 +832,8 @@ export default function BrokerCommissionDataSetsView() {
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3">
             <h3 className="text-sm font-semibold text-slate-900">
-              Edit retailer for {selectedRowIds.length} selected row{selectedRowIds.length > 1 ? "s" : ""}
+              Edit retailer for {selectedRowIds.length} selected row
+              {selectedRowIds.length > 1 ? "s" : ""}
             </h3>
           </div>
 
@@ -899,7 +949,11 @@ export default function BrokerCommissionDataSetsView() {
                       />
                     </td>
                     <td className="p-3">{row.type}</td>
-                    <td className="p-3">{formatMonthShort(row.month)}</td>
+                    <td className="p-3">
+                      {row.checkDate
+                        ? formatCheckDate(row.checkDate)
+                        : formatMonthShort(row.month)}
+                    </td>
                     <td className="p-3 font-medium">{row.invoice}</td>
                     <td className="p-3">{row.upc}</td>
                     <td className="p-3">{row.item}</td>

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
@@ -14,6 +14,7 @@ type RetailerName =
 type DatasetRow = {
   id: string;
   month: string;
+  check_date: string;
   invoice: string;
   type: string;
   upc: string;
@@ -37,6 +38,7 @@ type VelocityRowRaw = Record<string, any>;
 
 type VelocitySplitRow = {
   month: string;
+  check_date: string;
   invoice: string;
   retailer: RetailerName;
   amount: number;
@@ -80,6 +82,18 @@ function formatMonthShort(value: string): string {
   const m = value.trim().match(/^([A-Za-z]+)\s+(\d{4})$/);
   if (m) return `${m[1]} '${m[2].slice(-2)}`;
   return value;
+}
+
+function formatMonthFromDate(value: string): string {
+  if (!value) return "";
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+
+  return parsed.toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
 }
 
 function parseMonthOrder(value: string) {
@@ -257,7 +271,15 @@ function mapVelocityRow(raw: VelocityRowRaw): VelocitySplitRow | null {
     raw["Invoice"] ??
     "";
 
-  const month =
+  const checkDate =
+    raw.check_date ??
+    raw.checkdate ??
+    raw.check_dt ??
+    raw["Check Date"] ??
+    raw["CheckDate"] ??
+    "";
+
+  const fallbackMonth =
     raw.month ??
     raw.invoice_month ??
     raw.statement_month ??
@@ -285,8 +307,11 @@ function mapVelocityRow(raw: VelocityRowRaw): VelocitySplitRow | null {
 
   if (!invoice) return null;
 
+  const derivedMonth = formatMonthFromDate(String(checkDate || "")) || String(fallbackMonth || "");
+
   return {
-    month: String(month || ""),
+    month: derivedMonth,
+    check_date: String(checkDate || ""),
     invoice: normalizeInvoice(invoice),
     retailer: categorizeRetailerName(retailerRaw),
     amount,
@@ -295,6 +320,7 @@ function mapVelocityRow(raw: VelocityRowRaw): VelocitySplitRow | null {
 
 export default function BrokerCommissionSummaryView() {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [rows, setRows] = useState<DatasetRow[]>([]);
   const [velocityRows, setVelocityRows] = useState<VelocitySplitRow[]>([]);
   const [selectedMonth, setSelectedMonth] = useState("All Months");
@@ -305,75 +331,92 @@ export default function BrokerCommissionSummaryView() {
     Record<string, boolean>
   >({});
 
-  useEffect(() => {
-    const load = async () => {
+  const load = useCallback(async (isManualRefresh = false) => {
+    if (isManualRefresh) {
+      setRefreshing(true);
+    } else {
       setLoading(true);
+    }
 
-      const [
-        { data: datasetData, error: datasetError },
-        { data: overrideData, error: overrideError },
-        { data: locationData, error: locationError },
-        { data: velocityData, error: velocityError },
-      ] = await Promise.all([
-        supabase
-          .from("broker_commission_datasets")
-          .select("id, month, invoice, type, upc, item, cust_name, amt"),
-        supabase.from("retailer_overrides").select("dataset_id, retailer"),
-        supabase.from("locations").select("customer, retailer"),
-        supabase.from("kehe_velocity").select("*"),
-      ]);
+    const [
+      { data: datasetData, error: datasetError },
+      { data: overrideData, error: overrideError },
+      { data: locationData, error: locationError },
+      { data: velocityData, error: velocityError },
+    ] = await Promise.all([
+      supabase
+        .from("broker_commission_datasets")
+        .select("id, month, check_date, invoice, type, upc, item, cust_name, amt")
+        .order("check_date", { ascending: false, nullsFirst: false })
+        .order("invoice", { ascending: false }),
+      supabase.from("retailer_overrides").select("dataset_id, retailer"),
+      supabase.from("locations").select("customer, retailer"),
+      supabase.from("kehe_velocity").select("*"),
+    ]);
 
-      if (datasetError) console.error("Failed to load datasets:", datasetError);
-      if (overrideError) console.error("Failed to load overrides:", overrideError);
-      if (locationError) console.error("Failed to load locations:", locationError);
-      if (velocityError) console.error("Failed to load kehe_velocity:", velocityError);
+    if (datasetError) console.error("Failed to load datasets:", datasetError);
+    if (overrideError) console.error("Failed to load overrides:", overrideError);
+    if (locationError) console.error("Failed to load locations:", locationError);
+    if (velocityError) console.error("Failed to load kehe_velocity:", velocityError);
 
-      const overrides = new Map<string, string>(
-        ((overrideData ?? []) as RetailerOverrideRow[]).map((r) => [
-          r.dataset_id,
-          r.retailer,
-        ])
-      );
+    const overrides = new Map<string, string>(
+      ((overrideData ?? []) as RetailerOverrideRow[]).map((r) => [
+        r.dataset_id,
+        r.retailer,
+      ])
+    );
 
-      const locations: LocationRow[] = (locationData ?? []).map((r: any) => ({
-        customer: r.customer ?? "",
-        retailer: r.retailer ?? "",
-      }));
+    const locations: LocationRow[] = (locationData ?? []).map((r: any) => ({
+      customer: r.customer ?? "",
+      retailer: r.retailer ?? "",
+    }));
 
-      const hydratedRows: DatasetRow[] = (datasetData ?? []).map((r: any) => {
-        const inferred = inferRetailer(r.cust_name ?? "", r.item ?? "", locations);
-        const override = overrides.get(r.id) ?? "";
+    const hydratedRows: DatasetRow[] = (datasetData ?? []).map((r: any) => {
+      const inferred = inferRetailer(r.cust_name ?? "", r.item ?? "", locations);
+      const override = overrides.get(r.id) ?? "";
+      const derivedMonth =
+        formatMonthFromDate(r.check_date ?? "") || (r.month ?? "");
 
-        return {
-          id: r.id,
-          month: r.month ?? "",
-          invoice: normalizeInvoice(r.invoice ?? ""),
-          type: r.type ?? "",
-          upc: r.upc ?? "",
-          item: r.item ?? "",
-          cust_name: r.cust_name ?? "",
-          amt: Number(r.amt ?? 0),
-          retailer: (override || inferred || "") as RetailerName,
-        };
+      return {
+        id: r.id,
+        month: derivedMonth,
+        check_date: r.check_date ?? "",
+        invoice: normalizeInvoice(r.invoice ?? ""),
+        type: r.type ?? "",
+        upc: r.upc ?? "",
+        item: r.item ?? "",
+        cust_name: r.cust_name ?? "",
+        amt: Number(r.amt ?? 0),
+        retailer: (override || inferred || "") as RetailerName,
+      };
+    });
+
+    const normalizedVelocity = (velocityData ?? [])
+      .map(mapVelocityRow)
+      .filter(Boolean) as VelocitySplitRow[];
+
+    setRows(hydratedRows);
+    setVelocityRows(normalizedVelocity);
+
+    const months = Array.from(
+      new Set(hydratedRows.map((r) => r.month).filter(Boolean))
+    ).sort((a, b) => parseMonthOrder(b) - parseMonthOrder(a));
+
+    setExpandedMonths((prev) => {
+      const next = { ...prev };
+      months.forEach((m) => {
+        if (!(m in next)) next[m] = true;
       });
+      return next;
+    });
 
-      const normalizedVelocity = (velocityData ?? [])
-        .map(mapVelocityRow)
-        .filter(Boolean) as VelocitySplitRow[];
-
-      setRows(hydratedRows);
-      setVelocityRows(normalizedVelocity);
-
-      const months = Array.from(
-        new Set(hydratedRows.map((r) => r.month).filter(Boolean))
-      ).sort((a, b) => parseMonthOrder(b) - parseMonthOrder(a));
-
-      setExpandedMonths(Object.fromEntries(months.map((m) => [m, true])));
-      setLoading(false);
-    };
-
-    load();
+    setLoading(false);
+    setRefreshing(false);
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const monthOptions = useMemo(() => {
     return [
@@ -430,7 +473,7 @@ export default function BrokerCommissionSummaryView() {
       return block;
     };
 
-    // 1) Full WM invoice totals from Data Sets
+    // 1) Full WM invoice totals from Data Sets, bucketed by CHECK DATE month
     const wmInvoiceTotalsByMonthInvoice = new Map<string, number>();
 
     for (const row of datasetRows) {
@@ -442,7 +485,7 @@ export default function BrokerCommissionSummaryView() {
       );
     }
 
-    // 2) Carveouts from Kehe Velocity for non-Kroger retailers only
+    // 2) Carveouts from Kehe Velocity, also bucketed by CHECK DATE month
     const carveoutsByMonthInvoiceRetailer = new Map<string, number>();
 
     for (const row of velocityRowsForMonth) {
@@ -455,9 +498,7 @@ export default function BrokerCommissionSummaryView() {
       );
     }
 
-    // 3) Build WM Invoice blocks:
-    //    non-Kroger gets carveout amount from Velocity
-    //    Kroger gets remainder
+    // 3) Build WM Invoice blocks
     for (const [monthInvoiceKey, totalAmount] of wmInvoiceTotalsByMonthInvoice.entries()) {
       const [month, invoice] = monthInvoiceKey.split("__");
       const monthSummary = ensureMonth(month);
@@ -504,7 +545,7 @@ export default function BrokerCommissionSummaryView() {
       });
     }
 
-    // 4) Deductions from Data Sets stay in their own retailer block
+    // 4) Deductions from Data Sets stay in their retailer block, also by CHECK DATE month
     const dc19ByMonth = new Map<string, boolean>();
     for (const row of datasetRows) {
       if (normalizeText(row.cust_name) === "DC19") {
@@ -626,6 +667,7 @@ export default function BrokerCommissionSummaryView() {
           </h2>
           <p className="text-sm text-slate-500">
             Data Sets drives totals. Kehe Velocity only splits WM Invoice by retailer.
+            Month grouping uses check date.
           </p>
         </div>
 
@@ -642,6 +684,15 @@ export default function BrokerCommissionSummaryView() {
               </option>
             ))}
           </select>
+
+          <button
+            type="button"
+            onClick={() => load(true)}
+            disabled={refreshing}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
         </div>
       </div>
 
