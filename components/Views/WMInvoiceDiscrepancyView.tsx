@@ -12,12 +12,12 @@ type WMRow = {
 };
 
 type KsolveRow = {
-  month: string;
-  check_date: string;
-  check_no: string;
-  invoice: string;
-  amount: number;
-};
+    month: string | null;
+    check_date: string | null;
+    check_number: string | null;
+    invoice_number: string | null;
+    invoice_amt: number | null;
+  };
 
 type DiscrepancyRow = {
   month: string;
@@ -80,9 +80,10 @@ export default function WMInvoiceDiscrepancyView() {
       // KSolve amounts
       // If your real table/field names differ, only adjust this query.
       const { data: ksolveData, error: ksolveError } = await supabase
-        .from("ksolve_invoices")
-        .select("month, check_date, check_no, invoice, amount")
-        .order("check_date", { ascending: false, nullsFirst: false });
+  .from("invoices")
+  .select("month, check_date, check_number, invoice_number, invoice_amt, type")
+  .eq("type", "WM Invoice")
+  .order("check_date", { ascending: false, nullsFirst: false });
 
       if (ksolveError) {
         console.error("Failed to load Ksolve invoice rows:", ksolveError);
@@ -136,21 +137,21 @@ export default function WMInvoiceDiscrepancyView() {
       >();
 
       for (const row of ksolveRows) {
-        const invoice = normalizeInvoice(row.invoice);
+        const invoice = normalizeInvoice(row.invoice_number);
         if (!invoice) continue;
-
+      
         const current = ksolveByInvoice.get(invoice);
-
+      
         if (!current) {
           ksolveByInvoice.set(invoice, {
             month: row.month ?? "",
             checkDate: row.check_date ?? "",
-            checkNo: row.check_no ?? "",
+            checkNo: row.check_number ?? "",
             invoice,
-            ksolveAmount: Number(row.amount ?? 0),
+            ksolveAmount: Number(row.invoice_amt ?? 0),
           });
         } else {
-          current.ksolveAmount += Number(row.amount ?? 0);
+          current.ksolveAmount += Number(row.invoice_amt ?? 0);
         }
       }
 
