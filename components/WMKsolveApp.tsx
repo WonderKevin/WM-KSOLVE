@@ -23,6 +23,7 @@ import BrokerCommissionSummaryView from "@/components/Views/BrokerCommissionSumm
 import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDataSetsView";
 import AccountingSummaryView from "@/components/Views/AccountingSummaryView";
 import CheckDetailsView from "@/components/Views/CheckDetailsView";
+import WMInvoiceDiscrepancyView from "@/components/Views/WMInvoiceDiscrepancyView";
 import InvoicesView from "@/components/Views/InvoicesView";
 import ProductListView from "@/components/Views/ProductListView";
 import LocationsView from "@/components/Views/LocationsView";
@@ -250,6 +251,7 @@ export default function WMKsolveApp() {
     }
     if (permissions.can_view_accounting_summary) {
       allowedKeys.push("accounting-summary");
+      allowedKeys.push("accounting-wm-invoice-discrepancy");
     }
     if (permissions.can_view_accounting_check_details) {
       allowedKeys.push("accounting-check-details");
@@ -330,6 +332,12 @@ export default function WMKsolveApp() {
       permissions.can_view_accounting_check_details
         ? { label: "Check Details", key: "accounting-check-details" }
         : null,
+      permissions.can_view_accounting_summary
+        ? {
+            label: "WM Invoice Discrepancy",
+            key: "accounting-wm-invoice-discrepancy",
+          }
+        : null,
     ].filter(Boolean);
 
     if (accountingChildren.length) {
@@ -407,6 +415,7 @@ export default function WMKsolveApp() {
     "broker-commission-data-sets": "Data Sets",
     "accounting-summary": "Summary",
     "accounting-check-details": "Check Details",
+    "accounting-wm-invoice-discrepancy": "WM Invoice Discrepancy",
     "reporting-report-xxx": "Report XXX",
     "database-ksolve-invoices": "Ksolve Invoices",
     "database-kehe-velocity": "KeHe Velocity",
@@ -428,6 +437,8 @@ export default function WMKsolveApp() {
         return <AccountingSummaryView />;
       case "accounting-check-details":
         return <CheckDetailsView />;
+      case "accounting-wm-invoice-discrepancy":
+        return <WMInvoiceDiscrepancyView />;
       case "reporting-report-xxx":
         return <PlaceholderView title="Report XXX" />;
       case "database-ksolve-invoices":
@@ -518,7 +529,6 @@ export default function WMKsolveApp() {
             </div>
 
             <div className="flex items-center gap-3">
-              {/* Two upload buttons for Ksolve Invoices page */}
               {activeKey === "database-ksolve-invoices" && (
                 <>
                   <Button
