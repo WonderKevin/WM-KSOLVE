@@ -861,85 +861,67 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     }
   }
 
-  const isProductCode = (value: string) =>
-    /^(?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-\d{1,3}$/i.test(normalizeSku(value));
-
-  const isMoneyLine = (value: string) => /^-?\$?\s*[\d,]+\.\d{2}$/.test(value.trim());
-  const parseMoneyLine = (value: string) =>
-    parseFloat(value.replace(/[\$,\s]/g, "").replace(/^\-/, ""));
-
-  const raw: Array<{ upc: string; item: string; qty: number; amt: number }> = [];
+  const raw: Array<{ upc: string; qty: number; amt: number }> = [];
   const seen = new Set<string>();
+  const isProductCode = (line: string) => /^(?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-\d{1,3}$/i.test(normalizeSku(line));
 
-  for (let i = 0; i < lines.length; i++) {
-    const sku = normalizeSku(lines[i]);
-    if (!isProductCode(sku)) continue;
+  const flatText = normalizedText
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n");
 
-    let description = "";
-    for (let j = i - 1; j >= Math.max(0, i - 3); j--) {
-      const prev = lines[j].trim();
-      if (!prev) continue;
-      if (/^\d+\.?$/.test(prev)) continue;
-      if (isProductCode(prev)) continue;
-      if (isMoneyLine(prev)) continue;
-      if (/^\d+$/.test(prev)) continue;
-      if (/^(product|service|sku|description|qty|rate|amount)$/i.test(prev)) continue;
-      description = prev;
-      break;
-    }
+  const strictPattern = /((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-\d{1,3})\s+(\d+(?:\.\d+)?)\s+\$?\s*(-?[\d,]+\.\d{2})\s+\$?\s*(-?[\d,]+\.\d{2})/gi;
+  let match: RegExpExecArray | null;
 
-    const qtyCandidates: number[] = [];
-    const moneyCandidates: number[] = [];
-
-    for (let j = i + 1; j < Math.min(lines.length, i + 8); j++) {
-      const next = lines[j].trim();
-      if (!next) continue;
-      if (isProductCode(next)) break;
-      if (/^\d+\.?$/.test(next) && j == i + 1) continue;
-      if (/^\d+$/.test(next)) {
-        qtyCandidates.push(parseInt(next, 10));
-        continue;
-      }
-      if (isMoneyLine(next)) {
-        moneyCandidates.push(parseMoneyLine(next));
-        continue;
-      }
-      if (/^ma\s*2%$/i.test(next)) break;
-    }
-
-    const qty = qtyCandidates.length ? qtyCandidates[0] : 1;
-    const amount =
-      moneyCandidates.length >= 2
-        ? moneyCandidates[1]
-        : moneyCandidates.length === 1
-          ? moneyCandidates[0]
-          : 0;
-
-    if (!amount) continue;
-
-    const dedupeKey = `${sku}__${qty}__${amount}`;
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
-
+  while ((match = strictPattern.exec(flatText)) !== null) {
+    const upc = normalizeSku(match[1]);
+    const qty = Number(match[2] || 0);
+    const amount = Math.abs(parseFloat(String(match[4] || "0").replace(/,/g, "")));
+    const key = `${upc}__${qty}__${amount}`;
+    if (!upc || !amount || seen.has(key)) continue;
+    seen.add(key);
     raw.push({
-      upc: sku,
-      item: description,
-      qty,
-      amt: round2(Math.abs(amount)),
+      upc,
+      qty: qty > 0 ? qty : 1,
+      amt: amount,
     });
   }
 
   if (!raw.length) {
-    const blockRegex =
-      /(?:^|\n)\s*(?:\d+\.\s*)?([^\n]+?)\s*\n\s*((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-\d{1,3})\s*\n\s*(\d+)\s*\n\s*-?\$?\s*([\d,]+\.\d{2})\s*\n\s*-?\$?\s*([\d,]+\.\d{2})/gi;
+    for (let i = 0; i < lines.length; i++) {
+      const code = normalizeSku(lines[i]);
+      if (!isProductCode(code)) continue;
 
-    let match: RegExpExecArray | null = null;
-    while ((match = blockRegex.exec(normalizedText)) !== null) {
+      let qty = 0;
+      const numberTokens: number[] = [];
+
+      for (let j = i + 1; j < Math.min(i + 12, lines.length); j++) {
+        const next = lines[j];
+        const nextSku = normalizeSku(next);
+        if (isProductCode(nextSku) && j > i + 1) break;
+        if (/^ma\s*2%$/i.test(next)) break;
+
+        if (/^\d+$/.test(next) && qty === 0) {
+          qty = parseInt(next, 10);
+          continue;
+        }
+
+        const amountMatch = next.match(/^-?\$?\s*([\d,]+\.\d{2})$/);
+        if (amountMatch) {
+          numberTokens.push(parseFloat(amountMatch[1].replace(/,/g, "")));
+        }
+      }
+
+      if (!numberTokens.length) continue;
+
+      const amount = Math.abs(numberTokens[numberTokens.length - 1]);
+      const key = `${code}__${qty || 1}__${amount}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
       raw.push({
-        upc: normalizeSku(match[2]),
-        item: match[1].replace(/\s+/g, " ").trim(),
-        qty: parseInt(match[3], 10) || 1,
-        amt: round2(Math.abs(parseFloat(match[5].replace(/,/g, "")))),
+        upc: code,
+        qty: qty > 0 ? qty : 1,
+        amt: amount,
       });
     }
   }
@@ -947,28 +929,31 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   if (!raw.length) return rows;
 
   const totalQty = raw.reduce((sum, r) => sum + (r.qty || 0), 0);
-  const grossTotal = round2(raw.reduce((sum, r) => sum + Math.abs(r.amt), 0));
-  const netTarget = round2(Math.max(grossTotal - maDeduction, 0));
+  const rawTotal = round2(raw.reduce((sum, r) => sum + Math.abs(r.amt), 0));
+  const expectedNetTotal = round2(Math.max(rawTotal - maDeduction, 0));
 
-  const allocated = raw.map((r) => {
+  raw.forEach((r) => {
     const share = totalQty > 0 ? r.qty / totalQty : 0;
     const maShare = maDeduction > 0 ? round2(maDeduction * share) : 0;
-    return {
-      upc: normalizeSku(r.upc),
-      item: r.item,
+    const netAmount = round2(Math.max(Math.abs(r.amt) - maShare, 0));
+
+    rows.push({
+      upc: r.upc,
+      item: "",
       cust_name: customer,
       qty: r.qty,
-      amt: round2(Math.max(Math.abs(r.amt) - maShare, 0)),
-    };
+      amt: netAmount,
+    });
   });
 
-  const diff = round2(netTarget - allocated.reduce((sum, row) => sum + row.amt, 0));
-  if (allocated.length && diff !== 0) {
-    allocated[allocated.length - 1].amt = round2(allocated[allocated.length - 1].amt + diff);
+  const diff = round2(expectedNetTotal - rows.reduce((sum, row) => sum + row.amt, 0));
+  if (rows.length && diff !== 0) {
+    rows[rows.length - 1].amt = round2(rows[rows.length - 1].amt + diff);
   }
 
-  return allocated.map((row) => ({
+  return rows.map((row) => ({
     ...row,
+    upc: normalizeSku(row.upc),
     amt: round2(Math.abs(row.amt)),
   }));
 }
@@ -1762,7 +1747,10 @@ export default function InvoicesView({
     if (!parsed.length) return;
 
     const productMap = await fetchProductLookup();
-    const unknown = parsed.filter((r) => r.upc && !productMap.has(r.upc));
+    const unknown = parsed.filter((r) => {
+      const key = normalizeSku(r.upc || "");
+      return key && !productMap.has(key);
+    });
     const uniqueUnknown = Array.from(new Map(unknown.map((r) => [r.upc, r])).values());
 
     if (!uniqueUnknown.length) return;
