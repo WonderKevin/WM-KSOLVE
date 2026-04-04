@@ -23,11 +23,31 @@ type Row = {
   item: string;
   custName: string;
   retailer: string;
+  qty: number;
   amt: number;
+  adjustedAmt: number;
+  discrepancyShare: number;
+};
+
+type DatasetDbRow = {
+  id: string;
+  month: string | null;
+  check_date: string | null;
+  invoice: string | null;
+  type: string | null;
+  upc: string | null;
+  item: string | null;
+  cust_name: string | null;
+  qty: number | null;
+  amt: number | null;
 };
 
 type InvoiceRow = {
   invoice_number: string;
+  check_date?: string | null;
+  check_number?: string | null;
+  invoice_amt?: number | null;
+  type?: string | null;
 };
 
 type UploadRow = {
@@ -51,6 +71,10 @@ const EDITABLE_RETAILERS = [
   "HEB",
   "Add new retailer...",
 ] as const;
+
+function round2(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
 
 function formatMonthShort(value: string): string {
   if (!value) return value;
@@ -111,6 +135,15 @@ function getFirstTwoWords(value: string) {
     .join(" ");
 }
 
+function normalizeType(value: string) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function isWmInvoiceType(value: string) {
+  const t = normalizeType(value);
+  return t === "WM INVOICE" || t === "WMINVOICE";
+}
+
 function directRetailerFromCustomer(custName: string) {
   const customer = normalizeText(custName);
 
@@ -158,16 +191,19 @@ function findRetailer(
   locations: LocationRow[]
 ) {
   const trimmedCustomer = custName.trim();
-  const normalizedCustomer = normalizeText(trimmedCustomer);
   const normalizedItem = normalizeText(itemName);
   const normalizedUpc = normalizeText(upc);
 
   const skuSource = normalizedUpc || normalizedItem;
 
-  // WM / KeHE rows: SKU is stored in UPC column
-  if (/KEHE DISTRIBUTORS DC/i.test(trimmedCustomer) || /\bDC\s*\d+\b/i.test(trimmedCustomer)) {
+  if (
+    /KEHE DISTRIBUTORS DC/i.test(trimmedCustomer) ||
+    /\bDC\s*\d+\b/i.test(trimmedCustomer)
+  ) {
     if (skuSource.startsWith("HP")) return "Kroger";
-    if (skuSource.startsWith("CK") || skuSource.startsWith("NSA")) return "Fresh Thyme";
+    if (skuSource.startsWith("CK") || skuSource.startsWith("NSA")) {
+      return "Fresh Thyme";
+    }
   }
 
   const directRetailer = directRetailerFromCustomer(custName);
@@ -186,6 +222,63 @@ function findRetailer(
   if (!match) return "";
 
   return categorizeRetailerName(match.retailer);
+}
+
+function distributeInvoiceDiscrepancy(rows: Omit<Row, "adjustedAmt" | "discrepancyShare">[], discrepancyByInvoice: Map<string, number>): Row[] {
+  const grouped = new Map<string, Omit<Row, "adjustedAmt" | "discrepancyShare">[]>();
+
+  for (const row of rows) {
+    const key = normalizeInvoice(row.invoice);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(row);
+  }
+
+  const output: Row[] = [];
+
+  for (const [invoice, invoiceRows] of grouped.entries()) {
+    const invoiceDiscrepancy = round2(discrepancyByInvoice.get(invoice) ?? 0);
+
+    const wmRows = invoiceRows.filter(
+      (r) => isWmInvoiceType(r.type) && Number(r.qty || 0) > 0
+    );
+
+    const totalQty = wmRows.reduce((sum, r) => sum + Number(r.qty || 0), 0);
+
+    let runningShare = 0;
+
+    const adjustedRows = invoiceRows.map((row, idx) => {
+      let discrepancyShare = 0;
+
+      if (
+        invoiceDiscrepancy !== 0 &&
+        isWmInvoiceType(row.type) &&
+        totalQty > 0 &&
+        Number(row.qty || 0) > 0
+      ) {
+        const wmIndex = wmRows.findIndex((r) => r.id === row.id);
+        const isLastWm = wmIndex === wmRows.length - 1;
+
+        if (isLastWm) {
+          discrepancyShare = round2(invoiceDiscrepancy - runningShare);
+        } else {
+          discrepancyShare = round2(
+            invoiceDiscrepancy * (Number(row.qty || 0) / totalQty)
+          );
+          runningShare = round2(runningShare + discrepancyShare);
+        }
+      }
+
+      return {
+        ...row,
+        discrepancyShare,
+        adjustedAmt: round2(row.amt + discrepancyShare),
+      };
+    });
+
+    output.push(...adjustedRows);
+  }
+
+  return output;
 }
 
 export default function BrokerCommissionDataSetsView() {
@@ -236,11 +329,14 @@ export default function BrokerCommissionDataSetsView() {
       supabase
         .from("broker_commission_datasets")
         .select(
-          "id, month, check_date, invoice, type, upc, item, cust_name, amt"
+          "id, month, check_date, invoice, type, upc, item, cust_name, qty, amt"
         )
         .order("check_date", { ascending: false, nullsFirst: false })
         .order("invoice", { ascending: false }),
-      supabase.from("invoices").select("invoice_number"),
+      supabase
+        .from("invoices")
+        .select("invoice_number, check_date, check_number, invoice_amt, type")
+        .eq("type", "WM Invoice"),
       supabase.from("uploads").select("invoice"),
       supabase.from("locations").select("customer, retailer"),
       supabase.from("retailer_overrides").select("dataset_id, retailer"),
@@ -258,36 +354,72 @@ export default function BrokerCommissionDataSetsView() {
       ])
     );
 
+    const discrepancyByInvoice = new Map<string, number>();
+
+    // KSolve amount by invoice
+    const ksolveByInvoice = new Map<string, number>();
+    for (const row of (invoiceData ?? []) as InvoiceRow[]) {
+      const invoice = normalizeInvoice(row.invoice_number ?? "");
+      if (!invoice) continue;
+      ksolveByInvoice.set(
+        invoice,
+        round2((ksolveByInvoice.get(invoice) ?? 0) + Number(row.invoice_amt ?? 0))
+      );
+    }
+
+    // WM dataset amount by invoice
+    const wmByInvoice = new Map<string, number>();
+    for (const row of (datasetData ?? []) as DatasetDbRow[]) {
+      const invoice = normalizeInvoice(row.invoice ?? "");
+      if (!invoice) continue;
+      if (!isWmInvoiceType(row.type ?? "")) continue;
+
+      wmByInvoice.set(
+        invoice,
+        round2((wmByInvoice.get(invoice) ?? 0) + Number(row.amt ?? 0))
+      );
+    }
+
+    for (const invoice of new Set([...ksolveByInvoice.keys(), ...wmByInvoice.keys()])) {
+      const ksolveAmount = ksolveByInvoice.get(invoice) ?? 0;
+      const wmAmount = wmByInvoice.get(invoice) ?? 0;
+
+      // Same rule as WM Invoice Discrepancy:
+      // discrepancy = Ksolve Amount - WM Amount
+      discrepancyByInvoice.set(invoice, round2(ksolveAmount - wmAmount));
+    }
+
     if (datasetError) {
       console.error("Failed to load datasets:", datasetError);
       setRows([]);
     } else {
-      setRows(
-        (datasetData ?? []).map((row: any) => {
-          const inferredRetailer = findRetailer(
-            row.cust_name ?? "",
-            row.item ?? "",
-            row.upc ?? "",
-            locations
-          );
-          const overrideRetailer = overrideMap.get(row.id) ?? "";
-          const derivedMonth =
-            formatMonthFromDate(row.check_date ?? "") || (row.month ?? "");
+      const baseRows: Omit<Row, "adjustedAmt" | "discrepancyShare">[] = ((datasetData ?? []) as DatasetDbRow[]).map((row) => {
+        const inferredRetailer = findRetailer(
+          row.cust_name ?? "",
+          row.item ?? "",
+          row.upc ?? "",
+          locations
+        );
+        const overrideRetailer = overrideMap.get(row.id) ?? "";
+        const derivedMonth =
+          formatMonthFromDate(row.check_date ?? "") || (row.month ?? "");
 
-          return {
-            id: row.id,
-            month: derivedMonth,
-            checkDate: row.check_date ?? "",
-            invoice: row.invoice ?? "",
-            type: row.type ?? "",
-            upc: row.upc ?? "",
-            item: row.item ?? "",
-            custName: row.cust_name ?? "",
-            retailer: overrideRetailer || inferredRetailer || "",
-            amt: Number(row.amt ?? 0),
-          };
-        })
-      );
+        return {
+          id: row.id,
+          month: derivedMonth,
+          checkDate: row.check_date ?? "",
+          invoice: row.invoice ?? "",
+          type: row.type ?? "",
+          upc: row.upc ?? "",
+          item: row.item ?? "",
+          custName: row.cust_name ?? "",
+          retailer: overrideRetailer || inferredRetailer || "",
+          qty: Number(row.qty ?? 0),
+          amt: Number(row.amt ?? 0),
+        };
+      });
+
+      setRows(distributeInvoiceDiscrepancy(baseRows, discrepancyByInvoice));
     }
 
     if (locationsError) {
@@ -303,8 +435,8 @@ export default function BrokerCommissionDataSetsView() {
       setMissingInvoices([]);
     } else {
       const datasetInvoiceSet = new Set(
-        (datasetData ?? [])
-          .map((row: any) => normalizeInvoice(row.invoice))
+        ((datasetData ?? []) as DatasetDbRow[])
+          .map((row) => normalizeInvoice(row.invoice ?? ""))
           .filter(Boolean)
       );
 
@@ -316,8 +448,8 @@ export default function BrokerCommissionDataSetsView() {
 
       const invoiceList = Array.from(
         new Set(
-          (invoiceData ?? [])
-            .map((row: InvoiceRow) => normalizeInvoice(row.invoice_number))
+          ((invoiceData ?? []) as InvoiceRow[])
+            .map((row) => normalizeInvoice(row.invoice_number))
             .filter(Boolean)
         )
       );
@@ -436,7 +568,7 @@ export default function BrokerCommissionDataSetsView() {
         row.item.toLowerCase().includes(keyword) ||
         row.custName.toLowerCase().includes(keyword) ||
         row.retailer.toLowerCase().includes(keyword) ||
-        row.amt.toFixed(2).includes(keyword);
+        row.adjustedAmt.toFixed(2).includes(keyword);
 
       return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
@@ -921,20 +1053,22 @@ export default function BrokerCommissionDataSetsView() {
               <th className="p-3 text-left font-semibold">Item</th>
               <th className="p-3 text-left font-semibold">Customer</th>
               <th className="p-3 text-left font-semibold">Retailer</th>
+              <th className="p-3 text-left font-semibold">Qty</th>
               <th className="p-3 text-left font-semibold">Amount</th>
+              <th className="p-3 text-left font-semibold">Disc Share</th>
               <th className="w-[56px] p-3 text-left font-semibold"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={10} className="p-6 text-center text-gray-500">
+                <td colSpan={12} className="p-6 text-center text-gray-500">
                   Loading data...
                 </td>
               </tr>
             ) : data.length === 0 ? (
               <tr>
-                <td colSpan={10} className="p-6 text-center text-gray-500">
+                <td colSpan={12} className="p-6 text-center text-gray-500">
                   No data found.
                 </td>
               </tr>
@@ -999,7 +1133,15 @@ export default function BrokerCommissionDataSetsView() {
                       )}
                     </td>
 
-                    <td className="p-3">${row.amt.toFixed(2)}</td>
+                    <td className="p-3">{row.qty || "-"}</td>
+                    <td className="p-3">${row.adjustedAmt.toFixed(2)}</td>
+                    <td className="p-3">
+                      {row.discrepancyShare !== 0
+                        ? `${row.discrepancyShare < 0 ? "-" : ""}$${Math.abs(
+                            row.discrepancyShare
+                          ).toFixed(2)}`
+                        : "-"}
+                    </td>
 
                     <td className="p-3">
                       {isEditing ? (
