@@ -137,7 +137,7 @@ export default function WMInvoiceDiscrepancyView() {
       >();
 
       for (const row of ksolveRows) {
-        const invoice = normalizeInvoice(row.invoice_number);
+        const invoice = normalizeInvoice(row.invoice_number ?? "");
         if (!invoice) continue;
       
         const current = ksolveByInvoice.get(invoice);
