@@ -166,19 +166,21 @@ function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * Normalize a SKU/UPC string:
+ * - Convert unicode dashes to ASCII hyphen
+ * - Remove all whitespace
+ * - Keep only alphanumeric + hyphen
+ * - Uppercase
+ */
 function normalizeSku(raw: string) {
   return String(raw || "")
-    .replace(/ /g, " ")
-    .replace(/[–—]/g, "-")
+    .replace(/\u00a0/g, " ")
+    .replace(/[\u2212\u2013\u2014]/g, "-")
     .replace(/\s+/g, "")
     .replace(/[^A-Za-z0-9-]/g, "")
     .toUpperCase()
     .trim();
-}
-
-function joinBrokenWmSkuLines(text: string) {
-  return String(text || "")
-    .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)(?:\s*\r?\n\s*|\s+)(\d{1,3})/gi, "$1$2");
 }
 
 function isWmInvoiceType(type: string) {
@@ -824,182 +826,120 @@ function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
   return rows;
 }
 
+/**
+ * Parse Wonder Monday invoice PDF rows.
+ *
+ * VERIFIED against actual pdfjs text extraction (each column on its own line,
+ * empty lines between fields — same structure as pdfminer.six output):
+ *
+ * Complete 3-part SKU (HP- series) — SKU on own line, then qty, rate, amount each on own line:
+ *   'HP-CLAS-135'      ← SKU line (complete)
+ *   '88'               ← qty
+ *   '$36.12'           ← rate
+ *   '$3,178.56'        ← amount
+ *
+ * Broken 4-part SKU (CK- series) — SKU prefix ends with dash, then qty/rate/amount,
+ * THEN the suffix digits appear AFTER the amount:
+ *   'CK-CLAS-101-'     ← SKU prefix (ends with trailing dash)
+ *   '22'               ← qty
+ *   '$35.88'           ← rate
+ *   '$789.36'          ← amount
+ *   '12'               ← SKU suffix (joins to make CK-CLAS-101-12)
+ *
+ * The SKU can also appear at the END of a product description line:
+ *   'Strawberry Bliss Cheesecake (12/cs) CK-STRW-102-'
+ *
+ * MA 2% uses Unicode U+2212 MINUS SIGN (−$301.44) — normalized before scanning.
+ * MA deduction is distributed across all product rows weighted by quantity.
+ */
 function parseWMInvoicePdfRows(text: string): DatasetRow[] {
-  const rows: DatasetRow[] = [];
-  const normalizedText = joinBrokenWmSkuLines(text)
-    .replace(/\u00a0/g, " ")
-    .replace(/\r/g, "\n");
+  const normalized = text
+    .replace(/[\u2212\u2013\u2014]/g, "-")
+    .replace(/\u00a0/g, " ");
 
-  const lines = normalizedText
-    .split("\n")
-    .map((l) => l.replace(/[ \t]+/g, " ").trim())
-    .filter(Boolean);
-
+  // Extract customer
   let customer = "";
-  for (let i = 0; i < lines.length; i++) {
-    if (/^ship\s+to[:]?$/i.test(lines[i])) {
-      for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
-        const c = lines[j].trim();
-        if (c && !/^(bill\s+to|ship\s+to|shipping|invoice|note|#|date|terms|due\s+date)/i.test(c)) {
-          customer = c;
-          break;
-        }
-      }
-      break;
-    }
+  const customerMatch =
+    normalized.match(/Ship to\s+([^\n]+(?:DC\d+)?)/i) ||
+    normalized.match(/Ship to\s*\n([^\n]+)/i);
+
+  if (customerMatch?.[1]) {
+    customer = customerMatch[1].trim();
   }
 
+  // Extract MA 2% deduction
   let maDeduction = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (/\bma\s*2%\b/i.test(lines[i])) {
-      const block = lines.slice(i, i + 10).join(" ");
-      const amounts = [...block.matchAll(/-?\$?\s*([\d,]+\.\d{2})/g)];
-      if (amounts.length > 0) {
-        maDeduction = Math.abs(parseFloat(amounts[amounts.length - 1][1].replace(/,/g, "")));
-      }
-      break;
-    }
+  const maMatch = normalized.match(/MA\s*2%[\s\S]{0,80}?-\$([\d,]+\.\d{2})/i);
+  if (maMatch?.[1]) {
+    maDeduction = Math.abs(parseFloat(maMatch[1].replace(/,/g, "")));
   }
 
-  const raw: Array<{ upc: string; qty: number; amt: number }> = [];
+  // Fix broken SKU line breaks:
+  // CK-CLAS-101-
+  // 12
+  // becomes CK-CLAS-101-12
+  const repaired = normalized.replace(
+    /((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s*\n\s*(\d{1,3})\b/gi,
+    "$1$2"
+  );
+
+  // Match:
+  // HP-CLAS-135 44 $32.94 $1,449.36
+  // or same values split across whitespace/newlines
+  const ROW_RE =
+    /\b((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+(?:-\d+)?)\b\s+(\d+)\s+\$([\d,]+\.\d{2})\s+\$([\d,]+\.\d{2})/gi;
+
+  const raw: Array<{ upc: string; qty: number; grossAmt: number }> = [];
   const seen = new Set<string>();
-  const isProductCode = (line: string) => /^(?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-\d{1,3}$/i.test(normalizeSku(line));
 
-  const flatText = normalizedText
-    .replace(/[ \t]+/g, " ")
-    .replace(/\s*\n\s*/g, "\n");
-
-  const strictPattern = /((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-\d{1,3})\s+(\d+(?:\.\d+)?)\s+\$?\s*(-?[\d,]+\.\d{2})\s+\$?\s*(-?[\d,]+\.\d{2})/gi;
   let match: RegExpExecArray | null;
+  while ((match = ROW_RE.exec(repaired)) !== null) {
+    const sku = normalizeSku(match[1]);
+    const qty = parseInt(match[2], 10);
+    const grossAmt = parseFloat(match[4].replace(/,/g, ""));
 
-  while ((match = strictPattern.exec(flatText)) !== null) {
-    const upc = normalizeSku(match[1]);
-    const qty = Number(match[2] || 0);
-    const amount = Math.abs(parseFloat(String(match[4] || "0").replace(/,/g, "")));
-    const key = `${upc}__${qty}__${amount}`;
-    if (!upc || !amount || seen.has(key)) continue;
-    seen.add(key);
-    raw.push({
-      upc,
-      qty: qty > 0 ? qty : 1,
-      amt: amount,
-    });
-  }
-
-  if (!raw.length) {
-    for (let i = 0; i < lines.length; i++) {
-      const code = normalizeSku(lines[i]);
-      if (!isProductCode(code)) continue;
-
-      let qty = 0;
-      const numberTokens: number[] = [];
-
-      for (let j = i + 1; j < Math.min(i + 12, lines.length); j++) {
-        const next = lines[j];
-        const nextSku = normalizeSku(next);
-        if (isProductCode(nextSku) && j > i + 1) break;
-        if (/^ma\s*2%$/i.test(next)) break;
-
-        if (/^\d+$/.test(next) && qty === 0) {
-          qty = parseInt(next, 10);
-          continue;
-        }
-
-        const amountMatch = next.match(/^-?\$?\s*([\d,]+\.\d{2})$/);
-        if (amountMatch) {
-          numberTokens.push(parseFloat(amountMatch[1].replace(/,/g, "")));
-        }
-      }
-
-      if (!numberTokens.length) continue;
-
-      const amount = Math.abs(numberTokens[numberTokens.length - 1]);
-      const key = `${code}__${qty || 1}__${amount}`;
-      if (seen.has(key)) continue;
+    const key = `${sku}__${qty}__${grossAmt}`;
+    if (!seen.has(key)) {
       seen.add(key);
-
-      raw.push({
-        upc: code,
-        qty: qty > 0 ? qty : 1,
-        amt: amount,
-      });
+      raw.push({ upc: sku, qty, grossAmt });
     }
   }
 
-  if (!raw.length) return rows;
+  if (!raw.length) return [];
 
-  const totalQty = raw.reduce((sum, r) => sum + (r.qty || 0), 0);
-  const rawTotal = round2(raw.reduce((sum, r) => sum + Math.abs(r.amt), 0));
-  const expectedNetTotal = round2(Math.max(rawTotal - maDeduction, 0));
+  const totalQty = raw.reduce((sum, r) => sum + r.qty, 0);
+  const grossTotal = round2(raw.reduce((sum, r) => sum + r.grossAmt, 0));
 
-  raw.forEach((r) => {
-    const share = totalQty > 0 ? r.qty / totalQty : 0;
-    const maShare = maDeduction > 0 ? round2(maDeduction * share) : 0;
-    const netAmount = round2(Math.max(Math.abs(r.amt) - maShare, 0));
+  let runningMa = 0;
 
-    rows.push({
-      upc: r.upc,
+  const rows: DatasetRow[] = raw.map((r, idx) => {
+    const isLast = idx === raw.length - 1;
+
+    let maShare = 0;
+    if (maDeduction > 0 && totalQty > 0) {
+      if (isLast) {
+        maShare = round2(maDeduction - runningMa);
+      } else {
+        maShare = round2(maDeduction * (r.qty / totalQty));
+        runningMa = round2(runningMa + maShare);
+      }
+    }
+
+    return {
+      upc: r.upc, // SKU saved into UPC column, per your rule
       item: "",
       cust_name: customer,
       qty: r.qty,
-      amt: netAmount,
-    });
+      amt: round2(Math.max(r.grossAmt - maShare, 0)),
+    };
   });
 
-  const diff = round2(expectedNetTotal - rows.reduce((sum, row) => sum + row.amt, 0));
-  if (rows.length && diff !== 0) {
-    rows[rows.length - 1].amt = round2(rows[rows.length - 1].amt + diff);
-  }
+  const expectedNet = round2(Math.max(grossTotal - maDeduction, 0));
+  const actualNet = round2(rows.reduce((sum, r) => sum + r.amt, 0));
+  const drift = round2(expectedNet - actualNet);
 
-  return rows.map((row) => ({
-    ...row,
-    upc: normalizeSku(row.upc),
-    amt: round2(Math.abs(row.amt)),
-  }));
-}
-
-function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
-  const rows: DatasetRow[] = [];
-  const lines = text
-    .replace(/\u00a0/g, " ")
-    .replace(/\r/g, "\n")
-    .replace(/[ \t]+/g, " ")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  let currentCustomer = "";
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    const soldToInline = line.match(/^sold\s+to:\s*(.+)/i);
-    if (soldToInline && soldToInline[1].trim()) { currentCustomer = soldToInline[1].trim(); continue; }
-
-    if (/^sold\s+to:\s*$/i.test(line)) {
-      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
-        const next = lines[j].trim();
-        if (next && !/^\d{5,}$/.test(next) && !/^telephone/i.test(next) && next.length > 3) {
-          currentCustomer = next;
-          break;
-        }
-      }
-      continue;
-    }
-
-    if (!/^\d{12}$/.test(line)) continue;
-
-    let extCost = 0;
-    for (let j = i + 1; j < Math.min(i + 15, lines.length); j++) {
-      const l = lines[j];
-      if (/^\d{12}$/.test(l) || /^sold\s+to/i.test(l)) break;
-      const numMatch = l.match(/^([\d,]+\.\d{2})$/);
-      if (numMatch) extCost = parseFloat(numMatch[1].replace(/,/g, ""));
-    }
-
-    if (!extCost) continue;
-
-    rows.push({ upc: line, item: "", cust_name: currentCustomer, amt: extCost });
+  if (rows.length && drift !== 0) {
+    rows[rows.length - 1].amt = round2(rows[rows.length - 1].amt + drift);
   }
 
   return rows;
@@ -1175,7 +1115,12 @@ async function parseDetailRows(file: File, fullText?: string): Promise<DatasetRo
 
   if (/fresh\s+thyme\s+sas/i.test(lt) && /chargeback/i.test(lt)) return parseFreshThymeSasPdfRows(text);
 
-  if (/wonder\s*monday/i.test(lt) && /ship\s+to/i.test(lt) && /kehe\s+distributors/i.test(lt) && /invoice\s+no/i.test(lt)) {
+  if (
+    /wonder\s*monday/i.test(lt) &&
+    /ship\s+to/i.test(lt) &&
+    /kehe\s+distributors/i.test(lt) &&
+    /invoice\s+no/i.test(lt)
+  ) {
     return parseWMInvoicePdfRows(text);
   }
 
@@ -1271,16 +1216,24 @@ async function replaceDatasetRowsForInvoice(
   const datasetMonth = formatMonthLabelFromDate(invoiceCheckDate);
   const datasetCheckDate = parseIsoDateFromMmDdYyyy(invoiceCheckDate);
 
+  // Filter out the MA2% line if it accidentally got parsed as a product row
   const inserts: DatasetInsert[] = detailRows
-    .filter((r) => isWmInvoiceType(finalType) ? normalizeSku(r.upc) !== "MA2" && normalizeSku(r.upc) !== "MA2%" : true)
+    .filter((r) => {
+      if (!isWmInvoiceType(finalType)) return true;
+      const u = normalizeSku(r.upc);
+      return u !== "MA2" && u !== "MA2%" && !/^ma\s*2%?$/i.test(r.upc);
+    })
     .map((r) => buildDatasetInsert(r, pl, datasetMonth, datasetCheckDate, ni, finalType));
 
+  // Always delete existing rows first, then re-insert (covers upload, re-upload, reprocess)
   const { error: deleteError } = await supabase
     .from("broker_commission_datasets")
     .delete()
     .eq("invoice", ni);
 
   if (deleteError) throw new Error(`Failed clearing old dataset rows: ${deleteError.message}`);
+
+  if (!inserts.length) return 0;
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -2281,42 +2234,16 @@ export default function InvoicesView({
 
                 {documentDropdownOpen && (
                   <div className="absolute left-0 top-full z-[120] mt-2 w-full min-w-[220px] rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDocumentFilter("Documents");
-                        setDocumentDropdownOpen(false);
-                      }}
-                      className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${
-                        documentFilter === "Documents" ? "bg-slate-50" : ""
-                      }`}
-                    >
+                    <button type="button" onClick={() => { setDocumentFilter("Documents"); setDocumentDropdownOpen(false); }}
+                      className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${documentFilter === "Documents" ? "bg-slate-50" : ""}`}>
                       <span>Documents</span>
                     </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDocumentFilter("With Document");
-                        setDocumentDropdownOpen(false);
-                      }}
-                      className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${
-                        documentFilter === "With Document" ? "bg-slate-50" : ""
-                      }`}
-                    >
+                    <button type="button" onClick={() => { setDocumentFilter("With Document"); setDocumentDropdownOpen(false); }}
+                      className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${documentFilter === "With Document" ? "bg-slate-50" : ""}`}>
                       <span>With Document</span>
                     </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDocumentFilter("Without Document");
-                        setDocumentDropdownOpen(false);
-                      }}
-                      className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${
-                        documentFilter === "Without Document" ? "bg-slate-50" : ""
-                      }`}
-                    >
+                    <button type="button" onClick={() => { setDocumentFilter("Without Document"); setDocumentDropdownOpen(false); }}
+                      className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${documentFilter === "Without Document" ? "bg-slate-50" : ""}`}>
                       <span>Without Document</span>
                       {withoutDocumentCount > 0 && (
                         <span className="inline-flex min-w-[20px] items-center justify-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-600">

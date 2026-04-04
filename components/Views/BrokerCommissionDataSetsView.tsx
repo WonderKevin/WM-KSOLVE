@@ -154,15 +154,20 @@ function categorizeRetailerName(rawRetailer: string) {
 function findRetailer(
   custName: string,
   itemName: string,
+  upc: string,
   locations: LocationRow[]
 ) {
   const trimmedCustomer = custName.trim();
   const normalizedCustomer = normalizeText(trimmedCustomer);
   const normalizedItem = normalizeText(itemName);
+  const normalizedUpc = normalizeText(upc);
 
-  if (normalizedCustomer === "DC16") {
-    if (normalizedItem.startsWith("NSA") || normalizedItem.startsWith("CK")) return "Fresh Thyme";
-    if (normalizedItem.startsWith("HP")) return "Kroger";
+  const skuSource = normalizedUpc || normalizedItem;
+
+  // WM / KeHE rows: SKU is stored in UPC column
+  if (/KEHE DISTRIBUTORS DC/i.test(trimmedCustomer) || /\bDC\s*\d+\b/i.test(trimmedCustomer)) {
+    if (skuSource.startsWith("HP")) return "Kroger";
+    if (skuSource.startsWith("CK") || skuSource.startsWith("NSA")) return "Fresh Thyme";
   }
 
   const directRetailer = directRetailerFromCustomer(custName);
@@ -262,6 +267,7 @@ export default function BrokerCommissionDataSetsView() {
           const inferredRetailer = findRetailer(
             row.cust_name ?? "",
             row.item ?? "",
+            row.upc ?? "",
             locations
           );
           const overrideRetailer = overrideMap.get(row.id) ?? "";
