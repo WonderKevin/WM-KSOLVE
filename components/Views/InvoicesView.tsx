@@ -181,6 +181,30 @@ function joinBrokenWmSkuLines(text: string) {
     .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)(?:\s*\r?\n\s*|\s+)(\d{1,3})/gi, "$1$2");
 }
 
+function isWmProductSku(value: string) {
+  return /^(?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+(?:-\d{1,3})?$/i.test(normalizeSku(value));
+}
+
+function findProductDescriptionNearSku(lines: string[], sku: string, idx: number) {
+  for (let j = Math.max(0, idx - 4); j <= Math.min(lines.length - 1, idx + 4); j++) {
+    const line = lines[j].trim();
+    if (!line) continue;
+    if (normalizeSku(line) === normalizeSku(sku)) continue;
+    if (/^\d+\.?$/.test(line)) continue;
+    if (/^(qty|rate|amount|description|sku|product|service|total)$/i.test(line)) continue;
+    if (/^-?\$?[\d,]+\.\d{2}$/.test(line)) continue;
+    if (/^ma\s*2%$/i.test(line)) continue;
+    if (/^invoice\s+(?:details|date|no\.?|number)$/i.test(line)) continue;
+    if (isWmProductSku(line)) continue;
+
+    if (/cheesecake|classic|key\s*lime|strawberry|creme\s*brulee|high\s*protein|12\/cs/i.test(line)) {
+      return line.replace(/\s+/g, " ").trim();
+    }
+  }
+
+  return "";
+}
+
 function isWmInvoiceType(type: string) {
   return normalizeType(String(type || "")) === "WM Invoice";
 }
@@ -634,7 +658,8 @@ async function fetchProductLookup(): Promise<Map<string, string>> {
 
   const map = new Map<string, string>();
   for (const r of data ?? []) {
-    if (r.upc) map.set(String(r.upc).trim(), r.item_description ?? "");
+    const key = normalizeSku(String(r.upc || "").trim());
+    if (key) map.set(key, r.item_description ?? "");
   }
 
   return map;
@@ -860,40 +885,66 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     }
   }
 
-  const raw: Array<{ upc: string; qty: number; amt: number }> = [];
+  const raw: Array<{ upc: string; item: string; qty: number; amt: number }> = [];
   const seen = new Set<string>();
-  const isProductCode = (line: string) => /^(?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-\d{1,3}$/i.test(normalizeSku(line));
+
+  const multilinePattern =
+    /(?:^|\n)\d+\.\s*\n([\s\S]{1,160}?)\n((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+(?:-\d{1,3})?)\n(\d+(?:\.\d+)?)\n-?\$?([\d,]+\.\d{2})\n-?\$?([\d,]+\.\d{2})(?=\n\d+\.\s*\n|\nMA\s*2%|\nTotal\b|$)/gi;
+
+  for (const match of normalizedText.matchAll(multilinePattern)) {
+    const item = String(match[1] || "").replace(/\s+/g, " ").trim();
+    const upc = normalizeSku(match[2] || "");
+    const qty = Number(match[3] || 0);
+    const amount = Math.abs(parseFloat(String(match[5] || "0").replace(/,/g, "")));
+    if (!upc || !amount) continue;
+
+    const key = `${upc}__${qty}__${amount}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    raw.push({
+      upc,
+      item,
+      qty: qty > 0 ? qty : 1,
+      amt: amount,
+    });
+  }
 
   for (let i = 0; i < lines.length; i++) {
-    const code = normalizeSku(lines[i]);
-    if (!isProductCode(code) || seen.has(code)) continue;
+    const skuMatch = lines[i].match(/\b((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+(?:-\d{1,3})?)\b/i);
+    if (!skuMatch) continue;
+
+    const upc = normalizeSku(skuMatch[1]);
+    if (!upc) continue;
 
     let qty = 0;
-    const amounts: number[] = [];
+    let amount = 0;
 
-    for (let j = i + 1; j < Math.min(i + 12, lines.length); j++) {
-      const next = lines[j];
-      const nextSku = normalizeSku(next);
-      if (isProductCode(nextSku) && j > i + 1) break;
+    for (let j = Math.max(0, i - 6); j <= Math.min(lines.length - 1, i + 8); j++) {
+      const candidate = lines[j].trim();
 
-      if (/^\d+$/.test(next) && qty === 0) {
-        qty = parseInt(next, 10);
-        continue;
+      if (!qty && /^\d+$/.test(candidate)) {
+        qty = parseInt(candidate, 10);
       }
 
-      const amountMatch = next.match(/^-?\$?\s*([\d,]+\.\d{2})$/);
-      if (amountMatch) {
-        amounts.push(parseFloat(amountMatch[1].replace(/,/g, "")));
+      const amountMatches = [...candidate.matchAll(/-?\$?\s*([\d,]+\.\d{2})/g)];
+      if (amountMatches.length > 0) {
+        const parsedAmount = parseFloat(amountMatches[amountMatches.length - 1][1].replace(/,/g, ""));
+        if (parsedAmount > 0) amount = parsedAmount;
       }
     }
 
-    if (!amounts.length) continue;
+    if (!amount) continue;
 
-    seen.add(code);
+    const key = `${upc}__${qty || 1}__${amount}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
     raw.push({
-      upc: code,
+      upc,
+      item: findProductDescriptionNearSku(lines, upc, i),
       qty: qty > 0 ? qty : 1,
-      amt: Math.abs(amounts[amounts.length - 1]),
+      amt: Math.abs(amount),
     });
   }
 
@@ -909,24 +960,20 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     const netAmount = round2(Math.max(Math.abs(r.amt) - maShare, 0));
 
     rows.push({
-      upc: r.upc,
-      item: "",
+      upc: normalizeSku(r.upc),
+      item: r.item,
       cust_name: customer,
       qty: r.qty,
-      amt: netAmount,
+      amt: round2(Math.abs(netAmount)),
     });
   });
 
   const diff = round2(expectedNetTotal - rows.reduce((sum, row) => sum + row.amt, 0));
   if (rows.length && diff !== 0) {
-    rows[rows.length - 1].amt = round2(rows[rows.length - 1].amt + diff);
+    rows[rows.length - 1].amt = round2(Math.abs(rows[rows.length - 1].amt + diff));
   }
 
-  return rows.map((row) => ({
-    ...row,
-    upc: normalizeSku(row.upc),
-    amt: round2(Math.abs(row.amt)),
-  }));
+  return rows;
 }
 
 function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
