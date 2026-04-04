@@ -52,6 +52,8 @@ type DatasetRow = {
   item: string;
   cust_name: string;
   amt: number;
+  qty?: number;
+  rate?: number;
 };
 
 type DatasetInsert = {
@@ -153,21 +155,36 @@ function isBadInvoiceCandidate(value: string) {
   ]).has(v);
 }
 
-function isWmInvoiceCategory(type: string) {
-  return normalizeType(String(type || "")) === "WM Invoice";
-}
-
-function getSignedDatasetAmountForType(type: string, amount: number) {
-  const numeric = Number(amount || 0);
-  if (!Number.isFinite(numeric) || numeric === 0) return 0;
-  return isWmInvoiceCategory(type) ? Math.abs(numeric) : -Math.abs(numeric);
-}
-
 function parseAmount(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number") return value;
   const num = Number(String(value).replace(/[$,]/g, "").trim());
   return Number.isNaN(num) ? null : num;
+}
+
+function round2(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function normalizeSku(raw: string) {
+  return String(raw || "")
+    .replace(/ /g, " ")
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, "")
+    .replace(/[^A-Za-z0-9-]/g, "")
+    .toUpperCase()
+    .trim();
+}
+
+function joinBrokenWmSkuLines(text: string) {
+  return String(text || "")
+    .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s*
+\s*(\d{1,3})/gi, "$1$2")
+    .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s+(\d{1,3})/gi, "$1$2");
+}
+
+function isWmInvoiceType(type: string) {
+  return normalizeType(String(type || "")) === "WM Invoice";
 }
 
 function formatCurrency(value: number | null | undefined) {
@@ -808,46 +825,23 @@ function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
   return rows;
 }
 
-function normalizeWmInvoiceLines(lines: string[]) {
-  const normalized: string[] = [];
-
-  for (const rawLine of lines) {
-    const line = String(rawLine || "").trim();
-    if (!line) continue;
-
-    if (
-      normalized.length > 0 &&
-      /-$/.test(normalized[normalized.length - 1]) &&
-      /^\d{1,4}$/.test(line)
-    ) {
-      normalized[normalized.length - 1] = `${normalized[normalized.length - 1]}${line}`;
-      continue;
-    }
-
-    normalized.push(line);
-  }
-
-  return normalized;
-}
-
 function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
-  const lines = normalizeWmInvoiceLines(
-    text
-      .replace(/\u00a0/g, " ")
-      .replace(/\r/g, "\n")
-      .replace(/[ \t]+/g, " ")
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean)
-  );
+  const normalizedText = joinBrokenWmSkuLines(text)
+    .replace(/\u00a0/g, " ")
+    .replace(/\r/g, "\n");
+
+  const lines = normalizedText
+    .split("\n")
+    .map((l) => l.replace(/[ \t]+/g, " ").trim())
+    .filter(Boolean);
 
   let customer = "";
   for (let i = 0; i < lines.length; i++) {
     if (/^ship\s+to[:]?$/i.test(lines[i])) {
       for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
         const c = lines[j].trim();
-        if (c && !/^(bill\s+to|ship\s+to|shipping|invoice|note|#|date)/i.test(c)) {
+        if (c && !/^(bill\s+to|ship\s+to|shipping|invoice|note|#|date|terms|due\s+date)/i.test(c)) {
           customer = c;
           break;
         }
@@ -856,100 +850,85 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     }
   }
 
-  let ma2PercentTotal = 0;
+  let maDeduction = 0;
   for (let i = 0; i < lines.length; i++) {
-    if (/^ma\s*2%$/i.test(lines[i]) || /\bma\s*2%\b/i.test(lines[i])) {
-      const block = lines.slice(i, i + 12).join(" ");
+    if (/\bma\s*2%\b/i.test(lines[i])) {
+      const block = lines.slice(i, i + 10).join(" ");
       const amounts = [...block.matchAll(/-?\$?\s*([\d,]+\.\d{2})/g)];
       if (amounts.length > 0) {
-        ma2PercentTotal = Math.abs(
-          parseFloat(amounts[amounts.length - 1][1].replace(/,/g, ""))
-        );
+        maDeduction = Math.abs(parseFloat(amounts[amounts.length - 1][1].replace(/,/g, "")));
       }
       break;
     }
   }
 
-  const moneyFromToken = (value: string) => {
-    const cleaned = String(value || "").replace(/[$,\s]/g, "");
-    const numeric = Number(cleaned);
-    return Number.isFinite(numeric) ? Math.abs(numeric) : null;
-  };
-
-  const isProductCode = (line: string) => {
-    const value = String(line || "").trim().toUpperCase();
-    return (
-      /^(?:HP|CK|NSA)-[A-Z0-9]+(?:-[A-Z0-9]+){1,4}$/i.test(value) ||
-      /^[A-Z]{2,6}-[A-Z0-9]{2,12}-\d{2,4}$/i.test(value) ||
-      /^\d{10,14}$/.test(value)
-    );
-  };
-
-  const raw: Array<{ upc: string; qty: number; grossAmt: number }> = [];
+  const raw: Array<{ upc: string; qty: number; amt: number }> = [];
   const seen = new Set<string>();
+  const isProductCode = (line: string) => /^(?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-\d{1,3}$/i.test(normalizeSku(line));
 
   for (let i = 0; i < lines.length; i++) {
-    const code = lines[i];
-    if (!isProductCode(code) || seen.has(code) || /^MA\s*2%$/i.test(code)) continue;
+    const code = normalizeSku(lines[i]);
+    if (!isProductCode(code) || seen.has(code)) continue;
 
     let qty = 0;
-    const moneyTokens: number[] = [];
+    const amounts: number[] = [];
 
     for (let j = i + 1; j < Math.min(i + 12, lines.length); j++) {
-      const line = lines[j];
-      if (/^total$/i.test(line) || /^ma\s*2%$/i.test(line)) break;
-      if (isProductCode(line) && j > i + 1) break;
+      const next = lines[j];
+      const nextSku = normalizeSku(next);
+      if (isProductCode(nextSku) && j > i + 1) break;
 
-      if (!qty && /^\d+$/.test(line)) {
-        const parsedQty = parseInt(line, 10);
-        if (parsedQty > 0) qty = parsedQty;
+      if (/^\d+$/.test(next) && qty === 0) {
+        qty = parseInt(next, 10);
+        continue;
       }
 
-      const moneyMatches = [...line.matchAll(/-?\$?\s*([\d,]+\.\d{2})/g)];
-      for (const match of moneyMatches) {
-        const parsedMoney = moneyFromToken(match[0]);
-        if (parsedMoney !== null) moneyTokens.push(parsedMoney);
+      const amountMatch = next.match(/^-?\$?\s*([\d,]+\.\d{2})$/);
+      if (amountMatch) {
+        amounts.push(parseFloat(amountMatch[1].replace(/,/g, "")));
       }
     }
 
-    if (!moneyTokens.length) continue;
-
-    const grossAmt = moneyTokens[moneyTokens.length - 1];
-    if (!grossAmt) continue;
+    if (!amounts.length) continue;
 
     seen.add(code);
     raw.push({
       upc: code,
       qty: qty > 0 ? qty : 1,
-      grossAmt: Math.abs(grossAmt),
+      amt: Math.abs(amounts[amounts.length - 1]),
     });
   }
 
   if (!raw.length) return rows;
 
-  const totalQty = raw.reduce((sum, r) => sum + Math.max(r.qty || 0, 0), 0);
-  let runningAllocated = 0;
+  const totalQty = raw.reduce((sum, r) => sum + (r.qty || 0), 0);
+  const rawTotal = round2(raw.reduce((sum, r) => sum + Math.abs(r.amt), 0));
+  const expectedNetTotal = round2(Math.max(rawTotal - maDeduction, 0));
 
-  raw.forEach((r, index) => {
-    const qtyShare = totalQty > 0 ? Math.max(r.qty || 0, 0) / totalQty : 0;
-    const isLast = index === raw.length - 1;
-    const ma2Share = isLast
-      ? Math.round((ma2PercentTotal - runningAllocated) * 100) / 100
-      : Math.round(qtyShare * ma2PercentTotal * 100) / 100;
-
-    runningAllocated = Math.round((runningAllocated + ma2Share) * 100) / 100;
-
-    const netAmount = Math.round((Math.abs(r.grossAmt) - Math.abs(ma2Share)) * 100) / 100;
+  raw.forEach((r) => {
+    const share = totalQty > 0 ? r.qty / totalQty : 0;
+    const maShare = maDeduction > 0 ? round2(maDeduction * share) : 0;
+    const netAmount = round2(Math.max(Math.abs(r.amt) - maShare, 0));
 
     rows.push({
       upc: r.upc,
       item: "",
       cust_name: customer,
-      amt: Math.max(netAmount, 0),
+      qty: r.qty,
+      amt: netAmount,
     });
   });
 
-  return rows;
+  const diff = round2(expectedNetTotal - rows.reduce((sum, row) => sum + row.amt, 0));
+  if (rows.length && diff !== 0) {
+    rows[rows.length - 1].amt = round2(rows[rows.length - 1].amt + diff);
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    upc: normalizeSku(row.upc),
+    amt: round2(Math.abs(row.amt)),
+  }));
 }
 
 function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
@@ -1190,16 +1169,18 @@ function buildDatasetInsert(
   invoiceNorm: string,
   type: string
 ): DatasetInsert {
-  const upc = String(row.upc || "").trim();
+  const normalizedType = normalizeType(type);
+  const upc = normalizeSku(String(row.upc || "").trim());
+  const amount = Number(row.amt || 0);
   return {
     month,
     check_date: checkDate,
     invoice: invoiceNorm,
-    type,
+    type: normalizedType,
     upc,
     item: productLookup.get(upc) || String(row.item || "").trim(),
     cust_name: String(row.cust_name || "").trim(),
-    amt: getSignedDatasetAmountForType(type, Number(row.amt || 0)),
+    amt: isWmInvoiceType(normalizedType) ? round2(Math.abs(amount)) : round2(-Math.abs(amount)),
   };
 }
 
@@ -1241,22 +1222,31 @@ async function replaceDatasetRowsForInvoice(
     throw new Error(`No check date found in invoices for ${ni}. Upload the invoice Excel first.`);
   }
 
+  const finalType = normalizeType(it || categoryFallback || "WM Invoice");
+
   if (!detailRows.length) {
     detailRows = [{
       upc: "UNKNOWN",
       item: detectedType === "excel" ? "UNPARSED EXCEL DOCUMENT" : "UNPARSED WM INVOICE",
       cust_name: "",
-      amt: Number(invoiceAmt || 0),
+      amt: Math.abs(Number(invoiceAmt || 0)),
     }];
   }
 
-  const finalType = it || categoryFallback || "WM Invoice";
+  if (isWmInvoiceType(finalType)) {
+    detailRows = detailRows.map((row) => ({
+      ...row,
+      upc: normalizeSku(row.upc || row.item || ""),
+      amt: round2(Math.abs(Number(row.amt || 0))),
+    }));
+  }
+
   const datasetMonth = formatMonthLabelFromDate(invoiceCheckDate);
   const datasetCheckDate = parseIsoDateFromMmDdYyyy(invoiceCheckDate);
 
-  const inserts: DatasetInsert[] = detailRows.map((r) =>
-    buildDatasetInsert(r, pl, datasetMonth, datasetCheckDate, ni, finalType)
-  );
+  const inserts: DatasetInsert[] = detailRows
+    .filter((r) => isWmInvoiceType(finalType) ? normalizeSku(r.upc) !== "MA2" && normalizeSku(r.upc) !== "MA2%" : true)
+    .map((r) => buildDatasetInsert(r, pl, datasetMonth, datasetCheckDate, ni, finalType));
 
   const { error: deleteError } = await supabase
     .from("broker_commission_datasets")
@@ -2211,7 +2201,7 @@ export default function InvoicesView({
       )}
 
       <div className="grid gap-6 xl:grid-cols-[1fr]">
-        <Card className="rounded-3xl overflow-visible">
+        <Card className="relative overflow-visible rounded-3xl">
           <CardContent className="overflow-visible pt-6">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
               <div className="xl:col-span-2">
@@ -2234,7 +2224,7 @@ export default function InvoicesView({
                 {typeOptions.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
 
-              <div className="relative z-[80]" ref={documentDropdownRef}>
+              <div className="relative z-50" ref={documentDropdownRef}>
                 <button
                   type="button"
                   onClick={() => setDocumentDropdownOpen((p) => !p)}
@@ -2260,7 +2250,7 @@ export default function InvoicesView({
                 </button>
 
                 {documentDropdownOpen && (
-                  <div className="absolute left-0 top-full z-[999] mt-2 w-full min-w-[220px] rounded-xl border border-slate-200 bg-white p-1 shadow-2xl">
+                  <div className="absolute left-0 top-full z-[120] mt-2 w-full min-w-[220px] rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
                     <button
                       type="button"
                       onClick={() => {
