@@ -563,7 +563,9 @@ export default function BrokerCommissionDataSetsView() {
         row.item.toLowerCase().includes(keyword) ||
         row.custName.toLowerCase().includes(keyword) ||
         row.retailer.toLowerCase().includes(keyword) ||
-        row.adjustedAmt.toFixed(2).includes(keyword);
+        (
+          isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt
+        ).toFixed(2).includes(keyword);
 
       return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
@@ -1049,20 +1051,19 @@ export default function BrokerCommissionDataSetsView() {
               <th className="p-3 text-left font-semibold">Customer</th>
               <th className="p-3 text-left font-semibold">Retailer</th>
               <th className="p-3 text-left font-semibold">Amount</th>
-              <th className="p-3 text-left font-semibold">Disc Share</th>
               <th className="w-[56px] p-3 text-left font-semibold"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={11} className="p-6 text-center text-gray-500">
+                <td colSpan={10} className="p-6 text-center text-gray-500">
                   Loading data...
                 </td>
               </tr>
             ) : data.length === 0 ? (
               <tr>
-                <td colSpan={11} className="p-6 text-center text-gray-500">
+                <td colSpan={10} className="p-6 text-center text-gray-500">
                   No data found.
                 </td>
               </tr>
@@ -1127,13 +1128,12 @@ export default function BrokerCommissionDataSetsView() {
                       )}
                     </td>
 
-                    <td className="p-3">${row.adjustedAmt.toFixed(2)}</td>
                     <td className="p-3">
-                      {row.discrepancyShare !== 0
-                        ? `${row.discrepancyShare < 0 ? "-" : ""}$${Math.abs(
-                            row.discrepancyShare
-                          ).toFixed(2)}`
-                        : "-"}
+                      ${(
+                        isWmInvoiceType(row.type)
+                          ? row.adjustedAmt
+                          : row.amt
+                      ).toFixed(2)}
                     </td>
 
                     <td className="p-3">
