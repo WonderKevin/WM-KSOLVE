@@ -181,30 +181,6 @@ function joinBrokenWmSkuLines(text: string) {
     .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)(?:\s*\r?\n\s*|\s+)(\d{1,3})/gi, "$1$2");
 }
 
-function isWmProductSku(value: string) {
-  return /^(?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+(?:-\d{1,3})?$/i.test(normalizeSku(value));
-}
-
-function findProductDescriptionNearSku(lines: string[], sku: string, idx: number) {
-  for (let j = Math.max(0, idx - 4); j <= Math.min(lines.length - 1, idx + 4); j++) {
-    const line = lines[j].trim();
-    if (!line) continue;
-    if (normalizeSku(line) === normalizeSku(sku)) continue;
-    if (/^\d+\.?$/.test(line)) continue;
-    if (/^(qty|rate|amount|description|sku|product|service|total)$/i.test(line)) continue;
-    if (/^-?\$?[\d,]+\.\d{2}$/.test(line)) continue;
-    if (/^ma\s*2%$/i.test(line)) continue;
-    if (/^invoice\s+(?:details|date|no\.?|number)$/i.test(line)) continue;
-    if (isWmProductSku(line)) continue;
-
-    if (/cheesecake|classic|key\s*lime|strawberry|creme\s*brulee|high\s*protein|12\/cs/i.test(line)) {
-      return line.replace(/\s+/g, " ").trim();
-    }
-  }
-
-  return "";
-}
-
 function isWmInvoiceType(type: string) {
   return normalizeType(String(type || "")) === "WM Invoice";
 }
@@ -885,95 +861,116 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     }
   }
 
+  const isProductCode = (value: string) =>
+    /^(?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-\d{1,3}$/i.test(normalizeSku(value));
+
+  const isMoneyLine = (value: string) => /^-?\$?\s*[\d,]+\.\d{2}$/.test(value.trim());
+  const parseMoneyLine = (value: string) =>
+    parseFloat(value.replace(/[\$,\s]/g, "").replace(/^\-/, ""));
+
   const raw: Array<{ upc: string; item: string; qty: number; amt: number }> = [];
   const seen = new Set<string>();
 
-  const multilinePattern =
-    /(?:^|\n)\d+\.\s*\n([\s\S]{1,160}?)\n((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+(?:-\d{1,3})?)\n(\d+(?:\.\d+)?)\n-?\$?([\d,]+\.\d{2})\n-?\$?([\d,]+\.\d{2})(?=\n\d+\.\s*\n|\nMA\s*2%|\nTotal\b|$)/gi;
-
-  for (const match of normalizedText.matchAll(multilinePattern)) {
-    const item = String(match[1] || "").replace(/\s+/g, " ").trim();
-    const upc = normalizeSku(match[2] || "");
-    const qty = Number(match[3] || 0);
-    const amount = Math.abs(parseFloat(String(match[5] || "0").replace(/,/g, "")));
-    if (!upc || !amount) continue;
-
-    const key = `${upc}__${qty}__${amount}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    raw.push({
-      upc,
-      item,
-      qty: qty > 0 ? qty : 1,
-      amt: amount,
-    });
-  }
-
   for (let i = 0; i < lines.length; i++) {
-    const skuMatch = lines[i].match(/\b((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+(?:-\d{1,3})?)\b/i);
-    if (!skuMatch) continue;
+    const sku = normalizeSku(lines[i]);
+    if (!isProductCode(sku)) continue;
 
-    const upc = normalizeSku(skuMatch[1]);
-    if (!upc) continue;
-
-    let qty = 0;
-    let amount = 0;
-
-    for (let j = Math.max(0, i - 6); j <= Math.min(lines.length - 1, i + 8); j++) {
-      const candidate = lines[j].trim();
-
-      if (!qty && /^\d+$/.test(candidate)) {
-        qty = parseInt(candidate, 10);
-      }
-
-      const amountMatches = [...candidate.matchAll(/-?\$?\s*([\d,]+\.\d{2})/g)];
-      if (amountMatches.length > 0) {
-        const parsedAmount = parseFloat(amountMatches[amountMatches.length - 1][1].replace(/,/g, ""));
-        if (parsedAmount > 0) amount = parsedAmount;
-      }
+    let description = "";
+    for (let j = i - 1; j >= Math.max(0, i - 3); j--) {
+      const prev = lines[j].trim();
+      if (!prev) continue;
+      if (/^\d+\.?$/.test(prev)) continue;
+      if (isProductCode(prev)) continue;
+      if (isMoneyLine(prev)) continue;
+      if (/^\d+$/.test(prev)) continue;
+      if (/^(product|service|sku|description|qty|rate|amount)$/i.test(prev)) continue;
+      description = prev;
+      break;
     }
+
+    const qtyCandidates: number[] = [];
+    const moneyCandidates: number[] = [];
+
+    for (let j = i + 1; j < Math.min(lines.length, i + 8); j++) {
+      const next = lines[j].trim();
+      if (!next) continue;
+      if (isProductCode(next)) break;
+      if (/^\d+\.?$/.test(next) && j == i + 1) continue;
+      if (/^\d+$/.test(next)) {
+        qtyCandidates.push(parseInt(next, 10));
+        continue;
+      }
+      if (isMoneyLine(next)) {
+        moneyCandidates.push(parseMoneyLine(next));
+        continue;
+      }
+      if (/^ma\s*2%$/i.test(next)) break;
+    }
+
+    const qty = qtyCandidates.length ? qtyCandidates[0] : 1;
+    const amount =
+      moneyCandidates.length >= 2
+        ? moneyCandidates[1]
+        : moneyCandidates.length === 1
+          ? moneyCandidates[0]
+          : 0;
 
     if (!amount) continue;
 
-    const key = `${upc}__${qty || 1}__${amount}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const dedupeKey = `${sku}__${qty}__${amount}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
 
     raw.push({
-      upc,
-      item: findProductDescriptionNearSku(lines, upc, i),
-      qty: qty > 0 ? qty : 1,
-      amt: Math.abs(amount),
+      upc: sku,
+      item: description,
+      qty,
+      amt: round2(Math.abs(amount)),
     });
+  }
+
+  if (!raw.length) {
+    const blockRegex =
+      /(?:^|\n)\s*(?:\d+\.\s*)?([^\n]+?)\s*\n\s*((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-\d{1,3})\s*\n\s*(\d+)\s*\n\s*-?\$?\s*([\d,]+\.\d{2})\s*\n\s*-?\$?\s*([\d,]+\.\d{2})/gi;
+
+    let match: RegExpExecArray | null = null;
+    while ((match = blockRegex.exec(normalizedText)) !== null) {
+      raw.push({
+        upc: normalizeSku(match[2]),
+        item: match[1].replace(/\s+/g, " ").trim(),
+        qty: parseInt(match[3], 10) || 1,
+        amt: round2(Math.abs(parseFloat(match[5].replace(/,/g, "")))),
+      });
+    }
   }
 
   if (!raw.length) return rows;
 
   const totalQty = raw.reduce((sum, r) => sum + (r.qty || 0), 0);
-  const rawTotal = round2(raw.reduce((sum, r) => sum + Math.abs(r.amt), 0));
-  const expectedNetTotal = round2(Math.max(rawTotal - maDeduction, 0));
+  const grossTotal = round2(raw.reduce((sum, r) => sum + Math.abs(r.amt), 0));
+  const netTarget = round2(Math.max(grossTotal - maDeduction, 0));
 
-  raw.forEach((r) => {
+  const allocated = raw.map((r) => {
     const share = totalQty > 0 ? r.qty / totalQty : 0;
     const maShare = maDeduction > 0 ? round2(maDeduction * share) : 0;
-    const netAmount = round2(Math.max(Math.abs(r.amt) - maShare, 0));
-
-    rows.push({
+    return {
       upc: normalizeSku(r.upc),
       item: r.item,
       cust_name: customer,
       qty: r.qty,
-      amt: round2(Math.abs(netAmount)),
-    });
+      amt: round2(Math.max(Math.abs(r.amt) - maShare, 0)),
+    };
   });
 
-  const diff = round2(expectedNetTotal - rows.reduce((sum, row) => sum + row.amt, 0));
-  if (rows.length && diff !== 0) {
-    rows[rows.length - 1].amt = round2(Math.abs(rows[rows.length - 1].amt + diff));
+  const diff = round2(netTarget - allocated.reduce((sum, row) => sum + row.amt, 0));
+  if (allocated.length && diff !== 0) {
+    allocated[allocated.length - 1].amt = round2(allocated[allocated.length - 1].amt + diff);
   }
 
-  return rows;
+  return allocated.map((row) => ({
+    ...row,
+    amt: round2(Math.abs(row.amt)),
+  }));
 }
 
 function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
