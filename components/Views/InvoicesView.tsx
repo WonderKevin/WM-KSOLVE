@@ -178,9 +178,7 @@ function normalizeSku(raw: string) {
 
 function joinBrokenWmSkuLines(text: string) {
   return String(text || "")
-    .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s*
-\s*(\d{1,3})/gi, "$1$2")
-    .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s+(\d{1,3})/gi, "$1$2");
+    .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)(?:\s*\r?\n\s*|\s+)(\d{1,3})/gi, "$1$2");
 }
 
 function isWmInvoiceType(type: string) {
