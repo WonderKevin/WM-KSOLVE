@@ -1,23 +1,24 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { Search, X } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
 type WMRow = {
-  month: string;
-  check_date: string;
-  invoice: string;
-  type: string;
-  amt: number;
+  month: string | null;
+  check_date: string | null;
+  invoice: string | null;
+  type: string | null;
+  amt: number | null;
 };
 
 type KsolveRow = {
-    month: string | null;
-    check_date: string | null;
-    check_number: string | null;
-    invoice_number: string | null;
-    invoice_amt: number | null;
-  };
+  month: string | null;
+  check_date: string | null;
+  check_number: string | null;
+  invoice_number: string | null;
+  invoice_amt: number | null;
+};
 
 type DiscrepancyRow = {
   month: string;
@@ -59,15 +60,68 @@ function isWmInvoiceType(value: string) {
   return t === "WM INVOICE" || t === "WMINVOICE";
 }
 
+function formatMonthShort(value: string): string {
+  if (!value) return value;
+  if (/^[A-Za-z]+ '\d{2}$/.test(value.trim())) return value.trim();
+
+  const m = value.trim().match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (m) return `${m[1]} '${m[2].slice(-2)}`;
+
+  return value;
+}
+
+function formatMonthFromDate(value: string) {
+  if (!value) return "";
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+
+  return parsed.toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function parseMonthOrder(value: string) {
+  const monthMap: Record<string, number> = {
+    january: 0,
+    february: 1,
+    march: 2,
+    april: 3,
+    may: 4,
+    june: 5,
+    july: 6,
+    august: 7,
+    september: 8,
+    october: 9,
+    november: 10,
+    december: 11,
+  };
+
+  const trimmed = String(value || "").trim();
+  const match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
+  if (!match) return -1;
+
+  const monthName = match[1].toLowerCase();
+  const yearRaw = match[2];
+  const monthIndex = monthMap[monthName];
+
+  if (monthIndex === undefined) return -1;
+
+  const year = yearRaw.length === 2 ? Number(`20${yearRaw}`) : Number(yearRaw);
+  return year * 100 + monthIndex;
+}
+
 export default function WMInvoiceDiscrepancyView() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<DiscrepancyRow[]>([]);
+  const [search, setSearch] = useState("");
+  const [selectedMonth, setSelectedMonth] = useState("All Months");
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
 
-      // WM amounts from Data Sets
       const { data: wmData, error: wmError } = await supabase
         .from("broker_commission_datasets")
         .select("month, check_date, invoice, type, amt")
@@ -77,20 +131,18 @@ export default function WMInvoiceDiscrepancyView() {
         console.error("Failed to load WM dataset rows:", wmError);
       }
 
-      // KSolve amounts
-      // If your real table/field names differ, only adjust this query.
       const { data: ksolveData, error: ksolveError } = await supabase
-  .from("invoices")
-  .select("month, check_date, check_number, invoice_number, invoice_amt, type")
-  .eq("type", "WM Invoice")
-  .order("check_date", { ascending: false, nullsFirst: false });
+        .from("invoices")
+        .select("month, check_date, check_number, invoice_number, invoice_amt, type")
+        .eq("type", "WM Invoice")
+        .order("check_date", { ascending: false, nullsFirst: false });
 
       if (ksolveError) {
         console.error("Failed to load Ksolve invoice rows:", ksolveError);
       }
 
       const wmRows = ((wmData ?? []) as WMRow[]).filter((row) =>
-        isWmInvoiceType(row.type)
+        isWmInvoiceType(row.type ?? "")
       );
 
       const ksolveRows = (ksolveData ?? []) as KsolveRow[];
@@ -107,14 +159,17 @@ export default function WMInvoiceDiscrepancyView() {
       >();
 
       for (const row of wmRows) {
-        const invoice = normalizeInvoice(row.invoice);
+        const invoice = normalizeInvoice(row.invoice ?? "");
         if (!invoice) continue;
 
         const current = wmByInvoice.get(invoice);
 
         if (!current) {
           wmByInvoice.set(invoice, {
-            month: row.month ?? "",
+            month:
+              formatMonthFromDate(row.check_date ?? "") ||
+              row.month ||
+              "",
             checkDate: row.check_date ?? "",
             invoice,
             type: row.type ?? "WM Invoice",
@@ -139,12 +194,15 @@ export default function WMInvoiceDiscrepancyView() {
       for (const row of ksolveRows) {
         const invoice = normalizeInvoice(row.invoice_number ?? "");
         if (!invoice) continue;
-      
+
         const current = ksolveByInvoice.get(invoice);
-      
+
         if (!current) {
           ksolveByInvoice.set(invoice, {
-            month: row.month ?? "",
+            month:
+              formatMonthFromDate(row.check_date ?? "") ||
+              row.month ||
+              "",
             checkDate: row.check_date ?? "",
             checkNo: row.check_number ?? "",
             invoice,
@@ -165,7 +223,9 @@ export default function WMInvoiceDiscrepancyView() {
 
         const wmAmount = wm?.wmAmount ?? 0;
         const ksolveAmount = ks?.ksolveAmount ?? 0;
-        const discrepancy = wmAmount - ksolveAmount;
+
+        // REVERSED: Ksolve Amount - WM Amount
+        const discrepancy = ksolveAmount - wmAmount;
         const percentage = wmAmount !== 0 ? (discrepancy / wmAmount) * 100 : 0;
 
         return {
@@ -194,8 +254,42 @@ export default function WMInvoiceDiscrepancyView() {
     load();
   }, []);
 
+  const monthOptions = useMemo(() => {
+    return [
+      "All Months",
+      ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean))).sort(
+        (a, b) => parseMonthOrder(b) - parseMonthOrder(a)
+      ),
+    ];
+  }, [rows]);
+
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return rows.filter((row) => {
+      const monthMatch =
+        selectedMonth === "All Months" || row.month === selectedMonth;
+
+      if (!monthMatch) return false;
+
+      if (!q) return true;
+
+      const haystack = [
+        row.month,
+        row.checkDate,
+        row.checkNo,
+        row.invoice,
+        row.type,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(q);
+    });
+  }, [rows, search, selectedMonth]);
+
   const totals = useMemo(() => {
-    return rows.reduce(
+    return filteredRows.reduce(
       (acc, row) => {
         acc.ksolveAmount += row.ksolveAmount;
         acc.wmAmount += row.wmAmount;
@@ -208,7 +302,7 @@ export default function WMInvoiceDiscrepancyView() {
         discrepancy: 0,
       }
     );
-  }, [rows]);
+  }, [filteredRows]);
 
   return (
     <div className="space-y-4">
@@ -218,8 +312,43 @@ export default function WMInvoiceDiscrepancyView() {
         </div>
         <p className="mt-1 text-sm text-slate-500">
           WM Amount comes from Data Sets. Ksolve Amount comes from Ksolve Invoices.
-          Discrepancy = WM Amount - Ksolve Amount.
+          Discrepancy = Ksolve Amount - WM Amount.
         </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="relative min-w-[320px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search month, check date, check #, invoice, type..."
+            className="w-full rounded-2xl border border-slate-200 bg-white py-2 pl-10 pr-10 text-sm outline-none transition focus:border-slate-300"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              title="Clear search"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        <select
+          value={selectedMonth}
+          onChange={(e) => setSelectedMonth(e.target.value)}
+          className="min-w-[220px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+        >
+          {monthOptions.map((month) => (
+            <option key={month} value={month}>
+              {month === "All Months" ? month : formatMonthShort(month)}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -242,7 +371,7 @@ export default function WMInvoiceDiscrepancyView() {
               totals.discrepancy === 0
                 ? "text-slate-900"
                 : totals.discrepancy > 0
-                ? "text-amber-600"
+                ? "text-emerald-700"
                 : "text-red-600"
             }`}
           >
@@ -253,9 +382,13 @@ export default function WMInvoiceDiscrepancyView() {
 
       <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
         {loading ? (
-          <div className="p-6 text-sm text-slate-500">Loading discrepancy data...</div>
-        ) : rows.length === 0 ? (
-          <div className="p-6 text-sm text-slate-500">No WM invoice discrepancy rows found.</div>
+          <div className="p-6 text-sm text-slate-500">
+            Loading discrepancy data...
+          </div>
+        ) : filteredRows.length === 0 ? (
+          <div className="p-6 text-sm text-slate-500">
+            No WM invoice discrepancy rows found.
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -273,9 +406,11 @@ export default function WMInvoiceDiscrepancyView() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {filteredRows.map((row) => (
                   <tr key={row.invoice} className="border-t border-slate-100">
-                    <td className="px-4 py-3 text-slate-700">{row.month}</td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {formatMonthShort(row.month)}
+                    </td>
                     <td className="px-4 py-3 text-slate-700">{row.checkDate || "-"}</td>
                     <td className="px-4 py-3 text-slate-700">{row.checkNo || "-"}</td>
                     <td className="px-4 py-3 font-medium text-slate-900">{row.invoice}</td>
@@ -291,7 +426,7 @@ export default function WMInvoiceDiscrepancyView() {
                         row.discrepancy === 0
                           ? "text-slate-900"
                           : row.discrepancy > 0
-                          ? "text-amber-600"
+                          ? "text-emerald-700"
                           : "text-red-600"
                       }`}
                     >
@@ -302,7 +437,7 @@ export default function WMInvoiceDiscrepancyView() {
                         row.discrepancy === 0
                           ? "text-slate-900"
                           : row.discrepancy > 0
-                          ? "text-amber-600"
+                          ? "text-emerald-700"
                           : "text-red-600"
                       }`}
                     >
