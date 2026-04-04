@@ -857,6 +857,13 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     .replace(/[\u2212\u2013\u2014]/g, "-")
     .replace(/\u00a0/g, " ");
 
+    const lines = normalized
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+    
   // Extract customer
   let customer = "";
   const customerMatch =
@@ -868,10 +875,27 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   }
 
   // Extract MA 2% deduction
+  // Step 3: detect MA 2% deduction
   let maDeduction = 0;
-  const maMatch = normalized.match(/MA\s*2%[\s\S]{0,80}?-\$([\d,]+\.\d{2})/i);
-  if (maMatch?.[1]) {
-    maDeduction = Math.abs(parseFloat(maMatch[1].replace(/,/g, "")));
+
+  // First try: read the explicit MA 2% line
+  for (let i = 0; i < lines.length; i++) {
+    if (/\bma\s*2%/i.test(lines[i])) {
+      const nearby: string[] = [];
+      for (let j = i; j < Math.min(i + 8, lines.length); j++) {
+        if (/^total$/i.test(lines[j])) break;
+        nearby.push(lines[j]);
+      }
+
+      const nearbyText = nearby.join(" ");
+      const amounts = [...nearbyText.matchAll(/-\$([\d,]+\.\d{2})/g)];
+      if (amounts.length > 0) {
+        maDeduction = Math.abs(
+          parseFloat(amounts[amounts.length - 1][1].replace(/,/g, ""))
+        );
+      }
+      break;
+    }
   }
 
   // Fix broken SKU line breaks:
@@ -910,6 +934,31 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const totalQty = raw.reduce((sum, r) => sum + r.qty, 0);
   const grossTotal = round2(raw.reduce((sum, r) => sum + r.grossAmt, 0));
 
+  // Fallback: if MA line was not parsed, derive deduction from invoice total
+  let invoiceTotal = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (/^total$/i.test(lines[i])) {
+      for (let j = i; j < Math.min(i + 4, lines.length); j++) {
+        const m = lines[j].match(/\$([\d,]+\.\d{2})/);
+        if (m) {
+          invoiceTotal = parseFloat(m[1].replace(/,/g, ""));
+          break;
+        }
+      }
+      if (invoiceTotal) break;
+    }
+
+    const inlineTotal = lines[i].match(/^total\s+\$([\d,]+\.\d{2})$/i);
+    if (inlineTotal) {
+      invoiceTotal = parseFloat(inlineTotal[1].replace(/,/g, ""));
+      break;
+    }
+  }
+
+  if (!maDeduction && invoiceTotal > 0 && grossTotal > invoiceTotal) {
+    maDeduction = round2(grossTotal - invoiceTotal);
+  }
   let runningMa = 0;
 
   const rows: DatasetRow[] = raw.map((r, idx) => {
@@ -942,6 +991,16 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     rows[rows.length - 1].amt = round2(rows[rows.length - 1].amt + drift);
   }
 
+  console.log("WM DEBUG", {
+    customer,
+    maDeduction,
+    invoiceTotal,
+    grossTotal,
+    totalQty,
+    rows,
+    netTotal: rows.reduce((sum, r) => sum + r.amt, 0),
+  });
+  
   return rows;
 }
 
