@@ -23,10 +23,9 @@ type Row = {
   item: string;
   custName: string;
   retailer: string;
-  qty: number;
   amt: number;
-  adjustedAmt: number;
   discrepancyShare: number;
+  adjustedAmt: number;
 };
 
 type DatasetDbRow = {
@@ -38,12 +37,11 @@ type DatasetDbRow = {
   upc: string | null;
   item: string | null;
   cust_name: string | null;
-  qty: number | null;
   amt: number | null;
 };
 
 type InvoiceRow = {
-  invoice_number: string;
+  invoice_number: string | null;
   check_date?: string | null;
   check_number?: string | null;
   invoice_amt?: number | null;
@@ -127,14 +125,6 @@ function normalizeText(value: string) {
     .trim();
 }
 
-function getFirstTwoWords(value: string) {
-  return normalizeText(value)
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .join(" ");
-}
-
 function normalizeType(value: string) {
   return String(value || "").trim().toUpperCase();
 }
@@ -142,6 +132,14 @@ function normalizeType(value: string) {
 function isWmInvoiceType(value: string) {
   const t = normalizeType(value);
   return t === "WM INVOICE" || t === "WMINVOICE";
+}
+
+function getFirstTwoWords(value: string) {
+  return normalizeText(value)
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" ");
 }
 
 function directRetailerFromCustomer(custName: string) {
@@ -193,7 +191,6 @@ function findRetailer(
   const trimmedCustomer = custName.trim();
   const normalizedItem = normalizeText(itemName);
   const normalizedUpc = normalizeText(upc);
-
   const skuSource = normalizedUpc || normalizedItem;
 
   if (
@@ -224,61 +221,63 @@ function findRetailer(
   return categorizeRetailerName(match.retailer);
 }
 
-function distributeInvoiceDiscrepancy(rows: Omit<Row, "adjustedAmt" | "discrepancyShare">[], discrepancyByInvoice: Map<string, number>): Row[] {
-  const grouped = new Map<string, Omit<Row, "adjustedAmt" | "discrepancyShare">[]>();
+function applyAmountBasedDiscrepancy(
+  baseRows: Omit<Row, "discrepancyShare" | "adjustedAmt">[],
+  discrepancyByInvoice: Map<string, number>
+): Row[] {
+  const grouped = new Map<string, Omit<Row, "discrepancyShare" | "adjustedAmt">[]>();
 
-  for (const row of rows) {
-    const key = normalizeInvoice(row.invoice);
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key)!.push(row);
+  for (const row of baseRows) {
+    const invoiceKey = normalizeInvoice(row.invoice);
+    if (!grouped.has(invoiceKey)) grouped.set(invoiceKey, []);
+    grouped.get(invoiceKey)!.push(row);
   }
 
-  const output: Row[] = [];
+  const result: Row[] = [];
 
-  for (const [invoice, invoiceRows] of grouped.entries()) {
-    const invoiceDiscrepancy = round2(discrepancyByInvoice.get(invoice) ?? 0);
+  for (const [invoiceKey, invoiceRows] of grouped.entries()) {
+    const invoiceDiscrepancy = round2(discrepancyByInvoice.get(invoiceKey) ?? 0);
 
     const wmRows = invoiceRows.filter(
-      (r) => isWmInvoiceType(r.type) && Number(r.qty || 0) > 0
+      (row) => isWmInvoiceType(row.type) && Number(row.amt ?? 0) !== 0
     );
 
-    const totalQty = wmRows.reduce((sum, r) => sum + Number(r.qty || 0), 0);
+    const totalWmAmount = round2(
+      wmRows.reduce((sum, row) => sum + Number(row.amt ?? 0), 0)
+    );
 
     let runningShare = 0;
 
-    const adjustedRows = invoiceRows.map((row, idx) => {
+    for (const row of invoiceRows) {
       let discrepancyShare = 0;
 
       if (
         invoiceDiscrepancy !== 0 &&
         isWmInvoiceType(row.type) &&
-        totalQty > 0 &&
-        Number(row.qty || 0) > 0
+        totalWmAmount !== 0
       ) {
         const wmIndex = wmRows.findIndex((r) => r.id === row.id);
-        const isLastWm = wmIndex === wmRows.length - 1;
+        const isLastWmRow = wmIndex === wmRows.length - 1;
 
-        if (isLastWm) {
+        if (isLastWmRow) {
           discrepancyShare = round2(invoiceDiscrepancy - runningShare);
         } else {
           discrepancyShare = round2(
-            invoiceDiscrepancy * (Number(row.qty || 0) / totalQty)
+            invoiceDiscrepancy * (Number(row.amt ?? 0) / totalWmAmount)
           );
           runningShare = round2(runningShare + discrepancyShare);
         }
       }
 
-      return {
+      result.push({
         ...row,
         discrepancyShare,
-        adjustedAmt: round2(row.amt + discrepancyShare),
-      };
-    });
-
-    output.push(...adjustedRows);
+        adjustedAmt: round2(Number(row.amt ?? 0) + discrepancyShare),
+      });
+    }
   }
 
-  return output;
+  return result;
 }
 
 export default function BrokerCommissionDataSetsView() {
@@ -328,9 +327,7 @@ export default function BrokerCommissionDataSetsView() {
     ] = await Promise.all([
       supabase
         .from("broker_commission_datasets")
-        .select(
-          "id, month, check_date, invoice, type, upc, item, cust_name, qty, amt"
-        )
+        .select("id, month, check_date, invoice, type, upc, item, cust_name, amt")
         .order("check_date", { ascending: false, nullsFirst: false })
         .order("invoice", { ascending: false }),
       supabase
@@ -354,20 +351,17 @@ export default function BrokerCommissionDataSetsView() {
       ])
     );
 
-    const discrepancyByInvoice = new Map<string, number>();
-
-    // KSolve amount by invoice
     const ksolveByInvoice = new Map<string, number>();
     for (const row of (invoiceData ?? []) as InvoiceRow[]) {
       const invoice = normalizeInvoice(row.invoice_number ?? "");
       if (!invoice) continue;
+
       ksolveByInvoice.set(
         invoice,
         round2((ksolveByInvoice.get(invoice) ?? 0) + Number(row.invoice_amt ?? 0))
       );
     }
 
-    // WM dataset amount by invoice
     const wmByInvoice = new Map<string, number>();
     for (const row of (datasetData ?? []) as DatasetDbRow[]) {
       const invoice = normalizeInvoice(row.invoice ?? "");
@@ -380,12 +374,12 @@ export default function BrokerCommissionDataSetsView() {
       );
     }
 
+    const discrepancyByInvoice = new Map<string, number>();
     for (const invoice of new Set([...ksolveByInvoice.keys(), ...wmByInvoice.keys()])) {
       const ksolveAmount = ksolveByInvoice.get(invoice) ?? 0;
       const wmAmount = wmByInvoice.get(invoice) ?? 0;
 
-      // Same rule as WM Invoice Discrepancy:
-      // discrepancy = Ksolve Amount - WM Amount
+      // Same as WM Invoice Discrepancy: Ksolve Amount - WM Amount
       discrepancyByInvoice.set(invoice, round2(ksolveAmount - wmAmount));
     }
 
@@ -393,7 +387,9 @@ export default function BrokerCommissionDataSetsView() {
       console.error("Failed to load datasets:", datasetError);
       setRows([]);
     } else {
-      const baseRows: Omit<Row, "adjustedAmt" | "discrepancyShare">[] = ((datasetData ?? []) as DatasetDbRow[]).map((row) => {
+      const baseRows: Omit<Row, "discrepancyShare" | "adjustedAmt">[] = (
+        (datasetData ?? []) as DatasetDbRow[]
+      ).map((row) => {
         const inferredRetailer = findRetailer(
           row.cust_name ?? "",
           row.item ?? "",
@@ -414,12 +410,11 @@ export default function BrokerCommissionDataSetsView() {
           item: row.item ?? "",
           custName: row.cust_name ?? "",
           retailer: overrideRetailer || inferredRetailer || "",
-          qty: Number(row.qty ?? 0),
           amt: Number(row.amt ?? 0),
         };
       });
 
-      setRows(distributeInvoiceDiscrepancy(baseRows, discrepancyByInvoice));
+      setRows(applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice));
     }
 
     if (locationsError) {
@@ -449,7 +444,7 @@ export default function BrokerCommissionDataSetsView() {
       const invoiceList = Array.from(
         new Set(
           ((invoiceData ?? []) as InvoiceRow[])
-            .map((row) => normalizeInvoice(row.invoice_number))
+            .map((row) => normalizeInvoice(row.invoice_number ?? ""))
             .filter(Boolean)
         )
       );
@@ -1053,7 +1048,6 @@ export default function BrokerCommissionDataSetsView() {
               <th className="p-3 text-left font-semibold">Item</th>
               <th className="p-3 text-left font-semibold">Customer</th>
               <th className="p-3 text-left font-semibold">Retailer</th>
-              <th className="p-3 text-left font-semibold">Qty</th>
               <th className="p-3 text-left font-semibold">Amount</th>
               <th className="p-3 text-left font-semibold">Disc Share</th>
               <th className="w-[56px] p-3 text-left font-semibold"></th>
@@ -1062,13 +1056,13 @@ export default function BrokerCommissionDataSetsView() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={12} className="p-6 text-center text-gray-500">
+                <td colSpan={11} className="p-6 text-center text-gray-500">
                   Loading data...
                 </td>
               </tr>
             ) : data.length === 0 ? (
               <tr>
-                <td colSpan={12} className="p-6 text-center text-gray-500">
+                <td colSpan={11} className="p-6 text-center text-gray-500">
                   No data found.
                 </td>
               </tr>
@@ -1133,7 +1127,6 @@ export default function BrokerCommissionDataSetsView() {
                       )}
                     </td>
 
-                    <td className="p-3">{row.qty || "-"}</td>
                     <td className="p-3">${row.adjustedAmt.toFixed(2)}</td>
                     <td className="p-3">
                       {row.discrepancyShare !== 0
