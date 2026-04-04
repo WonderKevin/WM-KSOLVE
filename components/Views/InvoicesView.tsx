@@ -8,6 +8,7 @@ import {
   XCircle,
   FileSpreadsheet,
   RefreshCw,
+  ChevronDown,
 } from "lucide-react";
 import { createWorker } from "tesseract.js";
 import * as XLSX from "xlsx";
@@ -46,7 +47,6 @@ type InvoiceRecord = {
 
 type ToastType = "success" | "error" | "info";
 
-// Strict type — only these 4 fields, no invoice_date ever
 type DatasetRow = {
   upc: string;
   item: string;
@@ -54,7 +54,6 @@ type DatasetRow = {
   amt: number;
 };
 
-// Strict insert type — ONLY these 8 columns go to Supabase, never invoice_date
 type DatasetInsert = {
   month: string;
   check_date: string | null;
@@ -325,7 +324,6 @@ function parseMetadataFromText(text: string) {
   let category = "Unknown";
   let pdf_date = "Unknown";
 
-  // HIGH-PRIORITY: Customer Spoilage Natural (must come before isFreshThymePpf)
   const isCustomerSpoilageNatural =
     /customer\s+spoilage\s+natural/i.test(lower) ||
     (
@@ -353,7 +351,6 @@ function parseMetadataFromText(text: string) {
     /distributor\s+charge/i.test(lower) &&
     /received\s+by\s+customer/i.test(lower);
 
-  // isFreshThymePpf only matches when it is NOT a customer spoilage doc
   const isFreshThymePpf =
     !isCustomerSpoilageNatural &&
     (
@@ -521,7 +518,6 @@ async function extractTextWithPdfJs(file: File) {
 }
 
 async function safeExtractPdfText(file: File) {
-  // Guard: never attempt PDF parsing on an Excel file
   const detectedType = await detectFileTypeFromContent(file);
   if (detectedType === "excel") {
     throw new Error(
@@ -860,8 +856,6 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
       if (isProductCode(line) && j > i + 1) break;
     }
 
-    // Use the LAST dollar amount found — that's the line total (Amount column)
-    // The first dollar amount is the Rate per unit, the last is Rate × Qty
     if (!amounts.length) continue;
     const amtMatch = amounts[amounts.length - 1].match(AMT_RE);
     if (!amtMatch) continue;
@@ -1117,10 +1111,6 @@ async function parseDetailRows(file: File, fullText?: string): Promise<DatasetRo
   return parseSpoilsPdfRows(text);
 }
 
-/**
- * Builds a strictly-typed insert object with ONLY the 8 schema columns.
- * invoice_date is NEVER included — it is not a column in broker_commission_datasets.
- */
 function buildDatasetInsert(
   row: DatasetRow,
   productLookup: Map<string, string>,
@@ -1193,7 +1183,6 @@ async function replaceDatasetRowsForInvoice(
   const datasetMonth = formatMonthLabelFromDate(invoiceCheckDate);
   const datasetCheckDate = parseIsoDateFromMmDdYyyy(invoiceCheckDate);
 
-  // Strictly-typed inserts — only the 8 known columns, invoice_date NEVER included
   const inserts: DatasetInsert[] = detailRows.map((r) =>
     buildDatasetInsert(r, pl, datasetMonth, datasetCheckDate, ni, finalType)
   );
@@ -1205,9 +1194,6 @@ async function replaceDatasetRowsForInvoice(
 
   if (deleteError) throw new Error(`Failed clearing old dataset rows: ${deleteError.message}`);
 
-  // Use raw fetch to bypass Supabase JS client's stale schema cache.
-  // The JS client sends a ?columns= param derived from its cached schema,
-  // which can include dropped columns like invoice_date. Raw fetch avoids this entirely.
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
@@ -1346,6 +1332,7 @@ export default function InvoicesView({
   const [monthFilter, setMonthFilter] = useState("Month");
   const [typeFilter, setTypeFilter] = useState("Type");
   const [documentFilter, setDocumentFilter] = useState("Documents");
+  const [documentDropdownOpen, setDocumentDropdownOpen] = useState(false);
   const [deleteMonth, setDeleteMonth] = useState("Delete Month");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -1355,6 +1342,7 @@ export default function InvoicesView({
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastInvRef = useRef(invoiceUploadSignal);
   const lastDocRef = useRef(documentUploadSignal);
+  const documentDropdownRef = useRef<HTMLDivElement | null>(null);
 
   const showToast = (text: string, type: ToastType = "success") => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -1409,6 +1397,20 @@ export default function InvoicesView({
     }
   }, [documentUploadSignal]);
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        documentDropdownRef.current &&
+        !documentDropdownRef.current.contains(event.target as Node)
+      ) {
+        setDocumentDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const uploadMap = useMemo(() => {
     const m = new Map<string, UploadRecord>();
     for (const u of uploads) {
@@ -1440,6 +1442,12 @@ export default function InvoicesView({
     }
     return Array.from(v).sort((a, b) => a.localeCompare(b));
   }, [rows, uploadMap]);
+
+  const documentFilterLabel = useMemo(() => {
+    if (documentFilter === "With Document") return "With Document";
+    if (documentFilter === "Without Document") return "Without Document";
+    return "Documents";
+  }, [documentFilter]);
 
   const filteredRows = useMemo(
     () =>
@@ -1677,7 +1685,6 @@ export default function InvoicesView({
       return;
     }
 
-    // Clear immediately so re-selecting the same file works
     if (documentInputRef.current) documentInputRef.current.value = "";
 
     try {
@@ -2156,12 +2163,79 @@ export default function InvoicesView({
                 {typeOptions.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
 
-              <select value={documentFilter} onChange={(e) => setDocumentFilter(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-                <option>Documents</option>
-                <option>With Document</option>
-                <option>Without Document</option>
-              </select>
+              <div className="relative" ref={documentDropdownRef}>
+                <button
+                  type="button"
+                  onClick={() => setDocumentDropdownOpen((p) => !p)}
+                  className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                >
+                  <span className="flex items-center gap-2">
+                    <span>{documentFilterLabel}</span>
+                    {withoutDocumentCount > 0 && (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDocumentFilter("Without Document");
+                          setDocumentDropdownOpen(false);
+                        }}
+                        className="inline-flex min-w-[20px] items-center justify-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-600 cursor-pointer"
+                        title="Show without documents"
+                      >
+                        {withoutDocumentCount > 99 ? "99+" : withoutDocumentCount}
+                      </span>
+                    )}
+                  </span>
+                  <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${documentDropdownOpen ? "rotate-180" : ""}`} />
+                </button>
+
+                {documentDropdownOpen && (
+                  <div className="absolute z-30 mt-2 w-full rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDocumentFilter("Documents");
+                        setDocumentDropdownOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${
+                        documentFilter === "Documents" ? "bg-slate-50" : ""
+                      }`}
+                    >
+                      <span>Documents</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDocumentFilter("With Document");
+                        setDocumentDropdownOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${
+                        documentFilter === "With Document" ? "bg-slate-50" : ""
+                      }`}
+                    >
+                      <span>With Document</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDocumentFilter("Without Document");
+                        setDocumentDropdownOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${
+                        documentFilter === "Without Document" ? "bg-slate-50" : ""
+                      }`}
+                    >
+                      <span>Without Document</span>
+                      {withoutDocumentCount > 0 && (
+                        <span className="inline-flex min-w-[20px] items-center justify-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-600">
+                          {withoutDocumentCount > 99 ? "99+" : withoutDocumentCount}
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
 
               {canReprocess && isAdmin && (
                 <Button type="button" variant="outline" onClick={() => setReprocessModalOpen(true)}
@@ -2188,15 +2262,6 @@ export default function InvoicesView({
                 </Button>
               </div>
             </div>
-
-            {withoutDocumentCount > 0 && (
-              <div className="mt-4">
-                <button type="button" onClick={() => setDocumentFilter("Without Document")}
-                  className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
-                  Missing documents: {withoutDocumentCount > 99 ? "99+" : withoutDocumentCount}
-                </button>
-              </div>
-            )}
 
             {selectMode && (
               <div className="mt-4 max-w-xs">
@@ -2244,6 +2309,7 @@ export default function InvoicesView({
 
                     const hasDoc = !!ur;
                     const displayMonth = formatMonthShort(row.check_date) || row.month || "";
+                    const docType = ur ? detectStoredFileType(ur.file_name, ur.file_type) : null;
 
                     return (
                       <tr key={row.id} className="border-t">
@@ -2266,9 +2332,21 @@ export default function InvoicesView({
 
                         <td className="px-4 py-3">
                           {hasDoc ? (
-                            <button type="button" onClick={() => openDocumentByInvoice(row.invoice_number)}
-                              className="text-red-500 hover:text-red-700" title="Open document">
-                              <FileText className="h-5 w-5" />
+                            <button
+                              type="button"
+                              onClick={() => openDocumentByInvoice(row.invoice_number)}
+                              className={
+                                docType === "excel"
+                                  ? "text-green-600 hover:text-green-700"
+                                  : "text-red-500 hover:text-red-700"
+                              }
+                              title={docType === "excel" ? "Open Excel document" : "Open document"}
+                            >
+                              {docType === "excel" ? (
+                                <FileSpreadsheet className="h-5 w-5" />
+                              ) : (
+                                <FileText className="h-5 w-5" />
+                              )}
                             </button>
                           ) : (
                             <span className="text-slate-300" title="No document">
