@@ -202,7 +202,7 @@ function inferRetailer(
   const normalizedItem = normalizeText(itemName);
 
   if (normalizedCustomer === "DC16") {
-    if (normalizedItem.startsWith("NSA")) return "Fresh Thyme";
+    if (normalizedItem.startsWith("NSA") || normalizedItem.startsWith("CK")) return "Fresh Thyme";
     if (normalizedItem.startsWith("HP")) return "Kroger";
   }
 

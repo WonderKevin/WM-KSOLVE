@@ -808,15 +808,39 @@ function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
   return rows;
 }
 
+function normalizeWmInvoiceLines(lines: string[]) {
+  const normalized: string[] = [];
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || "").trim();
+    if (!line) continue;
+
+    if (
+      normalized.length > 0 &&
+      /-$/.test(normalized[normalized.length - 1]) &&
+      /^\d{1,4}$/.test(line)
+    ) {
+      normalized[normalized.length - 1] = `${normalized[normalized.length - 1]}${line}`;
+      continue;
+    }
+
+    normalized.push(line);
+  }
+
+  return normalized;
+}
+
 function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
-  const lines = text
-    .replace(/\u00a0/g, " ")
-    .replace(/\r/g, "\n")
-    .replace(/[ \t]+/g, " ")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = normalizeWmInvoiceLines(
+    text
+      .replace(/\u00a0/g, " ")
+      .replace(/\r/g, "\n")
+      .replace(/[ \t]+/g, " ")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+  );
 
   let customer = "";
   for (let i = 0; i < lines.length; i++) {
@@ -834,9 +858,9 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
 
   let ma2PercentTotal = 0;
   for (let i = 0; i < lines.length; i++) {
-    if (/ma\s*2%/i.test(lines[i])) {
+    if (/^ma\s*2%$/i.test(lines[i]) || /\bma\s*2%\b/i.test(lines[i])) {
       const block = lines.slice(i, i + 12).join(" ");
-      const amounts = [...block.matchAll(/\$?\s*([\d,]+\.\d{2})/g)];
+      const amounts = [...block.matchAll(/-?\$?\s*([\d,]+\.\d{2})/g)];
       if (amounts.length > 0) {
         ma2PercentTotal = Math.abs(
           parseFloat(amounts[amounts.length - 1][1].replace(/,/g, ""))
@@ -846,59 +870,84 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     }
   }
 
-  const AMT_RE = /^\$?\s*([\d,]+\.\d{2})$/;
-  const DIGITS_RE = /^\d+$/;
+  const moneyFromToken = (value: string) => {
+    const cleaned = String(value || "").replace(/[$,\s]/g, "");
+    const numeric = Number(cleaned);
+    return Number.isFinite(numeric) ? Math.abs(numeric) : null;
+  };
+
+  const isProductCode = (line: string) => {
+    const value = String(line || "").trim().toUpperCase();
+    return (
+      /^(?:HP|CK|NSA)-[A-Z0-9]+(?:-[A-Z0-9]+){1,4}$/i.test(value) ||
+      /^[A-Z]{2,6}-[A-Z0-9]{2,12}-\d{2,4}$/i.test(value) ||
+      /^\d{10,14}$/.test(value)
+    );
+  };
+
   const raw: Array<{ upc: string; qty: number; grossAmt: number }> = [];
   const seen = new Set<string>();
 
-  const isProductCode = (line: string) =>
-    /^[A-Z]{2,6}-[A-Z0-9]{2,12}-\d{2,4}$/i.test(line) || /^\d{10,14}$/.test(line);
-
   for (let i = 0; i < lines.length; i++) {
     const code = lines[i];
-    if (!isProductCode(code) || seen.has(code)) continue;
+    if (!isProductCode(code) || seen.has(code) || /^MA\s*2%$/i.test(code)) continue;
 
-    let qty = 1;
-    const amounts: string[] = [];
+    let qty = 0;
+    const moneyTokens: number[] = [];
 
-    for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
+    for (let j = i + 1; j < Math.min(i + 12, lines.length); j++) {
       const line = lines[j];
-      if (DIGITS_RE.test(line) && qty === 1) {
-        qty = parseInt(line, 10);
-        continue;
-      }
-      if (AMT_RE.test(line)) amounts.push(line);
+      if (/^total$/i.test(line) || /^ma\s*2%$/i.test(line)) break;
       if (isProductCode(line) && j > i + 1) break;
+
+      if (!qty && /^\d+$/.test(line)) {
+        const parsedQty = parseInt(line, 10);
+        if (parsedQty > 0) qty = parsedQty;
+      }
+
+      const moneyMatches = [...line.matchAll(/-?\$?\s*([\d,]+\.\d{2})/g)];
+      for (const match of moneyMatches) {
+        const parsedMoney = moneyFromToken(match[0]);
+        if (parsedMoney !== null) moneyTokens.push(parsedMoney);
+      }
     }
 
-    if (!amounts.length) continue;
-    const amtMatch = amounts[amounts.length - 1].match(AMT_RE);
-    if (!amtMatch) continue;
+    if (!moneyTokens.length) continue;
+
+    const grossAmt = moneyTokens[moneyTokens.length - 1];
+    if (!grossAmt) continue;
 
     seen.add(code);
     raw.push({
       upc: code,
-      qty,
-      grossAmt: Math.abs(parseFloat(amtMatch[1].replace(/,/g, ""))),
+      qty: qty > 0 ? qty : 1,
+      grossAmt: Math.abs(grossAmt),
     });
   }
 
   if (!raw.length) return rows;
 
   const totalQty = raw.reduce((sum, r) => sum + Math.max(r.qty || 0, 0), 0);
+  let runningAllocated = 0;
 
-  for (const r of raw) {
+  raw.forEach((r, index) => {
     const qtyShare = totalQty > 0 ? Math.max(r.qty || 0, 0) / totalQty : 0;
-    const ma2Share = qtyShare * ma2PercentTotal;
-    const netAmount = Math.round((Math.abs(r.grossAmt) - ma2Share) * 100) / 100;
+    const isLast = index === raw.length - 1;
+    const ma2Share = isLast
+      ? Math.round((ma2PercentTotal - runningAllocated) * 100) / 100
+      : Math.round(qtyShare * ma2PercentTotal * 100) / 100;
+
+    runningAllocated = Math.round((runningAllocated + ma2Share) * 100) / 100;
+
+    const netAmount = Math.round((Math.abs(r.grossAmt) - Math.abs(ma2Share)) * 100) / 100;
 
     rows.push({
       upc: r.upc,
       item: "",
       cust_name: customer,
-      amt: netAmount,
+      amt: Math.max(netAmount, 0),
     });
-  }
+  });
 
   return rows;
 }
@@ -2162,8 +2211,8 @@ export default function InvoicesView({
       )}
 
       <div className="grid gap-6 xl:grid-cols-[1fr]">
-        <Card className="rounded-3xl">
-          <CardContent className="pt-6">
+        <Card className="rounded-3xl overflow-visible">
+          <CardContent className="overflow-visible pt-6">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
               <div className="xl:col-span-2">
                 <div className="relative">
@@ -2185,7 +2234,7 @@ export default function InvoicesView({
                 {typeOptions.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
 
-              <div className="relative" ref={documentDropdownRef}>
+              <div className="relative z-[80]" ref={documentDropdownRef}>
                 <button
                   type="button"
                   onClick={() => setDocumentDropdownOpen((p) => !p)}
@@ -2211,7 +2260,7 @@ export default function InvoicesView({
                 </button>
 
                 {documentDropdownOpen && (
-                  <div className="absolute z-30 mt-2 w-full rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+                  <div className="absolute left-0 top-full z-[999] mt-2 w-full min-w-[220px] rounded-xl border border-slate-200 bg-white p-1 shadow-2xl">
                     <button
                       type="button"
                       onClick={() => {
