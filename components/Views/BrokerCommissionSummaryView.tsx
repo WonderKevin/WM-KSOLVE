@@ -21,7 +21,26 @@ type DatasetRow = {
   item: string;
   cust_name: string;
   amt: number;
+  adjustedAmt: number;
   retailer?: RetailerName;
+};
+
+type DatasetDbRow = {
+  id: string;
+  month: string | null;
+  check_date: string | null;
+  invoice: string | null;
+  type: string | null;
+  upc: string | null;
+  item: string | null;
+  cust_name: string | null;
+  amt: number | null;
+};
+
+type InvoiceRow = {
+  invoice_number: string | null;
+  invoice_amt?: number | null;
+  type?: string | null;
 };
 
 type RetailerOverrideRow = {
@@ -58,6 +77,10 @@ type MonthSummary = {
   grandNetTotal: number;
   grandBrokerFeeTotal: number;
 };
+
+function round2(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
 
 function formatMoney(value: number) {
   return value.toLocaleString("en-US", {
@@ -257,6 +280,67 @@ function mergeByLabel(lines: DetailLine[]) {
   return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
 }
 
+function applyAmountBasedDiscrepancy(
+  baseRows: Omit<DatasetRow, "adjustedAmt">[],
+  discrepancyByInvoice: Map<string, number>
+): DatasetRow[] {
+  const grouped = new Map<string, Omit<DatasetRow, "adjustedAmt">[]>();
+
+  for (const row of baseRows) {
+    const invoiceKey = normalizeInvoice(row.invoice);
+    if (!grouped.has(invoiceKey)) grouped.set(invoiceKey, []);
+    grouped.get(invoiceKey)!.push(row);
+  }
+
+  const result: DatasetRow[] = [];
+
+  for (const [invoiceKey, invoiceRows] of grouped.entries()) {
+    const invoiceDiscrepancy = round2(discrepancyByInvoice.get(invoiceKey) ?? 0);
+
+    const wmRows = invoiceRows.filter(
+      (row) => isWmInvoiceType(row.type) && Number(row.amt ?? 0) !== 0
+    );
+
+    const totalWmAmount = round2(
+      wmRows.reduce((sum, row) => sum + Number(row.amt ?? 0), 0)
+    );
+
+    let runningShare = 0;
+
+    for (const row of invoiceRows) {
+      let adjustedAmt = row.amt;
+
+      if (
+        invoiceDiscrepancy !== 0 &&
+        isWmInvoiceType(row.type) &&
+        totalWmAmount !== 0
+      ) {
+        const wmIndex = wmRows.findIndex((r) => r.id === row.id);
+        const isLastWmRow = wmIndex === wmRows.length - 1;
+
+        let discrepancyShare = 0;
+        if (isLastWmRow) {
+          discrepancyShare = round2(invoiceDiscrepancy - runningShare);
+        } else {
+          discrepancyShare = round2(
+            invoiceDiscrepancy * (Number(row.amt ?? 0) / totalWmAmount)
+          );
+          runningShare = round2(runningShare + discrepancyShare);
+        }
+
+        adjustedAmt = round2(Number(row.amt ?? 0) + discrepancyShare);
+      }
+
+      result.push({
+        ...row,
+        adjustedAmt,
+      });
+    }
+  }
+
+  return result;
+}
+
 export default function BrokerCommissionSummaryView() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -280,6 +364,7 @@ export default function BrokerCommissionSummaryView() {
       { data: datasetData, error: datasetError },
       { data: overrideData, error: overrideError },
       { data: locationData, error: locationError },
+      { data: invoiceData, error: invoiceError },
     ] = await Promise.all([
       supabase
         .from("broker_commission_datasets")
@@ -288,11 +373,16 @@ export default function BrokerCommissionSummaryView() {
         .order("invoice", { ascending: false }),
       supabase.from("retailer_overrides").select("dataset_id, retailer"),
       supabase.from("locations").select("customer, retailer"),
+      supabase
+        .from("invoices")
+        .select("invoice_number, invoice_amt, type")
+        .eq("type", "WM Invoice"),
     ]);
 
     if (datasetError) console.error("Failed to load datasets:", datasetError);
     if (overrideError) console.error("Failed to load overrides:", overrideError);
     if (locationError) console.error("Failed to load locations:", locationError);
+    if (invoiceError) console.error("Failed to load invoices:", invoiceError);
 
     const overrides = new Map<string, string>(
       ((overrideData ?? []) as RetailerOverrideRow[]).map((r) => [
@@ -306,7 +396,39 @@ export default function BrokerCommissionSummaryView() {
       retailer: r.retailer ?? "",
     }));
 
-    const hydratedRows: DatasetRow[] = (datasetData ?? []).map((r: any) => {
+    const datasetRowsRaw = (datasetData ?? []) as DatasetDbRow[];
+    const invoiceRows = (invoiceData ?? []) as InvoiceRow[];
+
+    const ksolveByInvoice = new Map<string, number>();
+    for (const row of invoiceRows) {
+      const invoice = normalizeInvoice(row.invoice_number ?? "");
+      if (!invoice) continue;
+      ksolveByInvoice.set(
+        invoice,
+        round2((ksolveByInvoice.get(invoice) ?? 0) + Number(row.invoice_amt ?? 0))
+      );
+    }
+
+    const wmByInvoice = new Map<string, number>();
+    for (const row of datasetRowsRaw) {
+      const invoice = normalizeInvoice(row.invoice ?? "");
+      if (!invoice) continue;
+      if (!isWmInvoiceType(row.type ?? "")) continue;
+
+      wmByInvoice.set(
+        invoice,
+        round2((wmByInvoice.get(invoice) ?? 0) + Number(row.amt ?? 0))
+      );
+    }
+
+    const discrepancyByInvoice = new Map<string, number>();
+    for (const invoice of new Set([...ksolveByInvoice.keys(), ...wmByInvoice.keys()])) {
+      const ksolveAmount = ksolveByInvoice.get(invoice) ?? 0;
+      const wmAmount = wmByInvoice.get(invoice) ?? 0;
+      discrepancyByInvoice.set(invoice, round2(ksolveAmount - wmAmount));
+    }
+
+    const baseRows: Omit<DatasetRow, "adjustedAmt">[] = datasetRowsRaw.map((r) => {
       const inferred = inferRetailer(
         r.cust_name ?? "",
         r.item ?? "",
@@ -330,6 +452,8 @@ export default function BrokerCommissionSummaryView() {
         retailer: (override || inferred || "") as RetailerName,
       };
     });
+
+    const hydratedRows = applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice);
 
     setRows(hydratedRows);
 
@@ -411,18 +535,21 @@ export default function BrokerCommissionSummaryView() {
       if (!retailer) continue;
 
       if (isWmInvoiceType(row.type)) {
+        const wmAmount = Math.abs(row.adjustedAmt);
+
         const byRetailerKey = `${row.month}__${row.invoice}__${retailer}`;
         wmInvoiceTotalsByMonthInvoiceRetailer.set(
           byRetailerKey,
-          (wmInvoiceTotalsByMonthInvoiceRetailer.get(byRetailerKey) ?? 0) +
-            Math.abs(row.amt)
+          round2(
+            (wmInvoiceTotalsByMonthInvoiceRetailer.get(byRetailerKey) ?? 0) +
+              wmAmount
+          )
         );
 
         const byInvoiceKey = `${row.month}__${row.invoice}`;
         wmInvoiceTotalsByMonthInvoice.set(
           byInvoiceKey,
-          (wmInvoiceTotalsByMonthInvoice.get(byInvoiceKey) ?? 0) +
-            Math.abs(row.amt)
+          round2((wmInvoiceTotalsByMonthInvoice.get(byInvoiceKey) ?? 0) + wmAmount)
         );
       }
     }
@@ -437,7 +564,7 @@ export default function BrokerCommissionSummaryView() {
       const monthSummary = ensureMonth(month);
       const block = ensureRetailerBlock(monthSummary, retailer);
 
-      block.wmInvoiceTotal += amount;
+      block.wmInvoiceTotal = round2(block.wmInvoiceTotal + amount);
       block.details.push({
         label: "WM Invoice",
         amount,
@@ -486,7 +613,7 @@ export default function BrokerCommissionSummaryView() {
       }
 
       const deductionAmount = -Math.abs(row.amt);
-      block.deductionsTotal += deductionAmount;
+      block.deductionsTotal = round2(block.deductionsTotal + deductionAmount);
       block.details.push({
         label: typeLabel,
         amount: deductionAmount,
@@ -504,7 +631,7 @@ export default function BrokerCommissionSummaryView() {
           (acc, line) => {
             const existing = acc.find((a) => a.label === line.label);
             if (existing) {
-              existing.amount += line.amount;
+              existing.amount = round2(existing.amount + line.amount);
               existing.children = [
                 ...(existing.children ?? []),
                 ...(line.children ?? []),
@@ -531,8 +658,8 @@ export default function BrokerCommissionSummaryView() {
         );
 
         block.details = [...mergedInvoiceSummaries, ...deductionLines];
-        block.total = block.wmInvoiceTotal + block.deductionsTotal;
-        block.brokerFee = block.retailer === "Kroger" ? block.total * 0.04 : 0;
+        block.total = round2(block.wmInvoiceTotal + block.deductionsTotal);
+        block.brokerFee = block.retailer === "Kroger" ? round2(block.total * 0.04) : 0;
       }
 
       monthSummary.retailers.sort((a, b) => {
@@ -541,21 +668,17 @@ export default function BrokerCommissionSummaryView() {
         return a.retailer.localeCompare(b.retailer);
       });
 
-      monthSummary.grandWmInvoiceTotal = monthSummary.retailers.reduce(
-        (sum, r) => sum + r.wmInvoiceTotal,
-        0
+      monthSummary.grandWmInvoiceTotal = round2(
+        monthSummary.retailers.reduce((sum, r) => sum + r.wmInvoiceTotal, 0)
       );
-      monthSummary.grandDeductionsTotal = monthSummary.retailers.reduce(
-        (sum, r) => sum + r.deductionsTotal,
-        0
+      monthSummary.grandDeductionsTotal = round2(
+        monthSummary.retailers.reduce((sum, r) => sum + r.deductionsTotal, 0)
       );
-      monthSummary.grandNetTotal = monthSummary.retailers.reduce(
-        (sum, r) => sum + r.total,
-        0
+      monthSummary.grandNetTotal = round2(
+        monthSummary.retailers.reduce((sum, r) => sum + r.total, 0)
       );
-      monthSummary.grandBrokerFeeTotal = monthSummary.retailers.reduce(
-        (sum, r) => sum + r.brokerFee,
-        0
+      monthSummary.grandBrokerFeeTotal = round2(
+        monthSummary.retailers.reduce((sum, r) => sum + r.brokerFee, 0)
       );
     }
 
