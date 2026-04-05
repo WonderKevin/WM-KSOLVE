@@ -101,19 +101,37 @@ function formatMoney(value: number) {
 function formatMonthShort(value: string): string {
   if (!value) return value;
   if (/^[A-Za-z]+ '\d{2}$/.test(value.trim())) return value.trim();
+
   const m = value.trim().match(/^([A-Za-z]+)\s+(\d{4})$/);
   if (m) return `${m[1]} '${m[2].slice(-2)}`;
+
   return value;
 }
 
 function formatMonthFromDate(value: string): string {
   if (!value) return "";
+
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "";
+
   return parsed.toLocaleDateString("en-US", {
     month: "long",
     year: "numeric",
   });
+}
+
+function normalizeMonthLabel(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+
+  const match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
+  if (!match) return trimmed;
+
+  const monthName = match[1];
+  const yearRaw = match[2];
+  const year = yearRaw.length === 2 ? `20${yearRaw}` : yearRaw;
+
+  return `${monthName} ${year}`;
 }
 
 function parseMonthOrder(value: string) {
@@ -132,17 +150,14 @@ function parseMonthOrder(value: string) {
     december: 11,
   };
 
-  const trimmed = String(value || "").trim();
-  const match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
+  const normalized = normalizeMonthLabel(value);
+  const match = normalized.match(/^([A-Za-z]+)\s+(\d{4})$/);
   if (!match) return -1;
 
-  const monthName = match[1].toLowerCase();
-  const yearRaw = match[2];
-  const monthIndex = monthMap[monthName];
+  const monthIndex = monthMap[match[1].toLowerCase()];
   if (monthIndex === undefined) return -1;
 
-  const year = yearRaw.length === 2 ? Number(`20${yearRaw}`) : Number(yearRaw);
-  return year * 100 + monthIndex;
+  return Number(match[2]) * 100 + monthIndex;
 }
 
 function normalizeText(value: string) {
@@ -207,6 +222,7 @@ function categorizeRetailerName(rawRetailer: string): RetailerName {
   if (retailer.includes("KROGER") || retailer === "KRO") return "Kroger";
   if (retailer.includes("FRESH THYME")) return "Fresh Thyme";
   if (retailer === "HEB" || retailer.includes(" HEB ")) return "HEB";
+
   return "INFRA & Others";
 }
 
@@ -448,7 +464,7 @@ export default function BrokerCommissionSummaryView() {
       );
       const override = overrides.get(r.id) ?? "";
       const derivedMonth =
-        formatMonthFromDate(r.check_date ?? "") || (r.month ?? "");
+        normalizeMonthLabel(formatMonthFromDate(r.check_date ?? "") || (r.month ?? ""));
 
       return {
         id: r.id,
@@ -464,11 +480,18 @@ export default function BrokerCommissionSummaryView() {
       };
     });
 
-    setRows(applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice));
-    setVelocityRows((velocityData ?? []) as VelocityRow[]);
+    const hydratedRows = applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice);
+
+    const normalizedVelocityRows = ((velocityData ?? []) as VelocityRow[]).map((row) => ({
+      ...row,
+      month: normalizeMonthLabel(row.month ?? ""),
+    }));
+
+    setRows(hydratedRows);
+    setVelocityRows(normalizedVelocityRows);
 
     const months = Array.from(
-      new Set(baseRows.map((r) => r.month).filter(Boolean))
+      new Set(hydratedRows.map((r) => r.month).filter(Boolean))
     ).sort((a, b) => parseMonthOrder(b) - parseMonthOrder(a));
 
     setExpandedMonths((prev) => {
@@ -505,7 +528,7 @@ export default function BrokerCommissionSummaryView() {
     const filteredVelocityRows =
       selectedMonth === "All Months"
         ? velocityRows
-        : velocityRows.filter((r) => (r.month ?? "") === selectedMonth);
+        : velocityRows.filter((r) => normalizeMonthLabel(r.month ?? "") === normalizeMonthLabel(selectedMonth));
 
     const monthMap = new Map<string, MonthSummary>();
 
@@ -552,6 +575,7 @@ export default function BrokerCommissionSummaryView() {
 
       const amount = Math.abs(row.adjustedAmt);
       const key = `${row.month}__${row.invoice}__${retailer}`;
+
       wmInvoiceTotalsByMonthInvoiceRetailer.set(
         key,
         round2((wmInvoiceTotalsByMonthInvoiceRetailer.get(key) ?? 0) + amount)
@@ -563,9 +587,13 @@ export default function BrokerCommissionSummaryView() {
       }
     }
 
+    // Duplicate first WM invoice into INFRA & Others based on INFRA HP cases.
     for (const [month, firstInvoice] of firstWmInvoiceByMonth.entries()) {
       const hpCases = filteredVelocityRows.reduce((sum, row) => {
-        if ((row.month ?? "") !== month) return sum;
+        if (normalizeMonthLabel(row.month ?? "") !== normalizeMonthLabel(month)) {
+          return sum;
+        }
+
         if (categorizeRetailerName(row.retailer ?? "") !== "INFRA & Others") {
           return sum;
         }
@@ -590,6 +618,7 @@ export default function BrokerCommissionSummaryView() {
         round2(Math.max(krogerAmount - transferAmount, 0))
       );
 
+      // This is the duplication part even if INFRA had no invoice row originally.
       wmInvoiceTotalsByMonthInvoiceRetailer.set(
         infraKey,
         round2(infraAmount + transferAmount)
