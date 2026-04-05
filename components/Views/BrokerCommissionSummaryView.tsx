@@ -549,7 +549,6 @@ export default function BrokerCommissionSummaryView() {
     };
 
     const wmInvoiceTotalsByMonthInvoiceRetailer = new Map<string, number>();
-    const wmInvoiceTotalsByMonthInvoice = new Map<string, number>();
     const firstWmInvoiceByMonth = new Map<string, string>();
 
     for (const row of datasetRows) {
@@ -558,20 +557,11 @@ export default function BrokerCommissionSummaryView() {
 
       if (isWmInvoiceType(row.type)) {
         const wmAmount = Math.abs(row.adjustedAmt);
+        const key = `${row.month}__${row.invoice}__${retailer}`;
 
-        const byRetailerKey = `${row.month}__${row.invoice}__${retailer}`;
         wmInvoiceTotalsByMonthInvoiceRetailer.set(
-          byRetailerKey,
-          round2(
-            (wmInvoiceTotalsByMonthInvoiceRetailer.get(byRetailerKey) ?? 0) +
-              wmAmount
-          )
-        );
-
-        const byInvoiceKey = `${row.month}__${row.invoice}`;
-        wmInvoiceTotalsByMonthInvoice.set(
-          byInvoiceKey,
-          round2((wmInvoiceTotalsByMonthInvoice.get(byInvoiceKey) ?? 0) + wmAmount)
+          key,
+          round2((wmInvoiceTotalsByMonthInvoiceRetailer.get(key) ?? 0) + wmAmount)
         );
 
         const existingFirst = firstWmInvoiceByMonth.get(row.month);
@@ -581,60 +571,35 @@ export default function BrokerCommissionSummaryView() {
       }
     }
 
-    // INFRA HP cases rule
-    const infraTransferByMonth = new Map<
-      string,
-      { invoice: string; amount: number }
-    >();
+    // INFRA HP cases transfer
+    for (const [month, firstInvoice] of firstWmInvoiceByMonth.entries()) {
+      const hpCases = filteredVelocityRows.reduce((sum, row) => {
+        if ((row.month ?? "") !== month) return sum;
+        if (categorizeRetailerName(row.retailer ?? "") !== "INFRA & Others") return sum;
 
-    const infraHpCasesByMonth = new Map<string, number>();
+        const description = normalizeText(row.description ?? "");
+        if (!description.startsWith("HP")) return sum;
 
-    for (const row of filteredVelocityRows) {
-      const month = row.month ?? "";
-      const retailer = categorizeRetailerName(row.retailer ?? "");
-      const description = normalizeText(row.description ?? "");
-      const cases = Number(row.cases ?? 0);
+        return sum + Number(row.cases ?? 0);
+      }, 0);
 
-      if (!month || retailer !== "INFRA & Others") continue;
-      if (!description.startsWith("HP")) continue;
-      if (!cases) continue;
-
-      infraHpCasesByMonth.set(
-        month,
-        (infraHpCasesByMonth.get(month) ?? 0) + cases
-      );
-    }
-
-    for (const [month, totalCases] of infraHpCasesByMonth.entries()) {
-      const firstInvoice = firstWmInvoiceByMonth.get(month);
-      if (!firstInvoice) continue;
-
-      const transferAmount = round2(totalCases * INFRA_HP_CASE_RATE);
+      const transferAmount = round2(hpCases * INFRA_HP_CASE_RATE);
       if (transferAmount <= 0) continue;
 
-      infraTransferByMonth.set(month, {
-        invoice: firstInvoice,
-        amount: transferAmount,
-      });
-    }
+      const krogerKey = `${month}__${firstInvoice}__Kroger`;
+      const infraKey = `${month}__${firstInvoice}__INFRA & Others`;
 
-    for (const [month, transfer] of infraTransferByMonth.entries()) {
-      const krogerKey = `${month}__${transfer.invoice}__Kroger`;
-      const infraKey = `${month}__${transfer.invoice}__INFRA & Others`;
-
-      const currentKrogerAmount =
-        wmInvoiceTotalsByMonthInvoiceRetailer.get(krogerKey) ?? 0;
-      const currentInfraAmount =
-        wmInvoiceTotalsByMonthInvoiceRetailer.get(infraKey) ?? 0;
+      const krogerAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(krogerKey) ?? 0;
+      const infraAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(infraKey) ?? 0;
 
       wmInvoiceTotalsByMonthInvoiceRetailer.set(
         krogerKey,
-        round2(Math.max(currentKrogerAmount - transfer.amount, 0))
+        round2(Math.max(krogerAmount - transferAmount, 0))
       );
 
       wmInvoiceTotalsByMonthInvoiceRetailer.set(
         infraKey,
-        round2(currentInfraAmount + transfer.amount)
+        round2(infraAmount + transferAmount)
       );
     }
 
