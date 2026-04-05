@@ -108,10 +108,8 @@ function formatMonthShort(value: string): string {
 
 function formatMonthFromDate(value: string): string {
   if (!value) return "";
-
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "";
-
   return parsed.toLocaleDateString("en-US", {
     month: "long",
     year: "numeric",
@@ -141,7 +139,6 @@ function parseMonthOrder(value: string) {
   const monthName = match[1].toLowerCase();
   const yearRaw = match[2];
   const monthIndex = monthMap[monthName];
-
   if (monthIndex === undefined) return -1;
 
   const year = yearRaw.length === 2 ? Number(`20${yearRaw}`) : Number(yearRaw);
@@ -210,7 +207,6 @@ function categorizeRetailerName(rawRetailer: string): RetailerName {
   if (retailer.includes("KROGER") || retailer === "KRO") return "Kroger";
   if (retailer.includes("FRESH THYME")) return "Fresh Thyme";
   if (retailer === "HEB" || retailer.includes(" HEB ")) return "HEB";
-
   return "INFRA & Others";
 }
 
@@ -468,13 +464,11 @@ export default function BrokerCommissionSummaryView() {
       };
     });
 
-    const hydratedRows = applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice);
-
-    setRows(hydratedRows);
+    setRows(applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice));
     setVelocityRows((velocityData ?? []) as VelocityRow[]);
 
     const months = Array.from(
-      new Set(hydratedRows.map((r) => r.month).filter(Boolean))
+      new Set(baseRows.map((r) => r.month).filter(Boolean))
     ).sort((a, b) => parseMonthOrder(b) - parseMonthOrder(a));
 
     setExpandedMonths((prev) => {
@@ -554,28 +548,27 @@ export default function BrokerCommissionSummaryView() {
     for (const row of datasetRows) {
       const retailer = (row.retailer ?? "") as RetailerName;
       if (!retailer) continue;
+      if (!isWmInvoiceType(row.type)) continue;
 
-      if (isWmInvoiceType(row.type)) {
-        const wmAmount = Math.abs(row.adjustedAmt);
-        const key = `${row.month}__${row.invoice}__${retailer}`;
+      const amount = Math.abs(row.adjustedAmt);
+      const key = `${row.month}__${row.invoice}__${retailer}`;
+      wmInvoiceTotalsByMonthInvoiceRetailer.set(
+        key,
+        round2((wmInvoiceTotalsByMonthInvoiceRetailer.get(key) ?? 0) + amount)
+      );
 
-        wmInvoiceTotalsByMonthInvoiceRetailer.set(
-          key,
-          round2((wmInvoiceTotalsByMonthInvoiceRetailer.get(key) ?? 0) + wmAmount)
-        );
-
-        const existingFirst = firstWmInvoiceByMonth.get(row.month);
-        if (!existingFirst || row.invoice.localeCompare(existingFirst) < 0) {
-          firstWmInvoiceByMonth.set(row.month, row.invoice);
-        }
+      const firstInvoice = firstWmInvoiceByMonth.get(row.month);
+      if (!firstInvoice || row.invoice.localeCompare(firstInvoice) < 0) {
+        firstWmInvoiceByMonth.set(row.month, row.invoice);
       }
     }
 
-    // INFRA HP cases transfer
     for (const [month, firstInvoice] of firstWmInvoiceByMonth.entries()) {
       const hpCases = filteredVelocityRows.reduce((sum, row) => {
         if ((row.month ?? "") !== month) return sum;
-        if (categorizeRetailerName(row.retailer ?? "") !== "INFRA & Others") return sum;
+        if (categorizeRetailerName(row.retailer ?? "") !== "INFRA & Others") {
+          return sum;
+        }
 
         const description = normalizeText(row.description ?? "");
         if (!description.startsWith("HP")) return sum;
