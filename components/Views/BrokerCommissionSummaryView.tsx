@@ -581,35 +581,7 @@ export default function BrokerCommissionSummaryView() {
       }
     }
 
-    for (const [key, amount] of wmInvoiceTotalsByMonthInvoiceRetailer.entries()) {
-      const [month, invoice, retailer] = key.split("__") as [
-        string,
-        string,
-        RetailerName
-      ];
-
-      const monthSummary = ensureMonth(month);
-      const block = ensureRetailerBlock(monthSummary, retailer);
-
-      block.wmInvoiceTotal = round2(block.wmInvoiceTotal + amount);
-      block.details.push({
-        label: "WM Invoice",
-        amount,
-        kind: "invoice-summary",
-        children: [
-          {
-            label: `WM Invoice ${invoice}`,
-            amount,
-            kind: "invoice-detail",
-          },
-        ],
-      });
-    }
-
-    // INFRA HP cases rule:
-    // total cases of HP items in KeHe Velocity for INFRA & Others * 35.68
-    // subtract from first monthly Kroger WM invoice
-    // add same amount as duplicated WM invoice to INFRA & Others
+    // INFRA HP cases rule
     const infraTransferByMonth = new Map<
       string,
       { invoice: string; amount: number }
@@ -650,8 +622,10 @@ export default function BrokerCommissionSummaryView() {
       const krogerKey = `${month}__${transfer.invoice}__Kroger`;
       const infraKey = `${month}__${transfer.invoice}__INFRA & Others`;
 
-      const currentKrogerAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(krogerKey) ?? 0;
-      const currentInfraAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(infraKey) ?? 0;
+      const currentKrogerAmount =
+        wmInvoiceTotalsByMonthInvoiceRetailer.get(krogerKey) ?? 0;
+      const currentInfraAmount =
+        wmInvoiceTotalsByMonthInvoiceRetailer.get(infraKey) ?? 0;
 
       wmInvoiceTotalsByMonthInvoiceRetailer.set(
         krogerKey,
@@ -663,9 +637,6 @@ export default function BrokerCommissionSummaryView() {
         round2(currentInfraAmount + transfer.amount)
       );
     }
-
-    // Rebuild retailer blocks from adjusted invoice map
-    monthMap.clear();
 
     for (const [key, amount] of wmInvoiceTotalsByMonthInvoiceRetailer.entries()) {
       if (amount <= 0) continue;
