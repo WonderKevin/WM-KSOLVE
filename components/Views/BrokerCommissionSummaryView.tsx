@@ -43,6 +43,13 @@ type InvoiceRow = {
   type?: string | null;
 };
 
+type VelocityRow = {
+  month: string | null;
+  description: string | null;
+  cases: number | null;
+  retailer: string | null;
+};
+
 type RetailerOverrideRow = {
   dataset_id: string;
   retailer: string;
@@ -77,6 +84,8 @@ type MonthSummary = {
   grandNetTotal: number;
   grandBrokerFeeTotal: number;
 };
+
+const INFRA_HP_CASE_RATE = 35.68;
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -271,7 +280,7 @@ function mergeByLabel(lines: DetailLine[]) {
   for (const line of lines) {
     const existing = map.get(line.label);
     if (existing) {
-      existing.amount += line.amount;
+      existing.amount = round2(existing.amount + line.amount);
     } else {
       map.set(line.label, { ...line });
     }
@@ -345,6 +354,7 @@ export default function BrokerCommissionSummaryView() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [rows, setRows] = useState<DatasetRow[]>([]);
+  const [velocityRows, setVelocityRows] = useState<VelocityRow[]>([]);
   const [selectedMonth, setSelectedMonth] = useState("All Months");
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>(
     {}
@@ -365,6 +375,7 @@ export default function BrokerCommissionSummaryView() {
       { data: overrideData, error: overrideError },
       { data: locationData, error: locationError },
       { data: invoiceData, error: invoiceError },
+      { data: velocityData, error: velocityError },
     ] = await Promise.all([
       supabase
         .from("broker_commission_datasets")
@@ -377,12 +388,16 @@ export default function BrokerCommissionSummaryView() {
         .from("invoices")
         .select("invoice_number, invoice_amt, type")
         .eq("type", "WM Invoice"),
+      supabase
+        .from("kehe_velocity")
+        .select("month, description, cases, retailer"),
     ]);
 
     if (datasetError) console.error("Failed to load datasets:", datasetError);
     if (overrideError) console.error("Failed to load overrides:", overrideError);
     if (locationError) console.error("Failed to load locations:", locationError);
     if (invoiceError) console.error("Failed to load invoices:", invoiceError);
+    if (velocityError) console.error("Failed to load kehe velocity:", velocityError);
 
     const overrides = new Map<string, string>(
       ((overrideData ?? []) as RetailerOverrideRow[]).map((r) => [
@@ -456,6 +471,7 @@ export default function BrokerCommissionSummaryView() {
     const hydratedRows = applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice);
 
     setRows(hydratedRows);
+    setVelocityRows((velocityData ?? []) as VelocityRow[]);
 
     const months = Array.from(
       new Set(hydratedRows.map((r) => r.month).filter(Boolean))
@@ -491,6 +507,11 @@ export default function BrokerCommissionSummaryView() {
       selectedMonth === "All Months"
         ? rows
         : rows.filter((r) => r.month === selectedMonth);
+
+    const filteredVelocityRows =
+      selectedMonth === "All Months"
+        ? velocityRows
+        : velocityRows.filter((r) => (r.month ?? "") === selectedMonth);
 
     const monthMap = new Map<string, MonthSummary>();
 
@@ -529,6 +550,7 @@ export default function BrokerCommissionSummaryView() {
 
     const wmInvoiceTotalsByMonthInvoiceRetailer = new Map<string, number>();
     const wmInvoiceTotalsByMonthInvoice = new Map<string, number>();
+    const firstWmInvoiceByMonth = new Map<string, string>();
 
     for (const row of datasetRows) {
       const retailer = (row.retailer ?? "") as RetailerName;
@@ -551,10 +573,103 @@ export default function BrokerCommissionSummaryView() {
           byInvoiceKey,
           round2((wmInvoiceTotalsByMonthInvoice.get(byInvoiceKey) ?? 0) + wmAmount)
         );
+
+        const existingFirst = firstWmInvoiceByMonth.get(row.month);
+        if (!existingFirst || row.invoice.localeCompare(existingFirst) < 0) {
+          firstWmInvoiceByMonth.set(row.month, row.invoice);
+        }
       }
     }
 
     for (const [key, amount] of wmInvoiceTotalsByMonthInvoiceRetailer.entries()) {
+      const [month, invoice, retailer] = key.split("__") as [
+        string,
+        string,
+        RetailerName
+      ];
+
+      const monthSummary = ensureMonth(month);
+      const block = ensureRetailerBlock(monthSummary, retailer);
+
+      block.wmInvoiceTotal = round2(block.wmInvoiceTotal + amount);
+      block.details.push({
+        label: "WM Invoice",
+        amount,
+        kind: "invoice-summary",
+        children: [
+          {
+            label: `WM Invoice ${invoice}`,
+            amount,
+            kind: "invoice-detail",
+          },
+        ],
+      });
+    }
+
+    // INFRA HP cases rule:
+    // total cases of HP items in KeHe Velocity for INFRA & Others * 35.68
+    // subtract from first monthly Kroger WM invoice
+    // add same amount as duplicated WM invoice to INFRA & Others
+    const infraTransferByMonth = new Map<
+      string,
+      { invoice: string; amount: number }
+    >();
+
+    const infraHpCasesByMonth = new Map<string, number>();
+
+    for (const row of filteredVelocityRows) {
+      const month = row.month ?? "";
+      const retailer = categorizeRetailerName(row.retailer ?? "");
+      const description = normalizeText(row.description ?? "");
+      const cases = Number(row.cases ?? 0);
+
+      if (!month || retailer !== "INFRA & Others") continue;
+      if (!description.startsWith("HP")) continue;
+      if (!cases) continue;
+
+      infraHpCasesByMonth.set(
+        month,
+        (infraHpCasesByMonth.get(month) ?? 0) + cases
+      );
+    }
+
+    for (const [month, totalCases] of infraHpCasesByMonth.entries()) {
+      const firstInvoice = firstWmInvoiceByMonth.get(month);
+      if (!firstInvoice) continue;
+
+      const transferAmount = round2(totalCases * INFRA_HP_CASE_RATE);
+      if (transferAmount <= 0) continue;
+
+      infraTransferByMonth.set(month, {
+        invoice: firstInvoice,
+        amount: transferAmount,
+      });
+    }
+
+    for (const [month, transfer] of infraTransferByMonth.entries()) {
+      const krogerKey = `${month}__${transfer.invoice}__Kroger`;
+      const infraKey = `${month}__${transfer.invoice}__INFRA & Others`;
+
+      const currentKrogerAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(krogerKey) ?? 0;
+      const currentInfraAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(infraKey) ?? 0;
+
+      wmInvoiceTotalsByMonthInvoiceRetailer.set(
+        krogerKey,
+        round2(Math.max(currentKrogerAmount - transfer.amount, 0))
+      );
+
+      wmInvoiceTotalsByMonthInvoiceRetailer.set(
+        infraKey,
+        round2(currentInfraAmount + transfer.amount)
+      );
+    }
+
+    // Rebuild retailer blocks from adjusted invoice map
+    monthMap.clear();
+
+    for (const [key, amount] of wmInvoiceTotalsByMonthInvoiceRetailer.entries()) {
+      if (amount <= 0) continue;
+
       const [month, invoice, retailer] = key.split("__") as [
         string,
         string,
@@ -599,11 +714,7 @@ export default function BrokerCommissionSummaryView() {
       if (isHebPullout(row.type, retailer)) {
         const hasDc19 = dc19ByMonth.get(row.month) ?? false;
         if (!hasDc19) {
-          const firstInvoice = Array.from(wmInvoiceTotalsByMonthInvoice.keys())
-            .filter((key) => key.startsWith(`${row.month}__`))
-            .map((key) => key.split("__")[1])
-            .sort()[0];
-
+          const firstInvoice = firstWmInvoiceByMonth.get(row.month);
           if (firstInvoice) {
             typeLabel = `${typeLabel} (allocated to WM Invoice ${firstInvoice})`;
           }
@@ -685,7 +796,7 @@ export default function BrokerCommissionSummaryView() {
     return Array.from(monthMap.values()).sort(
       (a, b) => parseMonthOrder(b.month) - parseMonthOrder(a.month)
     );
-  }, [rows, selectedMonth]);
+  }, [rows, velocityRows, selectedMonth]);
 
   return (
     <div className="space-y-6">
