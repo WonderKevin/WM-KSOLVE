@@ -1128,6 +1128,57 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   return wmRows;
 }
 
+function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
+  const rows: DatasetRow[] = [];
+  const lines = text
+    .replace(/\u00a0/g, " ")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  let currentCustomer = "";
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    const soldToInline = line.match(/^sold\s+to:\s*(.+)/i);
+    if (soldToInline && soldToInline[1].trim()) {
+      currentCustomer = soldToInline[1].trim();
+      continue;
+    }
+
+    if (/^sold\s+to:\s*$/i.test(line)) {
+      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+        const next = lines[j].trim();
+        if (next && !/^\d{5,}$/.test(next) && !/^telephone/i.test(next) && next.length > 3) {
+          currentCustomer = next;
+          break;
+        }
+      }
+      continue;
+    }
+
+    if (!/^\d{12}$/.test(line)) continue;
+
+    let extCost = 0;
+    for (let j = i + 1; j < Math.min(i + 15, lines.length); j++) {
+      const l = lines[j];
+      if (/^\d{12}$/.test(l) || /^sold\s+to/i.test(l)) break;
+      const numMatch = l.match(/^([\d,]+\.\d{2})$/);
+      if (numMatch) extCost = parseFloat(numMatch[1].replace(/,/g, ""));
+    }
+
+    if (!extCost) continue;
+
+    rows.push({ upc: line, item: "", cust_name: currentCustomer, amt: extCost });
+  }
+
+  return rows;
+}
+
+
 function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
   const rows: DatasetRow[] = [];
   const wb = XLSX.read(buffer, { type: "array" });
