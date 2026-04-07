@@ -332,7 +332,6 @@ function getUploadContentType(file: File, fileType: "pdf" | "excel") {
   return getExcelMimeType(file.name);
 }
 
-// ─── Storage upload with retry (handles transient 502/CORS errors) ───────────
 async function uploadToStorageWithRetry(
   filePath: string,
   file: File,
@@ -350,11 +349,9 @@ async function uploadToStorageWithRetry(
 
     lastError = new Error(error.message);
 
-    // Don't retry on "already exists" — that's a logic error, not transient
     if (error.message?.toLowerCase().includes("already exists")) throw lastError;
 
     if (attempt < retries) {
-      // Exponential backoff: 1s, 2s, 3s
       await new Promise((r) => setTimeout(r, attempt * 1000));
     }
   }
@@ -548,6 +545,8 @@ function parseMetadataFromText(text: string) {
   return { category, invoice, pdf_date };
 }
 
+// ─── FIXED: extract ALL pages, join spans per page with space (not newline)
+// then pages separated by newline. This preserves same-line columns for CS format.
 async function extractTextWithPdfJs(file: File) {
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -557,14 +556,43 @@ async function extractTextWithPdfJs(file: File) {
 
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
 
-  let fullText = "";
+  console.log(`[extractTextWithPdfJs] numPages: ${pdf.numPages}`);
+
+  const pageTexts: string[] = [];
+
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
     const tc = await page.getTextContent();
-    fullText += "\n" + tc.items.map((i: any) => ("str" in i ? i.str : "")).join("\n") + "\n";
+
+    // Group spans by their approximate Y position (same visual row = same line).
+    // Spans within 3px of each other vertically are treated as the same line.
+    // This reconstructs "850067781097 CHEESECAKE STRWBRY BLISS WONDR KRO FRYS 658, GILBERT 12/26/2025 7613017 12 2% $.71"
+    // as a single line instead of 9 separate lines.
+    const spansByLine = new Map<number, string[]>();
+
+    for (const item of tc.items) {
+      if (!("str" in item) || !item.str.trim()) continue;
+      const y = Math.round((item as any).transform?.[5] ?? 0);
+
+      // Round to nearest 3px bucket to group spans on the same visual row
+      const bucket = Math.round(y / 3) * 3;
+
+      if (!spansByLine.has(bucket)) spansByLine.set(bucket, []);
+      spansByLine.get(bucket)!.push(item.str);
+    }
+
+    // Sort buckets descending (pdfjs y=0 is bottom of page, so higher y = higher on page)
+    const sortedBuckets = Array.from(spansByLine.keys()).sort((a, b) => b - a);
+    const pageLines = sortedBuckets.map((bucket) => spansByLine.get(bucket)!.join(" "));
+
+    pageTexts.push(pageLines.join("\n"));
+    console.log(`[extractTextWithPdfJs] page ${p}: ${pageLines.length} lines, ${pageTexts[pageTexts.length - 1].length} chars`);
   }
 
-  return { pdf, fullText: fullText.trim() };
+  const fullText = pageTexts.join("\n").trim();
+  console.log(`[extractTextWithPdfJs] total chars: ${fullText.length}`);
+
+  return { pdf, fullText };
 }
 
 async function safeExtractPdfText(file: File) {
@@ -584,12 +612,13 @@ async function safeExtractPdfText(file: File) {
   }
 }
 
+// ─── FIXED: OCR also scans ALL pages (removed Math.min cap)
 async function extractTextWithOcr(pdf: any) {
   const worker = await createWorker("eng");
   let fullText = "";
 
   try {
-    for (let p = 1; p <= Math.min(pdf.numPages, 3); p++) {
+    for (let p = 1; p <= pdf.numPages; p++) {
       const page = await pdf.getPage(p);
       const vp = page.getViewport({ scale: 2.0 });
       const canvas = document.createElement("canvas");
@@ -600,6 +629,7 @@ async function extractTextWithOcr(pdf: any) {
       canvas.height = vp.height;
       await page.render({ canvasContext: ctx, viewport: vp }).promise;
       fullText += "\n" + (await worker.recognize(canvas.toDataURL("image/png"))).data.text + "\n";
+      console.log(`[extractTextWithOcr] page ${p} OCR done`);
     }
   } finally {
     await worker.terminate();
@@ -752,26 +782,6 @@ async function fetchInvoiceCheckDate(invoice: string): Promise<string> {
   return isoDateToMmDdYyyy(matched?.check_date || "");
 }
 
-// ─── FIXED parseSpoilsPdfRows ─────────────────────────────────────────────────
-//
-// pdfjs outputs each PDF text object as a separate span joined by "\n".
-// For this document each data row is exactly 7 spans:
-//
-//   span i+0: "485602"                       ← cust# alone (4-6 digits)
-//   span i+1: "FRESH THYME FRMR MKT 602NOR"  ← customer name
-//   span i+2: "W/E 12/27/2025"               ← ship date  ← KEY identifier
-//   span i+3: "190"                           ← invoice #
-//   span i+4: "12"                            ← qty
-//   span i+5: "0.02"                          ← invoice %
-//   span i+6: "0.7656"                        ← allowance $ ← this is amt
-//
-// UPC header is also split:
-//   "UPC :"          ← label alone
-//   "860008873408"   ← digits on next line
-//
-// Strategy 1 handles pdfplumber-style text where all columns are on one line.
-// Strategy 2 handles real pdfjs output with 7 separate spans per row.
-//
 const DEBUG_MODE = true;
 
 function parseSpoilsPdfRows(text: string): DatasetRow[] {
@@ -785,13 +795,12 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     .map((l) => l.trim())
     .filter(Boolean);
 
-// 👇 ADD THIS RIGHT HERE
-console.log("=== RAW TEXT SAMPLE ===");
-console.log("text.length:", text.length);
-console.log("lines.length:", lines.length);
-console.log("first 500 chars:", JSON.stringify(text.slice(0, 500)));
-console.log("first 10 lines:", lines.slice(0, 10));
-console.log("=== RAW TEXT SAMPLE END ===");
+  console.log("=== RAW TEXT SAMPLE ===");
+  console.log("text.length:", text.length);
+  console.log("lines.length:", lines.length);
+  console.log("first 500 chars:", JSON.stringify(text.slice(0, 500)));
+  console.log("first 10 lines:", lines.slice(0, 10));
+  console.log("=== RAW TEXT SAMPLE END ===");
 
   let currentUpc = "";
   let inFlatTable = false;
@@ -821,8 +830,8 @@ console.log("=== RAW TEXT SAMPLE END ===");
 
   const isNoiseLine = (line: string) =>
     /^page\s+\d+\s+of\s+\d+$/i.test(line) ||
-    /^tuesday,\s+\w+\s+\d{1,2},\s+\d{4}\s+page\s+\d+\s+of\s+\d+$/i.test(line) ||
-    /^all\s+inquiries\b/i.test(line) ||
+    /^\w+day,\s+\w+\s+\d{1,2},\s+\d{4}\s+page\s+\d+\s+of\s+\d+$/i.test(line) ||
+    /^all\s+inquir/i.test(line) ||
     /vendorperformance@/i.test(line);
 
   const extractAmount = (value: string): number | null => {
@@ -838,16 +847,14 @@ console.log("=== RAW TEXT SAMPLE END ===");
     /^\s*UPC\s+ITEM\s+BRAND\s+Cust/i.test(line) ||
     /^\s*UPC\s+ITEM\s+BRAND/i.test(line);
 
-  // Guard: line must start with 10-14 digit UPC, contain a date, end with a dollar amount.
-  // 6-digit customer numbers (Image 2 format) won't match the UPC length check.
+  // Guard: must start with 10-14 digit UPC, contain a date, end with dollar amount.
+  // 6-digit customer numbers (CN format) won't match the UPC length check.
   const looksLikeFlatSpoilsRow = (line: string): boolean =>
     /^\d{10,14}\s+/.test(line) &&
     /\b\d{1,2}\/\d{1,2}\/\d{4}\b/.test(line) &&
     /\$?\.?\d+\.\d{2}$/.test(line.trim());
 
-  const parseFlatSpoilsTableRowLoose = (
-    line: string
-  ): DatasetRow | null => {
+  const parseFlatSpoilsTableRowLoose = (line: string): DatasetRow | null => {
     const dateMatch = line.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/);
     if (!dateMatch || dateMatch.index == null) return null;
 
@@ -863,7 +870,6 @@ console.log("=== RAW TEXT SAMPLE END ===");
     const afterParts = afterDate.split(/\s+/).filter(Boolean);
     if (afterParts.length < 4) return null;
 
-    const invoice = afterParts[0];
     const qtyRaw = afterParts[1];
     const rateRaw = afterParts[2];
     const amtRaw = afterParts[afterParts.length - 1];
@@ -910,7 +916,7 @@ console.log("=== RAW TEXT SAMPLE END ===");
       continue;
     }
 
-    // FORMAT A: flat CS spoils table (Image 1 style)
+    // FORMAT A: flat CS spoils table
     if (inFlatTable) {
       if (
         /^TOTAL\s*:?\s*\$?[\d,]+\.\d{2}$/i.test(line) ||
@@ -935,10 +941,9 @@ console.log("=== RAW TEXT SAMPLE END ===");
       }
     }
 
-    // Opportunistic flat-row detection — catches Image 1 rows when inFlatTable
-    // was never set because the header lived on a prior page or wasn't matched.
-    // Safe against Image 2 rows because those start with 6-digit customer numbers,
-    // which won't satisfy the 10-14 digit UPC check in looksLikeFlatSpoilsRow.
+    // Opportunistic: catch CS rows even when inFlatTable was never set
+    // (header on a prior page not matched). Safe vs CN format because
+    // CN rows start with 6-digit cust#, not 10-14 digit UPC.
     if (!inFlatTable && looksLikeFlatSpoilsRow(line)) {
       const flatRow = parseFlatSpoilsTableRowLoose(line);
       if (flatRow) {
@@ -954,12 +959,11 @@ console.log("=== RAW TEXT SAMPLE END ===");
       }
     }
 
-    // FORMAT B: CN spoils format with UPC header blocks (Image 2 style)
-
+    // FORMAT B: CN spoils — UPC header blocks
     const upcMatch = line.match(/^UPC\s*:?\s*(\d{10,14})\b/i);
     if (upcMatch) {
       currentUpc = upcMatch[1];
-      inFlatTable = false; // ensure flat mode doesn't bleed into block mode
+      inFlatTable = false;
       debug.upcHeaders.push({
         lineIndex: i,
         upc: currentUpc,
@@ -987,7 +991,7 @@ console.log("=== RAW TEXT SAMPLE END ===");
 
     if (!currentUpc) continue;
 
-    // Single-line row: "485602  FRESH THYME FRMR MKT 602NOR  W/E 12/27/2025  190  12  0.02  0.7656"
+    // Single-line CN row: "485602 FRESH THYME FRMR MKT 602NOR W/E 12/27/2025 190 12 0.02 0.7656"
     if (/^\d{4,6}\s+/.test(line) && /\bW\/E\b/i.test(line)) {
       const customerMatch = line.match(/^\d{4,6}\s+(.+?)\s+W\/E\b/i);
       const amount = extractAmount(line);
@@ -1020,13 +1024,13 @@ console.log("=== RAW TEXT SAMPLE END ===");
       continue;
     }
 
-    // Split-row: customer number alone on a line, name on next lines, W/E date somewhere after.
-    // Fixed: removed $ anchor so "W/E 12/27/2025  190" (trailing qty) still matches.
+    // Split-row CN: cust# alone, name on next lines, W/E date after.
+    // $ anchor removed — handles "W/E 12/27/2025 190 12 0.02 0.7656" with trailing columns.
     if (/^\d{4,6}$/.test(line)) {
       let weIdx = -1;
 
       for (let k = i + 1; k < Math.min(i + 10, lines.length); k++) {
-        if (/^W\/E\s+\d{1,2}\/\d{1,2}\/\d{4}/i.test(lines[k])) { // removed $ anchor
+        if (/^W\/E\s+\d{1,2}\/\d{1,2}\/\d{4}/i.test(lines[k])) {
           weIdx = k;
           break;
         }
@@ -1057,20 +1061,21 @@ console.log("=== RAW TEXT SAMPLE END ===");
       let amount: number | null = null;
       let amountIdx = -1;
 
-      for (let k = weIdx + 1; k < Math.min(weIdx + 8, lines.length); k++) {
-        const parsed = extractAmount(lines[k]);
-        if (parsed !== null) {
-          amount = parsed;
-          amountIdx = k;
-        }
+      // First try: inline on W/E line itself
+      const weLineAmount = extractAmount(lines[weIdx]);
+      if (weLineAmount !== null) {
+        amount = weLineAmount;
+        amountIdx = weIdx;
       }
 
-      // Also try extracting amount from the W/E line itself (Image 2 has it inline)
+      // Second try: scan lines after W/E
       if (amount === null) {
-        const weLineAmount = extractAmount(lines[weIdx]);
-        if (weLineAmount !== null) {
-          amount = weLineAmount;
-          amountIdx = weIdx;
+        for (let k = weIdx + 1; k < Math.min(weIdx + 8, lines.length); k++) {
+          const parsed = extractAmount(lines[k]);
+          if (parsed !== null) {
+            amount = parsed;
+            amountIdx = k;
+          }
         }
       }
 
@@ -1556,9 +1561,6 @@ function parseNewItemSetupPdfRows(text: string): DatasetRow[] {
   return rows;
 }
 
-
-
-
 async function parseDetailRows(file: File, fullText?: string): Promise<DatasetRow[]> {
   console.log("[parseDetailRows] START", {
     fileName: file.name,
@@ -1593,7 +1595,6 @@ async function parseDetailRows(file: File, fullText?: string): Promise<DatasetRo
     hasWE: /\bW\/E\b/i.test(text),
   });
 
-  // 🔥 FORCE spoils before WM detection
   if (isSpoilsFormat(text)) {
     console.log("[parseDetailRows] ROUTE -> parseSpoilsPdfRows (FORCED)");
     return parseSpoilsPdfRows(text);
@@ -1609,8 +1610,8 @@ async function parseDetailRows(file: File, fullText?: string): Promise<DatasetRo
     /ship\s+to/i.test(lt) &&
     /kehe\s+distributors/i.test(lt) &&
     /invoice\s+no/i.test(lt) &&
-    !/customer\s+spoil/i.test(lt) &&   // ← exclude spoils docs
-    !/UPC\s*:/i.test(lt)               // ← exclude spoils docs (have UPC: headers)
+    !/customer\s+spoil/i.test(lt) &&
+    !/UPC\s*:/i.test(lt)
   ) {
     console.log("[parseDetailRows] ROUTE -> parseWMInvoicePdfRows");
     return parseWMInvoicePdfRows(text);
@@ -1703,7 +1704,7 @@ async function replaceDatasetRowsForInvoice(
     detailRows = [{
       upc: "UNKNOWN",
       item: detectedType === "excel" ? "UNPARSED EXCEL DOCUMENT TEST 0406"
-      : "UNPARSED PDF DOCUMENT TEST 0406",
+        : "UNPARSED PDF DOCUMENT TEST 0406",
       cust_name: "",
       amt: Math.abs(Number(invoiceAmt || 0)),
     }];
@@ -2122,7 +2123,6 @@ export default function InvoicesView({
     if (invoiceInputRef.current) invoiceInputRef.current.value = "";
   };
 
-  // ─── uploadNewDocument — uses retry helper ────────────────────────────────
   const uploadNewDocument = async (
     file: File,
     meta: { category: string; invoice: string; pdf_date: string; file_type: "pdf" | "excel" }
@@ -2131,7 +2131,6 @@ export default function InvoicesView({
     const ct = getUploadContentType(file, meta.file_type);
     const nowIso = new Date().toISOString();
 
-    // Retry up to 3 times to handle transient 502/CORS storage errors
     await uploadToStorageWithRetry(fp, file, ct);
 
     const { error: de } = await supabase.from("uploads").insert({
@@ -2145,7 +2144,6 @@ export default function InvoicesView({
     });
 
     if (de) {
-      // Clean up orphaned storage file if DB insert fails
       await supabase.storage.from(DOCUMENT_BUCKET).remove([fp]);
       throw new Error(`${file.name}: ${de.message}`);
     }
@@ -2153,7 +2151,6 @@ export default function InvoicesView({
     await syncInvoiceFromUpload(meta.invoice, meta.category);
   };
 
-  // ─── replaceExistingDocument — uses retry helper ──────────────────────────
   const replaceExistingDocument = async (
     eu: UploadRecord,
     file: File,
@@ -2169,7 +2166,6 @@ export default function InvoicesView({
     const ct = getUploadContentType(file, meta.file_type);
     const nowIso = new Date().toISOString();
 
-    // Retry up to 3 times to handle transient 502/CORS storage errors
     await uploadToStorageWithRetry(fp, file, ct);
 
     const { error: de } = await supabase
@@ -2186,7 +2182,6 @@ export default function InvoicesView({
       .eq("id", eu.id);
 
     if (de) {
-      // Clean up orphaned storage file if DB update fails
       await supabase.storage.from(DOCUMENT_BUCKET).remove([fp]);
       throw new Error(`${file.name}: ${de.message}`);
     }
@@ -2485,8 +2480,8 @@ export default function InvoicesView({
         <div className="fixed right-6 top-6 z-[100]">
           <div className={`rounded-2xl border px-4 py-3 text-sm shadow-lg ${
             toast.type === "success" ? "border-green-200 bg-green-50 text-green-700"
-            : toast.type === "error" ? "border-red-200 bg-red-50 text-red-700"
-            : "border-slate-200 bg-slate-50 text-slate-700"
+              : toast.type === "error" ? "border-red-200 bg-red-50 text-red-700"
+                : "border-slate-200 bg-slate-50 text-slate-700"
           }`}>
             {toast.text}
           </div>
@@ -2504,8 +2499,8 @@ export default function InvoicesView({
             <div className="mb-4 grid grid-cols-2 gap-3">
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">From Date</label>
-                <input type="date" id="reprocess-from" name="reprocess-from" value={reprocessFrom} onChange={(e) => setReprocessFrom(e.target.value)}
-  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+                <input type="date" value={reprocessFrom} onChange={(e) => setReprocessFrom(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">To Date</label>
