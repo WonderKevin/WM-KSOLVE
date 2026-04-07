@@ -922,6 +922,7 @@ if (/^\d{4,6}$/.test(line)) {
     currentUpc,
   });
 }
+}
 
   if (DEBUG_MODE) {
     console.log("=== SPOILS DEBUG START ===");
