@@ -1030,6 +1030,9 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     }
   }
 
+  console.log("[parseWMInvoicePdfRows] mergedLines:", mergedLines);
+  console.log("[parseWMInvoicePdfRows] repaired text:", repaired); // ← move this after repaired is built
+
   const repairedText = mergedLines.join("\n");
 
   let customer = "";
