@@ -398,6 +398,11 @@ export default function BrokerCommissionDataSetsView() {
         const derivedMonth =
           formatMonthFromDate(row.check_date ?? "") || (row.month ?? "");
 
+          if (row.invoice === "1740") {
+            console.log("1740 check_date:", row.check_date, "→ derivedMonth:", derivedMonth);
+          }
+
+
         return {
           id: row.id,
           month: derivedMonth,
