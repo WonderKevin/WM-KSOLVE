@@ -785,6 +785,14 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     .map((l) => l.trim())
     .filter(Boolean);
 
+// 👇 ADD THIS RIGHT HERE
+console.log("=== RAW TEXT SAMPLE ===");
+console.log("text.length:", text.length);
+console.log("lines.length:", lines.length);
+console.log("first 500 chars:", JSON.stringify(text.slice(0, 500)));
+console.log("first 10 lines:", lines.slice(0, 10));
+console.log("=== RAW TEXT SAMPLE END ===");
+
   let currentUpc = "";
   let inFlatTable = false;
 
