@@ -1004,19 +1004,47 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     .map((l) => l.trim())
     .filter(Boolean);
 
+  // ─── Repair split SKUs across adjacent lines ──────────────────────────────
+  // Y-grouping splits "CK-CLAS-101-" and "12" onto separate lines.
+  // If a line ends with a partial SKU fragment (trailing dash or just digits
+  // that look like a SKU suffix), merge it with the next line.
+  //
+  // Pattern: line ends with "PREFIX-" and next line is just digits → merge.
+  // e.g. ["CK-CLAS-101-", "12"] → ["CK-CLAS-101-12"]
+  const mergedLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const next = lines[i + 1] ?? "";
+
+    // Detect a line that looks like a broken SKU suffix:
+    // ends with a dash OR is a pure digit string that could be a SKU suffix
+    // AND the current line contains a SKU-like pattern (HP|CK|NSA prefix)
+    const endsWithDash = /(?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-$/.test(line);
+    const nextIsSkuSuffix = /^\d{1,3}$/.test(next.trim());
+
+    if (endsWithDash && nextIsSkuSuffix) {
+      mergedLines.push(line + next.trim());
+      i++; // skip next line — already consumed
+    } else {
+      mergedLines.push(line);
+    }
+  }
+
+  const repairedText = mergedLines.join("\n");
+
   let customer = "";
   const customerMatch =
-    normalized.match(/Ship to\s+([^\n]+(?:DC\d+)?)/i) ||
-    normalized.match(/Ship to\s*\n([^\n]+)/i);
+    repairedText.match(/Ship to\s+([^\n]+(?:DC\d+)?)/i) ||
+    repairedText.match(/Ship to\s*\n([^\n]+)/i);
   if (customerMatch?.[1]) customer = customerMatch[1].trim();
 
   let maDeduction = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (/\bma\s*2%/i.test(lines[i])) {
+  for (let i = 0; i < mergedLines.length; i++) {
+    if (/\bma\s*2%/i.test(mergedLines[i])) {
       const nearby: string[] = [];
-      for (let j = i; j < Math.min(i + 8, lines.length); j++) {
-        if (/^total$/i.test(lines[j])) break;
-        nearby.push(lines[j]);
+      for (let j = i; j < Math.min(i + 8, mergedLines.length); j++) {
+        if (/^total$/i.test(mergedLines[j])) break;
+        nearby.push(mergedLines[j]);
       }
       const nearbyText = nearby.join(" ");
       const amounts = [...nearbyText.matchAll(/-\$([\d,]+\.\d{2})/g)];
@@ -1027,7 +1055,8 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     }
   }
 
-  const repaired = normalized.replace(
+  // Also repair across newlines in the raw text (original behavior for safety)
+  const repaired = repairedText.replace(
     /((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s*\n\s*(\d{1,3})\b/gi,
     "$1$2"
   );
@@ -1053,15 +1082,15 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const grossTotal = round2(raw.reduce((sum, r) => sum + r.grossAmt, 0));
 
   let invoiceTotal = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^total$/i.test(lines[i])) {
-      for (let j = i; j < Math.min(i + 4, lines.length); j++) {
-        const m = lines[j].match(/\$([\d,]+\.\d{2})/);
+  for (let i = 0; i < mergedLines.length; i++) {
+    if (/^total$/i.test(mergedLines[i])) {
+      for (let j = i; j < Math.min(i + 4, mergedLines.length); j++) {
+        const m = mergedLines[j].match(/\$([\d,]+\.\d{2})/);
         if (m) { invoiceTotal = parseFloat(m[1].replace(/,/g, "")); break; }
       }
       if (invoiceTotal) break;
     }
-    const inlineTotal = lines[i].match(/^total\s+\$([\d,]+\.\d{2})$/i);
+    const inlineTotal = mergedLines[i].match(/^total\s+\$([\d,]+\.\d{2})$/i);
     if (inlineTotal) { invoiceTotal = parseFloat(inlineTotal[1].replace(/,/g, "")); break; }
   }
 
@@ -1081,7 +1110,13 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
         runningMa = round2(runningMa + maShare);
       }
     }
-    return { upc: r.upc, item: "", cust_name: customer, qty: r.qty, amt: round2(Math.max(r.grossAmt - maShare, 0)) };
+    return {
+      upc: r.upc,
+      item: "",
+      cust_name: customer,
+      qty: r.qty,
+      amt: round2(Math.max(r.grossAmt - maShare, 0)),
+    };
   });
 
   const expectedNet = round2(Math.max(grossTotal - maDeduction, 0));
@@ -1091,51 +1126,6 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
 
   console.log("WM DEBUG", { customer, maDeduction, invoiceTotal, grossTotal, totalQty, rows: wmRows });
   return wmRows;
-}
-
-function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
-  const rows: DatasetRow[] = [];
-  const lines = text
-    .replace(/\u00a0/g, " ")
-    .replace(/\r/g, "\n")
-    .replace(/[ \t]+/g, " ")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  let currentCustomer = "";
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const soldToInline = line.match(/^sold\s+to:\s*(.+)/i);
-    if (soldToInline && soldToInline[1].trim()) { currentCustomer = soldToInline[1].trim(); continue; }
-
-    if (/^sold\s+to:\s*$/i.test(line)) {
-      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
-        const next = lines[j].trim();
-        if (next && !/^\d{5,}$/.test(next) && !/^telephone/i.test(next) && next.length > 3) {
-          currentCustomer = next;
-          break;
-        }
-      }
-      continue;
-    }
-
-    if (!/^\d{12}$/.test(line)) continue;
-
-    let extCost = 0;
-    for (let j = i + 1; j < Math.min(i + 15, lines.length); j++) {
-      const l = lines[j];
-      if (/^\d{12}$/.test(l) || /^sold\s+to/i.test(l)) break;
-      const numMatch = l.match(/^([\d,]+\.\d{2})$/);
-      if (numMatch) extCost = parseFloat(numMatch[1].replace(/,/g, ""));
-    }
-
-    if (!extCost) continue;
-    rows.push({ upc: line, item: "", cust_name: currentCustomer, amt: extCost });
-  }
-
-  return rows;
 }
 
 function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
