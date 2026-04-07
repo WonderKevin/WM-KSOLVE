@@ -861,9 +861,8 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       continue;
     }
 
-    // Strategy 2: split row across 7 lines
+// Strategy 2: split row — search forward for W/E date
 if (/^\d{4,6}$/.test(line)) {
-  // Look ahead for W/E date within next 8 lines
   let weIdx = -1;
   for (let k = i + 1; k < Math.min(i + 8, lines.length); k++) {
     if (/^W\/E\s+\d{1,2}\/\d{1,2}\/\d{4}$/i.test(lines[k])) {
@@ -877,14 +876,10 @@ if (/^\d{4,6}$/.test(line)) {
     continue;
   }
 
-  // Customer name is everything between cust# and W/E
-  const custNameParts = lines.slice(i + 1, weIdx);
-  const customerName = custNameParts.join(" ").trim();
-
-  // After W/E: invoice#, qty, pct, allowance
-  const invoiceLine  = lines[weIdx + 1] || "";
-  const qtyLine      = lines[weIdx + 2] || "";
-  const pctLine      = lines[weIdx + 3] || "";
+  const customerName = lines.slice(i + 1, weIdx).join(" ").trim();
+  const invoiceLine   = lines[weIdx + 1] || "";
+  const qtyLine       = lines[weIdx + 2] || "";
+  const pctLine       = lines[weIdx + 3] || "";
   const allowanceLine = lines[weIdx + 4] || "";
 
   const looksLikeSplitRow =
@@ -895,32 +890,13 @@ if (/^\d{4,6}$/.test(line)) {
     /^\d+\.\d{4}$/.test(allowanceLine);
 
   if (looksLikeSplitRow) {
-    const row: DatasetRow = {
-      upc: currentUpc,
-      item: "",
-      cust_name: customerName,
-      amt: parseFloat(allowanceLine),
-    };
-
-    rows.push(row);
-    debug.parsedRows.push({
-      lineIndex: i,
-      upc: currentUpc,
-      customer: row.cust_name,
-      amount: row.amt,
-      mode: "split-row",
-    });
-
-    i = weIdx + 4; // skip to last consumed line
+    rows.push({ upc: currentUpc, item: "", cust_name: customerName, amt: parseFloat(allowanceLine) });
+    debug.parsedRows.push({ lineIndex: i, upc: currentUpc, customer: customerName, amount: parseFloat(allowanceLine), mode: "split-row" });
+    i = weIdx + 4;
     continue;
   }
 
-  debug.skipped.push({
-    lineIndex: i,
-    line,
-    reason: "cust# line found but split-row pattern did not match",
-    currentUpc,
-  });
+  debug.skipped.push({ lineIndex: i, line, reason: "cust# line found but split-row pattern did not match", currentUpc });
 }
 }
 
