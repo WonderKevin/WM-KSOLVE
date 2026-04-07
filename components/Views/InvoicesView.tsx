@@ -794,11 +794,26 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     skipped: [] as Array<{ lineIndex: number; line: string; reason: string; currentUpc: string }>,
   };
 
+  const isNoiseLine = (line: string) =>
+    /^page\s+\d+\s+of\s+\d+$/i.test(line) ||
+    /^tuesday,\s+\w+\s+\d{1,2},\s+\d{4}\s+page\s+\d+\s+of\s+\d+$/i.test(line) ||
+    /^invoice\s+total\b/i.test(line) ||
+    /^accounts\s+due\b/i.test(line) ||
+    /^all\s+inquiries\b/i.test(line) ||
+    /vendorperformance@/i.test(line);
+
+  const extractAmount = (value: string): number | null => {
+    const m = value.match(/-?\d+\.\d{2,4}/);
+    return m ? parseFloat(m[0]) : null;
+  };
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
+    if (isNoiseLine(line)) continue;
+
     // UPC on same line
-    const upcMatch = line.match(/UPC\s*:?\s*(\d{10,14})\b/i);
+    const upcMatch = line.match(/^UPC\s*:?\s*(\d{10,14})\b/i);
     if (upcMatch) {
       currentUpc = upcMatch[1];
       debug.upcHeaders.push({
@@ -829,16 +844,18 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     if (!currentUpc) continue;
 
     // Strategy 1: all columns on one line
+    // Example:
+    // 485104 FRESH THYME FRMR MKT 104DNG W/E 01/03/2026 190 12 0.02 0.7656
     if (/^\d{4,6}\s+/.test(line) && /\bW\/E\b/i.test(line)) {
       const customerMatch = line.match(/^\d{4,6}\s+(.+?)\s+W\/E\b/i);
-      const amountMatch = line.match(/(\d+\.\d{4})\s*$/);
+      const amount = extractAmount(line);
 
-      if (customerMatch && amountMatch) {
+      if (customerMatch && amount !== null) {
         const row: DatasetRow = {
           upc: currentUpc,
           item: "",
           cust_name: customerMatch[1].trim(),
-          amt: parseFloat(amountMatch[1]),
+          amt: amount,
         };
 
         rows.push(row);
@@ -861,44 +878,83 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       continue;
     }
 
-// Strategy 2: split row — search forward for W/E date
-if (/^\d{4,6}$/.test(line)) {
-  let weIdx = -1;
-  for (let k = i + 1; k < Math.min(i + 8, lines.length); k++) {
-    if (/^W\/E\s+\d{1,2}\/\d{1,2}\/\d{4}$/i.test(lines[k])) {
-      weIdx = k;
-      break;
+    // Strategy 2: split row — search forward for W/E date
+    if (/^\d{4,6}$/.test(line)) {
+      let weIdx = -1;
+
+      for (let k = i + 1; k < Math.min(i + 10, lines.length); k++) {
+        if (/^W\/E\s+\d{1,2}\/\d{1,2}\/\d{4}$/i.test(lines[k])) {
+          weIdx = k;
+          break;
+        }
+      }
+
+      if (weIdx === -1) {
+        debug.skipped.push({
+          lineIndex: i,
+          line,
+          reason: "no W/E date found in next 10 lines",
+          currentUpc,
+        });
+        continue;
+      }
+
+      const customerName = lines.slice(i + 1, weIdx).join(" ").trim();
+
+      if (!customerName) {
+        debug.skipped.push({
+          lineIndex: i,
+          line,
+          reason: "empty customer name before W/E",
+          currentUpc,
+        });
+        continue;
+      }
+
+      // Scan the next few lines instead of forcing exact positions
+      let amount: number | null = null;
+      let amountIdx = -1;
+
+      for (let k = weIdx + 1; k < Math.min(weIdx + 8, lines.length); k++) {
+        const parsed = extractAmount(lines[k]);
+        if (parsed !== null) {
+          amount = parsed;
+          amountIdx = k;
+        }
+      }
+
+      if (amount === null) {
+        debug.skipped.push({
+          lineIndex: i,
+          line,
+          reason: "no allowance amount found after W/E",
+          currentUpc,
+        });
+        continue;
+      }
+
+      rows.push({
+        upc: currentUpc,
+        item: "",
+        cust_name: customerName,
+        amt: amount,
+      });
+
+      debug.parsedRows.push({
+        lineIndex: i,
+        upc: currentUpc,
+        customer: customerName,
+        amount,
+        mode: "split-row",
+      });
+
+      if (amountIdx > i) {
+        i = amountIdx;
+      }
+
+      continue;
     }
   }
-
-  if (weIdx === -1) {
-    debug.skipped.push({ lineIndex: i, line, reason: "no W/E date found in next 8 lines", currentUpc });
-    continue;
-  }
-
-  const customerName = lines.slice(i + 1, weIdx).join(" ").trim();
-  const invoiceLine   = lines[weIdx + 1] || "";
-  const qtyLine       = lines[weIdx + 2] || "";
-  const pctLine       = lines[weIdx + 3] || "";
-  const allowanceLine = lines[weIdx + 4] || "";
-
-  const looksLikeSplitRow =
-    !!customerName &&
-    /^\d+$/.test(invoiceLine) &&
-    /^\d+$/.test(qtyLine) &&
-    /^\d*\.?\d+$/.test(pctLine) &&
-    /^\d+\.\d{4}$/.test(allowanceLine);
-
-  if (looksLikeSplitRow) {
-    rows.push({ upc: currentUpc, item: "", cust_name: customerName, amt: parseFloat(allowanceLine) });
-    debug.parsedRows.push({ lineIndex: i, upc: currentUpc, customer: customerName, amount: parseFloat(allowanceLine), mode: "split-row" });
-    i = weIdx + 4;
-    continue;
-  }
-
-  debug.skipped.push({ lineIndex: i, line, reason: "cust# line found but split-row pattern did not match", currentUpc });
-}
-}
 
   if (DEBUG_MODE) {
     console.log("=== SPOILS DEBUG START ===");
