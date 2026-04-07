@@ -786,19 +786,34 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     .filter(Boolean);
 
   let currentUpc = "";
+  let inFlatTable = false;
 
   const debug = {
     totalLines: lines.length,
-    upcHeaders: [] as Array<{ lineIndex: number; upc: string; line: string; mode: string }>,
-    parsedRows: [] as Array<{ lineIndex: number; upc: string; customer: string; amount: number; mode: string }>,
-    skipped: [] as Array<{ lineIndex: number; line: string; reason: string; currentUpc: string }>,
+    upcHeaders: [] as Array<{
+      lineIndex: number;
+      upc: string;
+      line: string;
+      mode: string;
+    }>,
+    parsedRows: [] as Array<{
+      lineIndex: number;
+      upc: string;
+      customer: string;
+      amount: number;
+      mode: string;
+    }>,
+    skipped: [] as Array<{
+      lineIndex: number;
+      line: string;
+      reason: string;
+      currentUpc: string;
+    }>,
   };
 
   const isNoiseLine = (line: string) =>
     /^page\s+\d+\s+of\s+\d+$/i.test(line) ||
     /^tuesday,\s+\w+\s+\d{1,2},\s+\d{4}\s+page\s+\d+\s+of\s+\d+$/i.test(line) ||
-    /^invoice\s+total\b/i.test(line) ||
-    /^accounts\s+due\b/i.test(line) ||
     /^all\s+inquiries\b/i.test(line) ||
     /vendorperformance@/i.test(line);
 
@@ -810,26 +825,29 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
   };
 
   const isSpoilsTableHeader = (line: string) =>
-    /UPC\s+ITEM\s+BRAND\s+C(?:ust|ustomer)\s+Name\s+Date\s+Inv\s*#\s+Qty\s+Inv\s*%\s+Amt/i.test(line);
+    /UPC\s+ITEM\s+BRAND\s+C(?:ust|ustomer)\s+Name\s+Date\s+Inv\s*#\s+Qty\s+Inv\s*%\s+Amt/i.test(
+      line
+    );
 
   const parseFlatSpoilsTableRow = (line: string): DatasetRow | null => {
     const m = line.match(
       /^(\d{10,14})\s+(.+?)\s+([A-Z]{3,10})\s+(.+?)\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+([A-Z0-9.\/-]+)\s+(\d+)\s+(\d+(?:\.\d+)?%)\s+\$?(-?\d+\.\d{2,4}|-\.\d{2,4}|\d+\.\d{2,4}|\.\d{2,4})$/i
     );
-  
+
     if (!m) return null;
-  
+
     const upc = m[1].trim();
     const customer = m[4].trim();
     const qty = parseInt(m[7], 10);
     const rate = parseFloat(m[8].replace("%", "")) / 100;
-    const amtRaw = m[9].startsWith(".") || m[9].startsWith("-.")
-      ? m[9].replace(/^(-?)\./, "$10.")
-      : m[9];
+    const amtRaw =
+      m[9].startsWith(".") || m[9].startsWith("-.")
+        ? m[9].replace(/^(-?)\./, "$10.")
+        : m[9];
     const amt = parseFloat(amtRaw);
-  
+
     if (!upc || !customer || Number.isNaN(amt)) return null;
-  
+
     return {
       upc,
       item: "",
@@ -839,8 +857,6 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       rate,
     };
   };
-
-  let inFlatTable = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -857,17 +873,16 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       continue;
     }
 
-    // ─────────────────────────────────────────────────────────────
     // FORMAT A: flat CS spoils table
-    // ─────────────────────────────────────────────────────────────
-    if (
-      /^TOTAL\s*:\s*\$?[\d,]+\.\d{2}$/i.test(line) ||
-      /^invoice\s+total\b/i.test(line) ||
-      /^accounts\s+due\b/i.test(line)
-    ) {
-      inFlatTable = false;
-      continue;
-    }
+    if (inFlatTable) {
+      if (
+        /^TOTAL\s*:?\s*\$?[\d,]+\.\d{2}$/i.test(line) ||
+        /^invoice\s+total\b/i.test(line) ||
+        /^accounts\s+due\b/i.test(line)
+      ) {
+        inFlatTable = false;
+        continue;
+      }
 
       const flatRow = parseFlatSpoilsTableRow(line);
       if (flatRow) {
@@ -883,9 +898,7 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       }
     }
 
-    // ─────────────────────────────────────────────────────────────
     // FORMAT B: CN spoils format with UPC blocks
-    // ─────────────────────────────────────────────────────────────
 
     // UPC on same line
     const upcMatch = line.match(/^UPC\s*:?\s*(\d{10,14})\b/i);
@@ -1049,7 +1062,9 @@ function isSpoilsFormat(text: string) {
   return (
     /customer\s+spoil(?:s|age)\s+allowance/i.test(normalized) ||
     /spoilage\s+detail\s+below/i.test(normalized) ||
-    /UPC\s+ITEM\s+BRAND\s+C(?:ust|ustomer)\s+Name\s+Date\s+Inv\s*#\s+Qty\s+Inv\s*%\s+Amt/i.test(normalized) ||
+    /UPC\s+ITEM\s+BRAND\s+C(?:ust|ustomer)\s+Name\s+Date\s+Inv\s*#\s+Qty\s+Inv\s*%\s+Amt/i.test(
+      normalized
+    ) ||
     (/UPC\s*:?/i.test(normalized) && /\bW\/E\b/i.test(normalized))
   );
 }
