@@ -48,10 +48,6 @@ type InvoiceRow = {
   type?: string | null;
 };
 
-type UploadRow = {
-  invoice: string | null;
-};
-
 type LocationRow = {
   customer: string;
   retailer: string;
@@ -321,7 +317,6 @@ export default function BrokerCommissionDataSetsView() {
     const [
       { data: datasetData, error: datasetError },
       { data: invoiceData, error: invoiceError },
-      { data: uploadData, error: uploadError },
       { data: locationsData, error: locationsError },
       { data: overrideData, error: overrideError },
     ] = await Promise.all([
@@ -334,7 +329,6 @@ export default function BrokerCommissionDataSetsView() {
         .from("invoices")
         .select("invoice_number, check_date, check_number, invoice_amt, type")
         .eq("type", "WM Invoice"),
-      supabase.from("uploads").select("invoice"),
       supabase.from("locations").select("customer, retailer"),
       supabase.from("retailer_overrides").select("dataset_id, retailer"),
     ]);
@@ -379,7 +373,6 @@ export default function BrokerCommissionDataSetsView() {
       const ksolveAmount = ksolveByInvoice.get(invoice) ?? 0;
       const wmAmount = wmByInvoice.get(invoice) ?? 0;
 
-      // Same as WM Invoice Discrepancy: Ksolve Amount - WM Amount
       discrepancyByInvoice.set(invoice, round2(ksolveAmount - wmAmount));
     }
 
@@ -435,13 +428,7 @@ export default function BrokerCommissionDataSetsView() {
           .filter(Boolean)
       );
 
-      const uploadedInvoiceSet = new Set(
-        (uploadData ?? [])
-          .map((row: UploadRow) => normalizeInvoice(row.invoice || ""))
-          .filter(Boolean)
-      );
-
-      const invoiceList = Array.from(
+      const ksolveInvoiceList = Array.from(
         new Set(
           ((invoiceData ?? []) as InvoiceRow[])
             .map((row) => normalizeInvoice(row.invoice_number ?? ""))
@@ -449,15 +436,11 @@ export default function BrokerCommissionDataSetsView() {
         )
       );
 
-      const missing = invoiceList.filter(
-        (invoice) =>
-          uploadedInvoiceSet.has(invoice) && !datasetInvoiceSet.has(invoice)
+      const missing = ksolveInvoiceList.filter(
+        (invoice) => !datasetInvoiceSet.has(invoice)
       );
-      setMissingInvoices(missing.sort((a, b) => a.localeCompare(b)));
-    }
 
-    if (uploadError) {
-      console.error("Failed to load uploads:", uploadError);
+      setMissingInvoices(missing.sort((a, b) => a.localeCompare(b)));
     }
 
     setLoading(false);
@@ -895,38 +878,51 @@ export default function BrokerCommissionDataSetsView() {
             </Button>
 
             {notifOpen && (
-              <div className="absolute right-0 z-30 mt-2 w-80 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
-                <div className="mb-2 flex items-center justify-between">
+              <div className="absolute right-0 z-30 mt-2 w-[360px] rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
+                <div className="mb-3 flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-slate-900">
                       Missing in Data Sets
                     </p>
                     <p className="text-xs text-slate-500">
-                      In Ksolve Invoices but not in Data Sets
+                      In Ksolve Invoices / Invoices but not yet in Data Sets
                     </p>
                   </div>
-                  {missingInvoices.length > 0 && (
-                    <span className="rounded-full bg-red-50 px-2 py-1 text-xs font-semibold text-red-600">
-                      {missingInvoices.length}
-                    </span>
-                  )}
+
+                  <span
+                    className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                      missingInvoices.length > 0
+                        ? "bg-red-50 text-red-600"
+                        : "bg-emerald-50 text-emerald-600"
+                    }`}
+                  >
+                    {missingInvoices.length} missing
+                  </span>
                 </div>
 
-                <div className="max-h-72 overflow-auto">
+                <div className="max-h-80 overflow-auto">
                   {missingInvoices.length === 0 ? (
                     <div className="rounded-xl bg-slate-50 px-3 py-4 text-sm text-slate-500">
-                      All Ksolve invoices are already in Data Sets.
+                      All invoices from Ksolve Invoices are already in Data Sets.
                     </div>
                   ) : (
-                    <div className="space-y-1">
-                      {missingInvoices.map((invoice) => (
-                        <div
-                          key={invoice}
-                          className="rounded-xl border border-slate-100 px-3 py-2 text-sm text-slate-700"
-                        >
-                          {invoice}
-                        </div>
-                      ))}
+                    <div className="space-y-2">
+                      <div className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+                        {missingInvoices.length} invoice
+                        {missingInvoices.length > 1 ? "s are" : " is"} still missing
+                        from Data Sets.
+                      </div>
+
+                      <div className="space-y-1">
+                        {missingInvoices.map((invoice) => (
+                          <div
+                            key={invoice}
+                            className="rounded-xl border border-slate-100 px-3 py-2 text-sm text-slate-700"
+                          >
+                            {invoice}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
