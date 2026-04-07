@@ -1163,43 +1163,85 @@ function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
     }
   }
 
+  // EP Fee: handle both "EP FEE: $35.00" on one line and split across lines
   let epFee = 0;
-  for (const l of lines) {
-    if (/ep\s*fee/i.test(l)) {
-      const m = l.match(/\$(\d*\.\d{2})/);
-      if (m) epFee = parseFloat(m[1]);
+  for (let i = 0; i < lines.length; i++) {
+    if (/ep\s*fee/i.test(lines[i])) {
+      // Try inline first: "EP FEE: $35.00"
+      const inlineMatch = lines[i].match(/ep\s*fee[^$]*\$\s*([\d,]+\.\d{2})/i);
+      if (inlineMatch) {
+        epFee = parseFloat(inlineMatch[1].replace(/,/g, ""));
+        break;
+      }
+      // Try next few lines
+      for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+        const m = lines[j].match(/^\$?\s*([\d,]+\.\d{2})$/);
+        if (m) {
+          epFee = parseFloat(m[1].replace(/,/g, ""));
+          break;
+        }
+      }
+      if (epFee) break;
     }
   }
+
+  console.log("[parseFreshThymeSasPdfRows] dcCustomer:", dcCustomer, "epFee:", epFee);
 
   const raw: Array<{ upc: string; qty: number; amt: number }> = [];
 
   for (const l of lines) {
+    // Must start with 12-digit UPC, skip summary lines
     if (!/^\d{12}\b/.test(l) || /ep\s*fee|chargeback|invoice\s+total|sub\s*total/i.test(l)) continue;
 
     const um = l.match(/^(\d{12})/);
-    const am = l.match(/\$(\d*\.\d{2})\s*$/);
+    // Amount: last $X.XX on the line
+    const am = l.match(/\$\s*([\d,]+\.\d{2})\s*$/);
     if (!um || !am) continue;
 
-    const nums = l.slice(12).trim().match(/\b(\d+)\b/g) || [];
+    // QTYShipped: the number immediately before the $ amount
+    const afterUpc = l.slice(12).trim();
+    const qtyMatch = afterUpc.match(/\b(\d+)\s+\$[\d,]+\.\d{2}\s*$/);
+    const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
+
     raw.push({
       upc: um[1],
-      qty: nums.length ? parseInt(nums[nums.length - 1], 10) : 1,
-      amt: parseFloat(am[1]),
+      qty,
+      amt: parseFloat(am[1].replace(/,/g, "")),
     });
   }
+
+  console.log("[parseFreshThymeSasPdfRows] raw rows:", raw);
 
   if (!raw.length) return rows;
 
   const tq = raw.reduce((s, r) => s + r.qty, 0);
 
   for (const r of raw) {
+    const epShare = epFee > 0 && tq > 0
+      ? Math.round((r.qty / tq) * epFee * 100) / 100
+      : 0;
+
     rows.push({
       upc: r.upc,
       item: "",
       cust_name: dcCustomer,
-      amt: Math.round((r.amt + (tq > 0 ? (r.qty / tq) * epFee : 0)) * 100) / 100,
+      amt: Math.round((r.amt + epShare) * 100) / 100,
     });
   }
+
+  // Correct for rounding drift on EP fee allocation
+  if (epFee > 0 && rows.length) {
+    const totalEpAllocated = rows.reduce((s, r, i) => {
+      const base = raw[i].amt;
+      return s + Math.round((r.amt - base) * 100) / 100;
+    }, 0);
+    const drift = Math.round((epFee - totalEpAllocated) * 100) / 100;
+    if (drift !== 0) {
+      rows[rows.length - 1].amt = Math.round((rows[rows.length - 1].amt + drift) * 100) / 100;
+    }
+  }
+
+  console.log("[parseFreshThymeSasPdfRows] final rows:", rows);
 
   return rows;
 }
