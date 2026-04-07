@@ -997,13 +997,13 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     .replace(/[\u2212\u2013\u2014]/g, "-")
     .replace(/\u00a0/g, " ");
 
-  // Repair split SKUs BEFORE splitting into lines.
-  // Handles both:
-  //   "CK-CLAS-101-\n12"  (split across lines in raw text)
-  //   "CK-CLAS-101- 12"   (space between suffix and number on same line)
+  // Only repair newline-split SKU suffix — do NOT repair space-separated
+  // because "CK-CLAS-101- 44" would incorrectly merge qty into SKU.
+  // The real split is: "CK-CLAS-101-44 $35.88 $1,578.72" on one line
+  // and "12" (the suffix) on the next line.
+  // So we repair: SKU ending in digits + newline + small number → merge suffix
   const preRepaired = normalized
-    .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s*\n\s*(\d{1,3})\b/gi, "$1$2")
-    .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s+(\d{1,3})\b(?!\d)/gi, "$1$2");
+    .replace(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s*\n\s*(\d{1,3})\b/gi, "$1$2");
 
   const lines = preRepaired
     .replace(/\r/g, "\n")
@@ -1037,6 +1037,41 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     }
   }
 
+  // ROW_RE now also handles the case where the SKU suffix is on the next line:
+  // "CK-CLAS-101-44 $35.88 $1,578.72\n12" → need to treat "12" as suffix not separate
+  // We do a second pass on preRepaired to handle "SKU-DIGITS qty $rate $amt\nSUFFIX"
+  // by rebuilding: find lines where next line is just 1-3 digits after a SKU data row
+  const repairedLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const next = lines[i + 1] ?? "";
+
+    // Detect: current line has a broken SKU (ends in dash+digits but next line is suffix)
+    // Pattern: "...CK-CLAS-101-44 $35.88 $1,578.72" where 44 is actually qty not suffix
+    // and next line "12" is the real suffix
+    // Heuristic: line contains SKU-like pattern ending in dash+2digits, next line is 1-2 digits
+    const brokenSkuMatch = line.match(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-(\d{1,3}))\s+(\d+)\s+\$([\d,]+\.\d{2})\s+\$([\d,]+\.\d{2})/i);
+    const nextIsSuffix = /^\d{1,3}$/.test(next.trim());
+
+    if (brokenSkuMatch && nextIsSuffix) {
+      // The SKU is actually PREFIX-suffix, and what looked like suffix is qty
+      // brokenSkuMatch[1] = "CK-CLAS-101-44", brokenSkuMatch[2] = "44" (fake suffix)
+      // next = "12" (real suffix), brokenSkuMatch[3] = qty, etc.
+      const prefix = brokenSkuMatch[1].replace(/-\d{1,3}$/, ""); // "CK-CLAS-101"
+      const realSuffix = next.trim(); // "12"
+      const realSku = `${prefix}-${realSuffix}`; // "CK-CLAS-101-12"
+      // Rebuild the line with correct SKU
+      const fixedLine = line.replace(brokenSkuMatch[1], realSku);
+      repairedLines.push(fixedLine);
+      i++; // skip the suffix line
+    } else {
+      repairedLines.push(line);
+    }
+  }
+
+  const finalText = repairedLines.join("\n");
+  console.log("[parseWMInvoicePdfRows] repairedLines:", repairedLines);
+
   const ROW_RE =
     /\b((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+(?:-\d+)?)\b\s+(\d+)\s+\$([\d,]+\.\d{2})\s+\$([\d,]+\.\d{2})/gi;
 
@@ -1044,7 +1079,7 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const seen = new Set<string>();
 
   let match: RegExpExecArray | null;
-  while ((match = ROW_RE.exec(preRepaired)) !== null) {
+  while ((match = ROW_RE.exec(finalText)) !== null) {
     const sku = normalizeSku(match[1]);
     const qty = parseInt(match[2], 10);
     const grossAmt = parseFloat(match[4].replace(/,/g, ""));
@@ -1060,15 +1095,15 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const grossTotal = round2(raw.reduce((sum, r) => sum + r.grossAmt, 0));
 
   let invoiceTotal = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^total$/i.test(lines[i])) {
-      for (let j = i; j < Math.min(i + 4, lines.length); j++) {
-        const m = lines[j].match(/\$([\d,]+\.\d{2})/);
+  for (let i = 0; i < repairedLines.length; i++) {
+    if (/^total$/i.test(repairedLines[i])) {
+      for (let j = i; j < Math.min(i + 4, repairedLines.length); j++) {
+        const m = repairedLines[j].match(/\$([\d,]+\.\d{2})/);
         if (m) { invoiceTotal = parseFloat(m[1].replace(/,/g, "")); break; }
       }
       if (invoiceTotal) break;
     }
-    const inlineTotal = lines[i].match(/^total\s+\$([\d,]+\.\d{2})$/i);
+    const inlineTotal = repairedLines[i].match(/^total\s+\$([\d,]+\.\d{2})$/i);
     if (inlineTotal) { invoiceTotal = parseFloat(inlineTotal[1].replace(/,/g, "")); break; }
   }
 
