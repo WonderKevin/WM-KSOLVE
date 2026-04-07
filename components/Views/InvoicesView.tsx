@@ -824,8 +824,18 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     return parseFloat(raw);
   };
 
+  // Broadened to catch partial header lines from PDF extraction
   const isSpoilsTableHeader = (line: string) =>
-    /UPC.*ITEM.*BRAND.*C(?:ust|ustomer).*Name.*Date.*Inv.*Qty.*Amt/i.test(line);
+    /UPC.*ITEM.*BRAND.*C(?:ust|ustomer).*Name.*Date.*Inv.*Qty.*Amt/i.test(line) ||
+    /^\s*UPC\s+ITEM\s+BRAND\s+Cust/i.test(line) ||
+    /^\s*UPC\s+ITEM\s+BRAND/i.test(line);
+
+  // Guard: line must start with 10-14 digit UPC, contain a date, end with a dollar amount.
+  // 6-digit customer numbers (Image 2 format) won't match the UPC length check.
+  const looksLikeFlatSpoilsRow = (line: string): boolean =>
+    /^\d{10,14}\s+/.test(line) &&
+    /\b\d{1,2}\/\d{1,2}\/\d{4}\b/.test(line) &&
+    /\$?\.?\d+\.\d{2}$/.test(line.trim());
 
   const parseFlatSpoilsTableRowLoose = (
     line: string
@@ -856,8 +866,6 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     const amt = extractAmount(amtRaw);
     if (amt === null) return null;
 
-    // remainingBeforeDate includes ITEM + BRAND + CUSTOMER
-    // split by taking the last comma-based or last 2+ tokens as customer fallback
     let customer = remainingBeforeDate;
 
     const customerCommaMatch = remainingBeforeDate.match(/(.+?\b)([A-Z0-9&.\- ]+,\s*[A-Z0-9&.\- ]+)$/i);
@@ -894,7 +902,7 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       continue;
     }
 
-    // FORMAT A: flat CS spoils table
+    // FORMAT A: flat CS spoils table (Image 1 style)
     if (inFlatTable) {
       if (
         /^TOTAL\s*:?\s*\$?[\d,]+\.\d{2}$/i.test(line) ||
@@ -919,11 +927,31 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       }
     }
 
-    // FORMAT B: CN spoils format with UPC blocks
+    // Opportunistic flat-row detection — catches Image 1 rows when inFlatTable
+    // was never set because the header lived on a prior page or wasn't matched.
+    // Safe against Image 2 rows because those start with 6-digit customer numbers,
+    // which won't satisfy the 10-14 digit UPC check in looksLikeFlatSpoilsRow.
+    if (!inFlatTable && looksLikeFlatSpoilsRow(line)) {
+      const flatRow = parseFlatSpoilsTableRowLoose(line);
+      if (flatRow) {
+        rows.push(flatRow);
+        debug.parsedRows.push({
+          lineIndex: i,
+          upc: flatRow.upc,
+          customer: flatRow.cust_name,
+          amount: flatRow.amt,
+          mode: "flat-opportunistic",
+        });
+        continue;
+      }
+    }
+
+    // FORMAT B: CN spoils format with UPC header blocks (Image 2 style)
 
     const upcMatch = line.match(/^UPC\s*:?\s*(\d{10,14})\b/i);
     if (upcMatch) {
       currentUpc = upcMatch[1];
+      inFlatTable = false; // ensure flat mode doesn't bleed into block mode
       debug.upcHeaders.push({
         lineIndex: i,
         upc: currentUpc,
@@ -938,6 +966,7 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       const nextUpcMatch = nextLine.match(/^(\d{10,14})\b/);
       if (nextUpcMatch) {
         currentUpc = nextUpcMatch[1];
+        inFlatTable = false;
         debug.upcHeaders.push({
           lineIndex: i,
           upc: currentUpc,
@@ -950,6 +979,7 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
 
     if (!currentUpc) continue;
 
+    // Single-line row: "485602  FRESH THYME FRMR MKT 602NOR  W/E 12/27/2025  190  12  0.02  0.7656"
     if (/^\d{4,6}\s+/.test(line) && /\bW\/E\b/i.test(line)) {
       const customerMatch = line.match(/^\d{4,6}\s+(.+?)\s+W\/E\b/i);
       const amount = extractAmount(line);
@@ -982,11 +1012,13 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       continue;
     }
 
+    // Split-row: customer number alone on a line, name on next lines, W/E date somewhere after.
+    // Fixed: removed $ anchor so "W/E 12/27/2025  190" (trailing qty) still matches.
     if (/^\d{4,6}$/.test(line)) {
       let weIdx = -1;
 
       for (let k = i + 1; k < Math.min(i + 10, lines.length); k++) {
-        if (/^W\/E\s+\d{1,2}\/\d{1,2}\/\d{4}$/i.test(lines[k])) {
+        if (/^W\/E\s+\d{1,2}\/\d{1,2}\/\d{4}/i.test(lines[k])) { // removed $ anchor
           weIdx = k;
           break;
         }
@@ -1022,6 +1054,15 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
         if (parsed !== null) {
           amount = parsed;
           amountIdx = k;
+        }
+      }
+
+      // Also try extracting amount from the W/E line itself (Image 2 has it inline)
+      if (amount === null) {
+        const weLineAmount = extractAmount(lines[weIdx]);
+        if (weLineAmount !== null) {
+          amount = weLineAmount;
+          amountIdx = weIdx;
         }
       }
 
