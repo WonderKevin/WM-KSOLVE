@@ -800,17 +800,84 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     /^invoice\s+total\b/i.test(line) ||
     /^accounts\s+due\b/i.test(line) ||
     /^all\s+inquiries\b/i.test(line) ||
+    /^spoilage\s+detail\s+below$/i.test(line) ||
     /vendorperformance@/i.test(line);
 
   const extractAmount = (value: string): number | null => {
-    const m = value.match(/-?\d+\.\d{2,4}/);
-    return m ? parseFloat(m[0]) : null;
+    const m = value.match(/-?\$?\s*(\d+\.\d{2,4}|\.\d{2,4})/);
+    if (!m) return null;
+    const raw = m[1].startsWith(".") ? `0${m[1]}` : m[1];
+    return parseFloat(raw);
   };
+
+  const isSpoilsTableHeader = (line: string) =>
+    /^UPC\s+ITEM\s+BRAND\s+Cust\s+Name\s+Date\s+Inv\s*#\s+Qty\s+Inv\s*%\s+Amt$/i.test(line);
+
+  const parseFlatSpoilsTableRow = (line: string): DatasetRow | null => {
+    const m = line.match(
+      /^(\d{10,14})\s+(.+?)\s+([A-Z]{3,10})\s+(.+?)\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+([A-Z0-9-]+)\s+(\d+)\s+(\d+(?:\.\d+)?%)\s+\$?(\d+\.\d{2,4}|\.\d{2,4})$/i
+    );
+  
+    if (!m) return null;
+  
+    const upc = m[1].trim();
+    const customer = m[4].trim();
+    const qty = parseInt(m[7], 10);
+    const rate = parseFloat(m[8].replace("%", "")) / 100;
+    const amtRaw = m[9].startsWith(".") ? `0${m[9]}` : m[9];
+    const amt = parseFloat(amtRaw);
+  
+    if (!upc || !customer || Number.isNaN(amt)) return null;
+  
+    return {
+      upc,
+      item: "",
+      cust_name: customer,
+      amt,
+      qty,
+      rate,
+    };
+  };
+
+  let inFlatTable = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
     if (isNoiseLine(line)) continue;
+
+    if (isSpoilsTableHeader(line)) {
+      inFlatTable = true;
+      currentUpc = "";
+      continue;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // FORMAT A: flat CS spoils table
+    // ─────────────────────────────────────────────────────────────
+    if (inFlatTable) {
+      if (/^TOTAL\s*:\s*\$?[\d,]+\.\d{2}$/i.test(line)) {
+        inFlatTable = false;
+        continue;
+      }
+
+      const flatRow = parseFlatSpoilsTableRow(line);
+      if (flatRow) {
+        rows.push(flatRow);
+        debug.parsedRows.push({
+          lineIndex: i,
+          upc: flatRow.upc,
+          customer: flatRow.cust_name,
+          amount: flatRow.amt,
+          mode: "flat-table",
+        });
+        continue;
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // FORMAT B: CN spoils format with UPC blocks
+    // ─────────────────────────────────────────────────────────────
 
     // UPC on same line
     const upcMatch = line.match(/^UPC\s*:?\s*(\d{10,14})\b/i);
@@ -843,9 +910,7 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
 
     if (!currentUpc) continue;
 
-    // Strategy 1: all columns on one line
-    // Example:
-    // 485104 FRESH THYME FRMR MKT 104DNG W/E 01/03/2026 190 12 0.02 0.7656
+    // Strategy 1: single-line CN row
     if (/^\d{4,6}\s+/.test(line) && /\bW\/E\b/i.test(line)) {
       const customerMatch = line.match(/^\d{4,6}\s+(.+?)\s+W\/E\b/i);
       const amount = extractAmount(line);
@@ -878,7 +943,7 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       continue;
     }
 
-    // Strategy 2: split row — search forward for W/E date
+    // Strategy 2: split-row CN format
     if (/^\d{4,6}$/.test(line)) {
       let weIdx = -1;
 
@@ -911,7 +976,6 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
         continue;
       }
 
-      // Scan the next few lines instead of forcing exact positions
       let amount: number | null = null;
       let amountIdx = -1;
 
@@ -969,6 +1033,17 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
   }
 
   return rows;
+}
+
+function isSpoilsFormat(text: string) {
+  const normalized = text.replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ");
+
+  return (
+    /customer\s+spoil(?:s|age)\s+allowance/i.test(normalized) ||
+    /spoilage\s+detail\s+below/i.test(normalized) ||
+    /UPC\s+ITEM\s+BRAND\s+Cust\s+Name\s+Date\s+Inv\s*#\s+Qty\s+Inv\s*%\s+Amt/i.test(normalized) ||
+    (/UPC\s*:?/i.test(normalized) && /\bW\/E\b/i.test(normalized))
+  );
 }
 
 function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
@@ -1394,9 +1469,6 @@ function parseNewItemSetupPdfRows(text: string): DatasetRow[] {
   return rows;
 }
 
-function isSpoilsFormat(text: string) {
-  return /UPC\s*:?/i.test(text) && /\bW\/E\b/i.test(text);
-}
 
 
 
