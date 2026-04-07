@@ -1041,33 +1041,34 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   // "CK-CLAS-101-44 $35.88 $1,578.72\n12" → need to treat "12" as suffix not separate
   // We do a second pass on preRepaired to handle "SKU-DIGITS qty $rate $amt\nSUFFIX"
   // by rebuilding: find lines where next line is just 1-3 digits after a SKU data row
-  const repairedLines: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const next = lines[i + 1] ?? "";
+  // Replace the repairedLines loop with this:
+const repairedLines: string[] = [];
+for (let i = 0; i < lines.length; i++) {
+  const line = lines[i];
+  const next = lines[i + 1] ?? "";
 
-    // Detect: current line has a broken SKU (ends in dash+digits but next line is suffix)
-    // Pattern: "...CK-CLAS-101-44 $35.88 $1,578.72" where 44 is actually qty not suffix
-    // and next line "12" is the real suffix
-    // Heuristic: line contains SKU-like pattern ending in dash+2digits, next line is 1-2 digits
-    const brokenSkuMatch = line.match(/((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-(\d{1,3}))\s+(\d+)\s+\$([\d,]+\.\d{2})\s+\$([\d,]+\.\d{2})/i);
-    const nextIsSuffix = /^\d{1,3}$/.test(next.trim());
+  // Detect: "...CK-CLAS-101- 44 $35.88 $1,578.72" where SKU has trailing dash+space
+  // and next line "12" is the real suffix
+  const brokenSkuMatch = line.match(
+    /((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s+(\d+)\s+\$([\d,]+\.\d{2})\s+\$([\d,]+\.\d{2})\s*$/i
+  );
+  const nextIsSuffix = /^\d{1,3}$/.test(next.trim());
 
-    if (brokenSkuMatch && nextIsSuffix) {
-      // The SKU is actually PREFIX-suffix, and what looked like suffix is qty
-      // brokenSkuMatch[1] = "CK-CLAS-101-44", brokenSkuMatch[2] = "44" (fake suffix)
-      // next = "12" (real suffix), brokenSkuMatch[3] = qty, etc.
-      const prefix = brokenSkuMatch[1].replace(/-\d{1,3}$/, ""); // "CK-CLAS-101"
-      const realSuffix = next.trim(); // "12"
-      const realSku = `${prefix}-${realSuffix}`; // "CK-CLAS-101-12"
-      // Rebuild the line with correct SKU
-      const fixedLine = line.replace(brokenSkuMatch[1], realSku);
-      repairedLines.push(fixedLine);
-      i++; // skip the suffix line
-    } else {
-      repairedLines.push(line);
-    }
+  if (brokenSkuMatch && nextIsSuffix) {
+    // brokenSkuMatch[1] = "CK-CLAS-101-" (prefix with trailing dash)
+    // brokenSkuMatch[2] = "44" (qty)
+    // next = "12" (real suffix)
+    const realSku = `${brokenSkuMatch[1]}${next.trim()}`; // "CK-CLAS-101-12"
+    const fixedLine = line.replace(
+      brokenSkuMatch[0],
+      `${realSku} ${brokenSkuMatch[2]} $${brokenSkuMatch[3]} $${brokenSkuMatch[4]}`
+    );
+    repairedLines.push(fixedLine);
+    i++; // skip suffix line
+  } else {
+    repairedLines.push(line);
   }
+}
 
   const finalText = repairedLines.join("\n");
   console.log("[parseWMInvoicePdfRows] repairedLines:", repairedLines);
