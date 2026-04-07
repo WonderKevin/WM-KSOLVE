@@ -166,13 +166,6 @@ function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-/**
- * Normalize a SKU/UPC string:
- * - Convert unicode dashes to ASCII hyphen
- * - Remove all whitespace
- * - Keep only alphanumeric + hyphen
- * - Uppercase
- */
 function normalizeSku(raw: string) {
   return String(raw || "")
     .replace(/\u00a0/g, " ")
@@ -337,6 +330,36 @@ function getExcelMimeType(fileName?: string | null) {
 function getUploadContentType(file: File, fileType: "pdf" | "excel") {
   if (fileType === "pdf") return "application/pdf";
   return getExcelMimeType(file.name);
+}
+
+// ─── Storage upload with retry (handles transient 502/CORS errors) ───────────
+async function uploadToStorageWithRetry(
+  filePath: string,
+  file: File,
+  contentType: string,
+  retries = 3
+): Promise<void> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const { error } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .upload(filePath, file, { cacheControl: "3600", upsert: false, contentType });
+
+    if (!error) return;
+
+    lastError = new Error(error.message);
+
+    // Don't retry on "already exists" — that's a logic error, not transient
+    if (error.message?.toLowerCase().includes("already exists")) throw lastError;
+
+    if (attempt < retries) {
+      // Exponential backoff: 1s, 2s, 3s
+      await new Promise((r) => setTimeout(r, attempt * 1000));
+    }
+  }
+
+  throw lastError!;
 }
 
 function parseMetadataFromText(text: string) {
@@ -729,8 +752,31 @@ async function fetchInvoiceCheckDate(invoice: string): Promise<string> {
   return isoDateToMmDdYyyy(matched?.check_date || "");
 }
 
+// ─── FIXED parseSpoilsPdfRows ─────────────────────────────────────────────────
+//
+// pdfjs outputs each PDF text object as a separate span joined by "\n".
+// For this document each data row is exactly 7 spans:
+//
+//   span i+0: "485602"                       ← cust# alone (4-6 digits)
+//   span i+1: "FRESH THYME FRMR MKT 602NOR"  ← customer name
+//   span i+2: "W/E 12/27/2025"               ← ship date  ← KEY identifier
+//   span i+3: "190"                           ← invoice #
+//   span i+4: "12"                            ← qty
+//   span i+5: "0.02"                          ← invoice %
+//   span i+6: "0.7656"                        ← allowance $ ← this is amt
+//
+// UPC header is also split:
+//   "UPC :"          ← label alone
+//   "860008873408"   ← digits on next line
+//
+// Strategy 1 handles pdfplumber-style text where all columns are on one line.
+// Strategy 2 handles real pdfjs output with 7 separate spans per row.
+//
+const DEBUG_MODE = true;
+
 function parseSpoilsPdfRows(text: string): DatasetRow[] {
   const rows: DatasetRow[] = [];
+
   const lines = text
     .replace(/\u00a0/g, " ")
     .replace(/\r/g, "\n")
@@ -739,22 +785,139 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     .map((l) => l.trim())
     .filter(Boolean);
 
-  const UPC_RE = /^(\d{12})$/;
-  const AMT_RE = /^\$(\d*\.\d{2})$/;
-  const SKIP_RE = /^(UPC\s|TOTAL\s*:)/i;
+  let currentUpc = "";
+
+  const debug = {
+    totalLines: lines.length,
+    upcHeaders: [] as Array<{ lineIndex: number; upc: string; line: string; mode: string }>,
+    parsedRows: [] as Array<{ lineIndex: number; upc: string; customer: string; amount: number; mode: string }>,
+    skipped: [] as Array<{ lineIndex: number; line: string; reason: string; currentUpc: string }>,
+  };
 
   for (let i = 0; i < lines.length; i++) {
-    if (SKIP_RE.test(lines[i]) || !UPC_RE.test(lines[i])) continue;
+    const line = lines[i];
 
-    const amtMatch = (lines[i + 8] ?? "").match(AMT_RE);
-    if (!amtMatch) continue;
+    // UPC on same line
+    const upcMatch = line.match(/UPC\s*:?\s*(\d{10,14})\b/i);
+    if (upcMatch) {
+      currentUpc = upcMatch[1];
+      debug.upcHeaders.push({
+        lineIndex: i,
+        upc: currentUpc,
+        line,
+        mode: "same-line",
+      });
+      continue;
+    }
 
-    rows.push({
-      upc: lines[i],
-      item: lines[i + 1] ?? "",
-      cust_name: lines[i + 3] ?? "",
-      amt: parseFloat(amtMatch[1]),
-    });
+    // UPC on next line
+    if (/^UPC\s*:?\s*$/i.test(line)) {
+      const nextLine = lines[i + 1] || "";
+      const nextUpcMatch = nextLine.match(/^(\d{10,14})\b/);
+      if (nextUpcMatch) {
+        currentUpc = nextUpcMatch[1];
+        debug.upcHeaders.push({
+          lineIndex: i,
+          upc: currentUpc,
+          line: `${line} ${nextLine}`,
+          mode: "next-line",
+        });
+      }
+      continue;
+    }
+
+    if (!currentUpc) continue;
+
+    // Strategy 1: all columns on one line
+    if (/^\d{4,6}\s+/.test(line) && /\bW\/E\b/i.test(line)) {
+      const customerMatch = line.match(/^\d{4,6}\s+(.+?)\s+W\/E\b/i);
+      const amountMatch = line.match(/(\d+\.\d{4})\s*$/);
+
+      if (customerMatch && amountMatch) {
+        const row: DatasetRow = {
+          upc: currentUpc,
+          item: "",
+          cust_name: customerMatch[1].trim(),
+          amt: parseFloat(amountMatch[1]),
+        };
+
+        rows.push(row);
+        debug.parsedRows.push({
+          lineIndex: i,
+          upc: currentUpc,
+          customer: row.cust_name,
+          amount: row.amt,
+          mode: "single-line",
+        });
+        continue;
+      }
+
+      debug.skipped.push({
+        lineIndex: i,
+        line,
+        reason: "single-line row failed",
+        currentUpc,
+      });
+      continue;
+    }
+
+    // Strategy 2: split row across 7 lines
+    if (/^\d{4,6}$/.test(line)) {
+      const customerLine = lines[i + 1] || "";
+      const weLine = lines[i + 2] || "";
+      const invoiceLine = lines[i + 3] || "";
+      const qtyLine = lines[i + 4] || "";
+      const pctLine = lines[i + 5] || "";
+      const allowanceLine = lines[i + 6] || "";
+
+      const looksLikeSplitRow =
+        !!customerLine &&
+        /^W\/E\s+\d{2}\/\d{2}\/\d{4}$/i.test(weLine) &&
+        /^\d+$/.test(invoiceLine) &&
+        /^\d+$/.test(qtyLine) &&
+        /^\d*\.?\d+$/.test(pctLine) &&
+        /^\d+\.\d{4}$/.test(allowanceLine);
+
+      if (looksLikeSplitRow) {
+        const row: DatasetRow = {
+          upc: currentUpc,
+          item: "",
+          cust_name: customerLine.trim(),
+          amt: parseFloat(allowanceLine),
+        };
+
+        rows.push(row);
+        debug.parsedRows.push({
+          lineIndex: i,
+          upc: currentUpc,
+          customer: row.cust_name,
+          amount: row.amt,
+          mode: "split-row",
+        });
+
+        i += 6;
+        continue;
+      }
+
+      debug.skipped.push({
+        lineIndex: i,
+        line,
+        reason: "cust# line found but split-row pattern did not match",
+        currentUpc,
+      });
+    }
+  }
+
+  if (DEBUG_MODE) {
+    console.log("=== SPOILS DEBUG START ===");
+    console.log("UPC HEADERS:");
+    console.table(debug.upcHeaders);
+    console.log("PARSED ROWS:");
+    console.table(debug.parsedRows);
+    console.log("SKIPPED:");
+    console.table(debug.skipped);
+    console.log("FINAL ROW COUNT:", rows.length);
+    console.log("=== SPOILS DEBUG END ===");
   }
 
   return rows;
@@ -826,45 +989,18 @@ function parseFreshThymeSasPdfRows(text: string): DatasetRow[] {
   return rows;
 }
 
-/**
- * Parse Wonder Monday invoice PDF rows.
- *
- * VERIFIED against actual pdfjs text extraction (each column on its own line,
- * empty lines between fields — same structure as pdfminer.six output):
- *
- * Complete 3-part SKU (HP- series) — SKU on own line, then qty, rate, amount each on own line:
- *   'HP-CLAS-135'      ← SKU line (complete)
- *   '88'               ← qty
- *   '$36.12'           ← rate
- *   '$3,178.56'        ← amount
- *
- * Broken 4-part SKU (CK- series) — SKU prefix ends with dash, then qty/rate/amount,
- * THEN the suffix digits appear AFTER the amount:
- *   'CK-CLAS-101-'     ← SKU prefix (ends with trailing dash)
- *   '22'               ← qty
- *   '$35.88'           ← rate
- *   '$789.36'          ← amount
- *   '12'               ← SKU suffix (joins to make CK-CLAS-101-12)
- *
- * The SKU can also appear at the END of a product description line:
- *   'Strawberry Bliss Cheesecake (12/cs) CK-STRW-102-'
- *
- * MA 2% uses Unicode U+2212 MINUS SIGN (−$301.44) — normalized before scanning.
- * MA deduction is distributed across all product rows weighted by quantity.
- */
 function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const normalized = text
     .replace(/[\u2212\u2013\u2014]/g, "-")
     .replace(/\u00a0/g, " ");
 
-    const lines = normalized
+  const lines = normalized
     .replace(/\r/g, "\n")
     .replace(/[ \t]+/g, " ")
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
-    
-  // Extract customer
+
   let customer = "";
   const customerMatch =
     normalized.match(/Ship to\s+([^\n]+(?:DC\d+)?)/i) ||
@@ -874,11 +1010,8 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     customer = customerMatch[1].trim();
   }
 
-  // Extract MA 2% deduction
-  // Step 3: detect MA 2% deduction
   let maDeduction = 0;
 
-  // First try: read the explicit MA 2% line
   for (let i = 0; i < lines.length; i++) {
     if (/\bma\s*2%/i.test(lines[i])) {
       const nearby: string[] = [];
@@ -898,18 +1031,11 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     }
   }
 
-  // Fix broken SKU line breaks:
-  // CK-CLAS-101-
-  // 12
-  // becomes CK-CLAS-101-12
   const repaired = normalized.replace(
     /((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+-)\s*\n\s*(\d{1,3})\b/gi,
     "$1$2"
   );
 
-  // Match:
-  // HP-CLAS-135 44 $32.94 $1,449.36
-  // or same values split across whitespace/newlines
   const ROW_RE =
     /\b((?:HP|CK|NSA)-[A-Z0-9]+-[A-Z0-9]+(?:-\d+)?)\b\s+(\d+)\s+\$([\d,]+\.\d{2})\s+\$([\d,]+\.\d{2})/gi;
 
@@ -934,7 +1060,6 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   const totalQty = raw.reduce((sum, r) => sum + r.qty, 0);
   const grossTotal = round2(raw.reduce((sum, r) => sum + r.grossAmt, 0));
 
-  // Fallback: if MA line was not parsed, derive deduction from invoice total
   let invoiceTotal = 0;
 
   for (let i = 0; i < lines.length; i++) {
@@ -959,6 +1084,7 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
   if (!maDeduction && invoiceTotal > 0 && grossTotal > invoiceTotal) {
     maDeduction = round2(grossTotal - invoiceTotal);
   }
+
   let runningMa = 0;
 
   const rows: DatasetRow[] = raw.map((r, idx) => {
@@ -975,7 +1101,7 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     }
 
     return {
-      upc: r.upc, // SKU saved into UPC column, per your rule
+      upc: r.upc,
       item: "",
       cust_name: customer,
       qty: r.qty,
@@ -1000,7 +1126,7 @@ function parseWMInvoicePdfRows(text: string): DatasetRow[] {
     rows,
     netTotal: rows.reduce((sum, r) => sum + r.amt, 0),
   });
-  
+
   return rows;
 }
 
@@ -1068,7 +1194,7 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
   const rows: DatasetRow[] = [];
   const wb = XLSX.read(buffer, { type: "array" });
   const sn = wb.SheetNames.find((n) => /product\s*details/i.test(n));
-  if (!sn) return rows; 
+  if (!sn) return rows;
 
   const json = XLSX.utils.sheet_to_json<Record<string, any>>(wb.Sheets[sn], { defval: "" });
   if (!json.length) return rows;
@@ -1220,8 +1346,20 @@ function parseNewItemSetupPdfRows(text: string): DatasetRow[] {
   return rows;
 }
 
+function isSpoilsFormat(text: string) {
+  return /UPC\s*:?/i.test(text) && /\bW\/E\b/i.test(text);
+}
+
+
+
 async function parseDetailRows(file: File, fullText?: string): Promise<DatasetRow[]> {
+  console.log("[parseDetailRows] START", {
+    fileName: file.name,
+    providedFullText: !!fullText,
+  });
+
   if (await isExcelFile(file)) {
+    console.log("[parseDetailRows] ROUTE -> Excel parser");
     return parseExcelProductDetailsRows(await file.arrayBuffer());
   }
 
@@ -1232,23 +1370,56 @@ async function parseDetailRows(file: File, fullText?: string): Promise<DatasetRo
   const text = fullText ?? (await safeExtractPdfText(file)).fullText;
   const lt = text.toLowerCase();
 
-  if (/fresh\s+thyme\s+sas/i.test(lt) && /chargeback/i.test(lt)) return parseFreshThymeSasPdfRows(text);
+  console.log("[parseDetailRows] FLAGS", {
+    hasFreshThymeSas: /fresh\s+thyme\s+sas/i.test(lt),
+    hasChargeback: /chargeback/i.test(lt),
+    hasWonderMonday: /wonder\s*monday/i.test(lt),
+    hasShipTo: /ship\s+to/i.test(lt),
+    hasKehe: /kehe\s+distributors/i.test(lt),
+    hasInvoiceNo: /invoice\s+no/i.test(lt),
+    hasDistributorCharge: /distributor\s+charge/i.test(lt),
+    hasSoldTo: /sold\s+to/i.test(lt),
+    hasNewItemSetup: /new\s+item\s+set\s*up/i.test(lt),
+    hasInvoiceTotal: /invoice\s+total/i.test(lt),
+    hasDcHash: /dc\s*#/i.test(lt),
+    hasUpcLabel: /UPC\s*:?/i.test(text),
+    hasWE: /\bW\/E\b/i.test(text),
+  });
+
+  // 🔥 FORCE spoils before WM detection
+  if (isSpoilsFormat(text)) {
+    console.log("[parseDetailRows] ROUTE -> parseSpoilsPdfRows (FORCED)");
+    return parseSpoilsPdfRows(text);
+  }
+
+  if (/fresh\s+thyme\s+sas/i.test(lt) && /chargeback/i.test(lt)) {
+    console.log("[parseDetailRows] ROUTE -> parseFreshThymeSasPdfRows");
+    return parseFreshThymeSasPdfRows(text);
+  }
 
   if (
     /wonder\s*monday/i.test(lt) &&
     /ship\s+to/i.test(lt) &&
     /kehe\s+distributors/i.test(lt) &&
-    /invoice\s+no/i.test(lt)
+    /invoice\s+no/i.test(lt) &&
+    !/customer\s+spoil/i.test(lt) &&   // ← exclude spoils docs
+    !/UPC\s*:/i.test(lt)               // ← exclude spoils docs (have UPC: headers)
   ) {
+    console.log("[parseDetailRows] ROUTE -> parseWMInvoicePdfRows");
     return parseWMInvoicePdfRows(text);
   }
 
-  if (/distributor\s+charge/i.test(lt) && /sold\s+to/i.test(lt)) return parseDollarPromotionPdfRows(text);
+  if (/distributor\s+charge/i.test(lt) && /sold\s+to/i.test(lt)) {
+    console.log("[parseDetailRows] ROUTE -> parseDollarPromotionPdfRows");
+    return parseDollarPromotionPdfRows(text);
+  }
 
   if (/new\s+item\s+set\s*up/i.test(lt) && /invoice\s+total/i.test(lt) && /dc\s*#/i.test(lt)) {
+    console.log("[parseDetailRows] ROUTE -> parseNewItemSetupPdfRows");
     return parseNewItemSetupPdfRows(text);
   }
 
+  console.log("[parseDetailRows] ROUTE -> parseSpoilsPdfRows");
   return parseSpoilsPdfRows(text);
 }
 
@@ -1269,7 +1440,7 @@ function buildDatasetInsert(
     invoice: invoiceNorm,
     type: normalizedType,
     upc,
-    item: productLookup.get(upc) || String(row.item || "").trim(),
+    item: productLookup.get(upc) || "",
     cust_name: String(row.cust_name || "").trim(),
     amt: isWmInvoiceType(normalizedType) ? round2(Math.abs(amount)) : round2(-Math.abs(amount)),
   };
@@ -1293,6 +1464,12 @@ async function replaceDatasetRowsForInvoice(
   } else if (detectedType === "pdf") {
     const { fullText } = await safeExtractPdfText(file);
     detailRows = await parseDetailRows(file, fullText);
+
+    console.log("PARSED DETAIL ROWS", {
+      invoice: ni,
+      count: detailRows.length,
+      rows: detailRows.slice(0, 10),
+    });
 
     if (!categoryFallback) {
       const pm = parseMetadataFromText(fullText);
@@ -1318,7 +1495,8 @@ async function replaceDatasetRowsForInvoice(
   if (!detailRows.length) {
     detailRows = [{
       upc: "UNKNOWN",
-      item: detectedType === "excel" ? "UNPARSED EXCEL DOCUMENT" : "UNPARSED WM INVOICE",
+      item: detectedType === "excel" ? "UNPARSED EXCEL DOCUMENT TEST 0406"
+      : "UNPARSED PDF DOCUMENT TEST 0406",
       cust_name: "",
       amt: Math.abs(Number(invoiceAmt || 0)),
     }];
@@ -1335,7 +1513,6 @@ async function replaceDatasetRowsForInvoice(
   const datasetMonth = formatMonthLabelFromDate(invoiceCheckDate);
   const datasetCheckDate = parseIsoDateFromMmDdYyyy(invoiceCheckDate);
 
-  // Filter out the MA2% line if it accidentally got parsed as a product row
   const inserts: DatasetInsert[] = detailRows
     .filter((r) => {
       if (!isWmInvoiceType(finalType)) return true;
@@ -1344,7 +1521,6 @@ async function replaceDatasetRowsForInvoice(
     })
     .map((r) => buildDatasetInsert(r, pl, datasetMonth, datasetCheckDate, ni, finalType));
 
-  // Always delete existing rows first, then re-insert (covers upload, re-upload, reprocess)
   const { error: deleteError } = await supabase
     .from("broker_commission_datasets")
     .delete()
@@ -1739,6 +1915,7 @@ export default function InvoicesView({
     if (invoiceInputRef.current) invoiceInputRef.current.value = "";
   };
 
+  // ─── uploadNewDocument — uses retry helper ────────────────────────────────
   const uploadNewDocument = async (
     file: File,
     meta: { category: string; invoice: string; pdf_date: string; file_type: "pdf" | "excel" }
@@ -1747,11 +1924,8 @@ export default function InvoicesView({
     const ct = getUploadContentType(file, meta.file_type);
     const nowIso = new Date().toISOString();
 
-    const { error: se } = await supabase.storage
-      .from(DOCUMENT_BUCKET)
-      .upload(fp, file, { cacheControl: "3600", upsert: false, contentType: ct });
-
-    if (se) throw new Error(`${file.name}: ${se.message}`);
+    // Retry up to 3 times to handle transient 502/CORS storage errors
+    await uploadToStorageWithRetry(fp, file, ct);
 
     const { error: de } = await supabase.from("uploads").insert({
       file_name: file.name,
@@ -1763,11 +1937,16 @@ export default function InvoicesView({
       uploaded_at: nowIso,
     });
 
-    if (de) throw new Error(`${file.name}: ${de.message}`);
+    if (de) {
+      // Clean up orphaned storage file if DB insert fails
+      await supabase.storage.from(DOCUMENT_BUCKET).remove([fp]);
+      throw new Error(`${file.name}: ${de.message}`);
+    }
 
     await syncInvoiceFromUpload(meta.invoice, meta.category);
   };
 
+  // ─── replaceExistingDocument — uses retry helper ──────────────────────────
   const replaceExistingDocument = async (
     eu: UploadRecord,
     file: File,
@@ -1783,11 +1962,8 @@ export default function InvoicesView({
     const ct = getUploadContentType(file, meta.file_type);
     const nowIso = new Date().toISOString();
 
-    const { error: se } = await supabase.storage
-      .from(DOCUMENT_BUCKET)
-      .upload(fp, file, { cacheControl: "3600", upsert: false, contentType: ct });
-
-    if (se) throw new Error(`${file.name}: ${se.message}`);
+    // Retry up to 3 times to handle transient 502/CORS storage errors
+    await uploadToStorageWithRetry(fp, file, ct);
 
     const { error: de } = await supabase
       .from("uploads")
@@ -1802,7 +1978,11 @@ export default function InvoicesView({
       })
       .eq("id", eu.id);
 
-    if (de) throw new Error(`${file.name}: ${de.message}`);
+    if (de) {
+      // Clean up orphaned storage file if DB update fails
+      await supabase.storage.from(DOCUMENT_BUCKET).remove([fp]);
+      throw new Error(`${file.name}: ${de.message}`);
+    }
 
     await syncInvoiceFromUpload(meta.invoice, meta.category);
 
@@ -2117,8 +2297,8 @@ export default function InvoicesView({
             <div className="mb-4 grid grid-cols-2 gap-3">
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">From Date</label>
-                <input type="date" value={reprocessFrom} onChange={(e) => setReprocessFrom(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+                <input type="date" id="reprocess-from" name="reprocess-from" value={reprocessFrom} onChange={(e) => setReprocessFrom(e.target.value)}
+  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">To Date</label>
