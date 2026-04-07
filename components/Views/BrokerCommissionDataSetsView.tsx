@@ -81,13 +81,18 @@ function formatMonthShort(value: string): string {
 function formatMonthFromDate(value: string): string {
   if (!value) return "";
 
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "";
+  // Parse as local date to avoid UTC timezone offset issues
+  const parts = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!parts) return "";
 
-  return parsed.toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
+  const year = parseInt(parts[1]);
+  const month = parseInt(parts[2]) - 1; // 0-indexed
+  const d = new Date(year, month, 1); // local time, no UTC shift
+
+  if (isNaN(d.getTime())) return "";
+
+  // Return in same format as month field: "January '26"
+  return `${d.toLocaleString("en-US", { month: "long" })} '${String(year).slice(-2)}`;
 }
 
 function formatCheckDate(value: string): string {
