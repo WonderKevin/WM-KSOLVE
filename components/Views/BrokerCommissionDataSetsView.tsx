@@ -374,6 +374,7 @@ export default function BrokerCommissionDataSetsView() {
 
     if (datasetError) {
       console.error("Failed to load datasets:", datasetError);
+      alert(`Failed to load datasets: ${datasetError.message ?? "Unknown error"}`);
       setRows([]);
       setMissingInvoices([]);
       setLoading(false);
@@ -680,6 +681,12 @@ export default function BrokerCommissionDataSetsView() {
     setCustomRetailer("");
   };
 
+  const cancelBulkEdit = () => {
+    setBulkEditOpen(false);
+    setBulkRetailerChoice("Fresh Thyme");
+    setBulkCustomRetailer("");
+  };
+
   const saveRetailerEdit = async (rowId: string) => {
     const finalRetailer =
       editRetailerChoice === "Add new retailer..."
@@ -690,7 +697,7 @@ export default function BrokerCommissionDataSetsView() {
 
     setSavingRowId(rowId);
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("retailer_overrides")
       .upsert(
         {
@@ -699,13 +706,17 @@ export default function BrokerCommissionDataSetsView() {
           updated_at: new Date().toISOString(),
         },
         { onConflict: "dataset_id" }
-      );
+      )
+      .select();
 
     if (error) {
       console.error("Failed to save retailer override:", error);
+      alert(`Failed to save retailer: ${error.message}`);
       setSavingRowId(null);
       return;
     }
+
+    console.log("Saved retailer override:", data);
 
     setRows((prev) =>
       prev.map((row) =>
@@ -715,18 +726,13 @@ export default function BrokerCommissionDataSetsView() {
 
     setSavingRowId(null);
     cancelEditing();
+    await loadData();
   };
 
   const openBulkEdit = () => {
     setBulkRetailerChoice("Fresh Thyme");
     setBulkCustomRetailer("");
     setBulkEditOpen(true);
-  };
-
-  const cancelBulkEdit = () => {
-    setBulkEditOpen(false);
-    setBulkRetailerChoice("Fresh Thyme");
-    setBulkCustomRetailer("");
   };
 
   const saveBulkRetailerEdit = async () => {
@@ -745,15 +751,19 @@ export default function BrokerCommissionDataSetsView() {
       updated_at: new Date().toISOString(),
     }));
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("retailer_overrides")
-      .upsert(payload, { onConflict: "dataset_id" });
+      .upsert(payload, { onConflict: "dataset_id" })
+      .select();
 
     if (error) {
       console.error("Failed to save bulk retailer overrides:", error);
+      alert(`Failed to save selected retailers: ${error.message}`);
       setBulkSaving(false);
       return;
     }
+
+    console.log("Saved bulk retailer overrides:", data);
 
     setRows((prev) =>
       prev.map((row) =>
@@ -768,6 +778,7 @@ export default function BrokerCommissionDataSetsView() {
     setSelectedRowIds([]);
     setBulkRetailerChoice("Fresh Thyme");
     setBulkCustomRetailer("");
+    await loadData();
   };
 
   return (
@@ -1047,7 +1058,7 @@ export default function BrokerCommissionDataSetsView() {
                   )
                 }
               >
-                Save selected
+                {bulkSaving ? "Saving..." : "Save selected"}
               </Button>
               <Button
                 type="button"
@@ -1137,9 +1148,7 @@ export default function BrokerCommissionDataSetsView() {
                         <div className="space-y-2">
                           <select
                             value={editRetailerChoice}
-                            onChange={(e) =>
-                              setEditRetailerChoice(e.target.value)
-                            }
+                            onChange={(e) => setEditRetailerChoice(e.target.value)}
                             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
                           >
                             {EDITABLE_RETAILERS.map((option) => (
@@ -1153,9 +1162,7 @@ export default function BrokerCommissionDataSetsView() {
                             <input
                               type="text"
                               value={customRetailer}
-                              onChange={(e) =>
-                                setCustomRetailer(e.target.value)
-                              }
+                              onChange={(e) => setCustomRetailer(e.target.value)}
                               placeholder="Enter retailer"
                               className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
                             />
