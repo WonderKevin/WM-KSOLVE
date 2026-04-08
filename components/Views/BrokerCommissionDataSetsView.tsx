@@ -41,7 +41,7 @@ type DatasetDbRow = {
 };
 
 type InvoiceRow = {
-  invoice_number: string | null;
+  invoice_number: string | number | null;
   check_date?: string | null;
   check_number?: string | null;
   invoice_amt?: number | null;
@@ -66,6 +66,8 @@ const EDITABLE_RETAILERS = [
   "Add new retailer...",
 ] as const;
 
+const DEBUG_INVOICES = ["1740", "1741", "1745", "1747"];
+
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
@@ -81,17 +83,15 @@ function formatMonthShort(value: string): string {
 function formatMonthFromDate(value: string): string {
   if (!value) return "";
 
-  // Parse as local date to avoid UTC timezone offset issues
   const parts = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!parts) return "";
 
-  const year = parseInt(parts[1]);
-  const month = parseInt(parts[2]) - 1; // 0-indexed
-  const d = new Date(year, month, 1); // local time, no UTC shift
+  const year = parseInt(parts[1], 10);
+  const month = parseInt(parts[2], 10) - 1;
+  const d = new Date(year, month, 1);
 
   if (isNaN(d.getTime())) return "";
 
-  // Return in same format as month field: "January '26"
   return `${d.toLocaleString("en-US", { month: "long" })} '${String(year).slice(-2)}`;
 }
 
@@ -108,12 +108,20 @@ function formatCheckDate(value: string): string {
   });
 }
 
-function normalizeInvoice(value: string) {
-  return String(value || "")
-    .replace(/\s+/g, "")
+function normalizeInvoice(value: string | number | null | undefined) {
+  const raw = String(value ?? "").trim().toUpperCase();
+
+  if (!raw) return "";
+
+  // Handles cases like:
+  // "1740", "1740 ", "1740.", "1740.0", "INV-1740", " 1740\t"
+  const cleaned = raw
+    .replace(/\.0+$/g, "")
     .replace(/[.]+$/g, "")
-    .trim()
-    .toUpperCase();
+    .replace(/\s+/g, "")
+    .replace(/[^A-Z0-9]/g, "");
+
+  return cleaned;
 }
 
 function normalizeText(value: string) {
@@ -319,6 +327,8 @@ export default function BrokerCommissionDataSetsView() {
   const loadData = async () => {
     setLoading(true);
 
+    console.log("NEXT_PUBLIC_SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
+
     const [
       { data: datasetData, error: datasetError },
       { data: invoiceData, error: invoiceError },
@@ -333,10 +343,44 @@ export default function BrokerCommissionDataSetsView() {
       supabase
         .from("invoices")
         .select("invoice_number, check_date, check_number, invoice_amt, type")
-        .eq("type", "WM Invoice"),
+        .ilike("type", "WM Invoice"),
       supabase.from("locations").select("customer, retailer"),
       supabase.from("retailer_overrides").select("dataset_id, retailer"),
     ]);
+
+    if (datasetError) console.error("Failed to load datasets:", datasetError);
+    if (invoiceError) console.error("Failed to load invoices:", invoiceError);
+    if (locationsError) console.error("Failed to load locations:", locationsError);
+    if (overrideError) console.error("Failed to load retailer overrides:", overrideError);
+
+    console.log("datasetData length:", datasetData?.length ?? 0);
+    console.log("invoiceData length:", invoiceData?.length ?? 0);
+
+    const datasetInvoicesNormalized = Array.from(
+      new Set(
+        ((datasetData ?? []) as DatasetDbRow[])
+          .map((row) => normalizeInvoice(row.invoice))
+          .filter(Boolean)
+      )
+    );
+
+    const invoiceTableNormalized = Array.from(
+      new Set(
+        ((invoiceData ?? []) as InvoiceRow[])
+          .map((row) => normalizeInvoice(row.invoice_number))
+          .filter(Boolean)
+      )
+    );
+
+    console.log("dataset normalized invoices:", datasetInvoicesNormalized);
+    console.log("invoice table normalized invoices:", invoiceTableNormalized);
+
+    for (const inv of DEBUG_INVOICES) {
+      const matchedRows = ((datasetData ?? []) as DatasetDbRow[]).filter(
+        (row) => normalizeInvoice(row.invoice) === inv
+      );
+      console.log(`dataset rows for invoice ${inv}:`, matchedRows);
+    }
 
     const locations: LocationRow[] = (locationsData ?? []).map((row: any) => ({
       customer: row.customer ?? "",
@@ -352,7 +396,7 @@ export default function BrokerCommissionDataSetsView() {
 
     const ksolveByInvoice = new Map<string, number>();
     for (const row of (invoiceData ?? []) as InvoiceRow[]) {
-      const invoice = normalizeInvoice(row.invoice_number ?? "");
+      const invoice = normalizeInvoice(row.invoice_number);
       if (!invoice) continue;
 
       ksolveByInvoice.set(
@@ -363,7 +407,7 @@ export default function BrokerCommissionDataSetsView() {
 
     const wmByInvoice = new Map<string, number>();
     for (const row of (datasetData ?? []) as DatasetDbRow[]) {
-      const invoice = normalizeInvoice(row.invoice ?? "");
+      const invoice = normalizeInvoice(row.invoice);
       if (!invoice) continue;
       if (!isWmInvoiceType(row.type ?? "")) continue;
 
@@ -377,12 +421,10 @@ export default function BrokerCommissionDataSetsView() {
     for (const invoice of new Set([...ksolveByInvoice.keys(), ...wmByInvoice.keys()])) {
       const ksolveAmount = ksolveByInvoice.get(invoice) ?? 0;
       const wmAmount = wmByInvoice.get(invoice) ?? 0;
-
       discrepancyByInvoice.set(invoice, round2(ksolveAmount - wmAmount));
     }
 
     if (datasetError) {
-      console.error("Failed to load datasets:", datasetError);
       setRows([]);
     } else {
       const baseRows: Omit<Row, "discrepancyShare" | "adjustedAmt">[] = (
@@ -397,11 +439,6 @@ export default function BrokerCommissionDataSetsView() {
         const overrideRetailer = overrideMap.get(row.id) ?? "";
         const derivedMonth =
           formatMonthFromDate(row.check_date ?? "") || (row.month ?? "");
-
-          if (row.invoice === "1740") {
-            console.log("1740 check_date:", row.check_date, "→ derivedMonth:", derivedMonth);
-          }
-
 
         return {
           id: row.id,
@@ -420,36 +457,16 @@ export default function BrokerCommissionDataSetsView() {
       setRows(applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice));
     }
 
-    if (locationsError) {
-      console.error("Failed to load locations:", locationsError);
-    }
-
-    if (overrideError) {
-      console.error("Failed to load retailer overrides:", overrideError);
-    }
-
     if (invoiceError) {
-      console.error("Failed to load invoices:", invoiceError);
       setMissingInvoices([]);
     } else {
-      const datasetInvoiceSet = new Set(
-        ((datasetData ?? []) as DatasetDbRow[])
-          .map((row) => normalizeInvoice(row.invoice ?? ""))
-          .filter(Boolean)
-      );
-
-      const ksolveInvoiceList = Array.from(
-        new Set(
-          ((invoiceData ?? []) as InvoiceRow[])
-            .map((row) => normalizeInvoice(row.invoice_number ?? ""))
-            .filter(Boolean)
-        )
-      );
-
+      const datasetInvoiceSet = new Set(datasetInvoicesNormalized);
+      const ksolveInvoiceList = invoiceTableNormalized;
       const missing = ksolveInvoiceList.filter(
         (invoice) => !datasetInvoiceSet.has(invoice)
       );
 
+      console.log("missing invoices:", missing);
       setMissingInvoices(missing.sort((a, b) => a.localeCompare(b)));
     }
 
@@ -556,9 +573,9 @@ export default function BrokerCommissionDataSetsView() {
         row.item.toLowerCase().includes(keyword) ||
         row.custName.toLowerCase().includes(keyword) ||
         row.retailer.toLowerCase().includes(keyword) ||
-        (
-          isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt
-        ).toFixed(2).includes(keyword);
+        (isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt)
+          .toFixed(2)
+          .includes(keyword);
 
       return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
