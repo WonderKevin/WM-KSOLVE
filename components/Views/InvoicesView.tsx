@@ -715,72 +715,49 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
   const parseFlatSpoilsTableRowLoose = (line: string): DatasetRow | null => {
     const dateMatch = line.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/);
     if (!dateMatch || dateMatch.index == null) return null;
-
+  
     const beforeDate = line.slice(0, dateMatch.index).trim();
     const afterDate = line.slice(dateMatch.index + dateMatch[0].length).trim();
-
+  
     const upcMatch = beforeDate.match(/^(\d{10,14})\s+/);
     if (!upcMatch) return null;
-
+  
     const upc = upcMatch[1];
     const remainingBeforeDate = beforeDate.slice(upcMatch[0].length).trim();
     const afterParts = afterDate.split(/\s+/).filter(Boolean);
     if (afterParts.length < 4) return null;
-
-    // after date usually looks like:
-    // [inv#, qty, rate, amt]
+  
     const qtyRaw = afterParts[1];
     const rateRaw = afterParts[2];
     const amtRaw = afterParts[afterParts.length - 1];
-
+  
     if (!/^\d+$/.test(qtyRaw)) return null;
     if (!/^\d+(?:\.\d+)?%$/.test(rateRaw)) return null;
-
+  
     const amt = extractAmount(amtRaw);
     if (amt === null) return null;
-
-   // IMPORTANT:
-// Keep the full customer text. Do NOT slice the last 3 tokens.
-// That was turning "PICK N SAVE #412 KGR" into "SAVE #412 KGR".
-const extractCustomerFromFlatRow = (value: string): string => {
-  const cleaned = value.replace(/\s+/g, " ").trim();
-
-  // Split into tokens
-  const tokens = cleaned.split(" ");
-
-  // We walk backwards to capture:
-  // CUSTOMER #NUMBER SUFFIX (like KGR, KG, etc.)
-
-  const result: string[] = [];
-
-  for (let i = tokens.length - 1; i >= 0; i--) {
-    const t = tokens[i];
-
-    // Always include last tokens first
-    result.unshift(t);
-
-    // Stop condition:
-    // once we hit something that looks like a product/brand separator
-    // (heuristic: long uppercase words before customer block)
-    if (result.length >= 3 && /^[A-Z]{3,}$/.test(tokens[i - 1] || "")) {
-      break;
-    }
-  }
-
-  return result.join(" ");
-};
-
-const customer = extractCustomerFromFlatRow(remainingBeforeDate);
-if (!customer) return null;
-
-return {
-  upc,
-  item: "",
-  cust_name: customer,
-  amt,
-  qty: parseInt(qtyRaw, 10),
-  rate: parseFloat(rateRaw.replace("%", "")) / 100,
-};
+  
+    const extractCustomerFromFlatRow = (value: string): string => {
+      const cleaned = value.replace(/\s+/g, " ").trim();
+  
+      const match = cleaned.match(/([A-Z0-9'&.\- ]+#\d+\s*[A-Z]*)$/i);
+      if (match?.[1]) return match[1].trim();
+  
+      return cleaned;
+    };
+  
+    const customer = extractCustomerFromFlatRow(remainingBeforeDate);
+    if (!customer) return null;
+  
+    return {
+      upc,
+      item: "",
+      cust_name: customer,
+      amt,
+      qty: parseInt(qtyRaw, 10),
+      rate: parseFloat(rateRaw.replace("%", "")) / 100,
+    };
+  };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
