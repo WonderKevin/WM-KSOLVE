@@ -739,10 +739,17 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
   
     const extractCustomerFromFlatRow = (value: string): string => {
       const cleaned = value.replace(/\s+/g, " ").trim();
-  
-      const match = cleaned.match(/([A-Z0-9'&.\- ]+#\d+\s*[A-Z]*)$/i);
-      if (match?.[1]) return match[1].trim();
-  
+    
+      // Customer name starts at a known retailer keyword
+      const retailerMatch = cleaned.match(
+        /\b(KROGER|PICK N SAVE|METRO MARKET|MARIANO'S|MARIANOS|DILLONS|DOOR DASH|GREEN EARTH|FRESH THYME|JEWEL|SMITH'S|SMITHS|RALPH'S|RALPHS|FRED MEYER|HARRIS TEETER|KING SOOPERS)\b.*/i
+      );
+      if (retailerMatch) return retailerMatch[0].trim();
+    
+      // Fallback: store number pattern like "#107" or "KRO..."
+      const storeMatch = cleaned.match(/([A-Z0-9'&.\- ]+#\d+\s*[A-Z]*)$/i);
+      if (storeMatch?.[1]) return storeMatch[1].trim();
+    
       return cleaned;
     };
   
