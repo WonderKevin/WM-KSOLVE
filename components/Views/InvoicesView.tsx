@@ -714,10 +714,13 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
 
   const parseFlatSpoilsTableRowLoose = (line: string): DatasetRow | null => {
     const rowMatch = line.match(
-      /^(\d{10,14})\s+(.+?)\s+(WONDR)\s+(.+?)\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?%)\s+\$?([.]?\d+\.\d{2})$/i
+      /^(\d{10,14})\s+(.+?)\s+(WONDR)\s+(.+?)\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?%)\s+\$?(\d+\.\d{2}|\.\d{2})$/i
     );
   
-    if (!rowMatch) return null;
+    if (!rowMatch) {
+      console.log("[parseFlatSpoilsTableRowLoose] NO MATCH:", line);
+      return null;
+    }
   
     const [
       ,
@@ -732,7 +735,8 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       amtRaw,
     ] = rowMatch;
   
-    const amt = parseFloat(amtRaw.startsWith(".") ? `0${amtRaw}` : amtRaw);
+    const normalizedAmt = amtRaw.startsWith(".") ? `0${amtRaw}` : amtRaw;
+    const amt = parseFloat(normalizedAmt);
     if (Number.isNaN(amt)) return null;
   
     return {
