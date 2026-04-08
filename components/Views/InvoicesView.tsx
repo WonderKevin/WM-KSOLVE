@@ -1490,6 +1490,9 @@ function buildDatasetInsert(
   };
 }
 
+const { data: { session } } = await supabase.auth.getSession();
+console.log("Auth session:", session?.user?.email ?? "NO SESSION");
+
 async function replaceDatasetRowsForInvoice(
   invoice: string,
   file: File,
