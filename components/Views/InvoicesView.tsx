@@ -662,13 +662,6 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     .map((l) => l.trim())
     .filter(Boolean);
 
-  console.log("=== RAW TEXT SAMPLE ===");
-  console.log("text.length:", text.length);
-  console.log("lines.length:", lines.length);
-  console.log("first 500 chars:", JSON.stringify(text.slice(0, 500)));
-  console.log("first 10 lines:", lines.slice(0, 10));
-  console.log("=== RAW TEXT SAMPLE END ===");
-
   let currentUpc = "";
   let inFlatTable = false;
 
@@ -702,6 +695,23 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     /\b\d{1,2}\/\d{1,2}\/\d{4}\b/.test(line) &&
     /\$?\.?\d+\.\d{2}$/.test(line.trim());
 
+  const normalizeCustomerName = (value: string): string =>
+    value
+      .replace(/\s+/g, " ")
+      .replace(/\s+([,.;:])/g, "$1")
+      .trim();
+
+  const stripTrailingTokensBeforeDate = (value: string): string => {
+    let out = value.trim();
+
+    // Some OCR/PDF text extractions can leave invoice/qty/rate tokens before the date split.
+    // Remove them only if they appear at the very end.
+    out = out.replace(/\s+\d+\s+\d+(?:\.\d+)?%\s*$/i, "");
+    out = out.replace(/\s+\d{5,10}\s*$/i, "");
+
+    return normalizeCustomerName(out);
+  };
+
   const parseFlatSpoilsTableRowLoose = (line: string): DatasetRow | null => {
     const dateMatch = line.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/);
     if (!dateMatch || dateMatch.index == null) return null;
@@ -717,6 +727,8 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     const afterParts = afterDate.split(/\s+/).filter(Boolean);
     if (afterParts.length < 4) return null;
 
+    // after date usually looks like:
+    // [inv#, qty, rate, amt]
     const qtyRaw = afterParts[1];
     const rateRaw = afterParts[2];
     const amtRaw = afterParts[afterParts.length - 1];
@@ -727,19 +739,16 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     const amt = extractAmount(amtRaw);
     if (amt === null) return null;
 
-    let customer = remainingBeforeDate;
-    const customerCommaMatch = remainingBeforeDate.match(/(.+?\b)([A-Z0-9&.\- ]+,\s*[A-Z0-9&.\- ]+)$/i);
-    if (customerCommaMatch) {
-      customer = customerCommaMatch[2].trim();
-    } else {
-      const parts = remainingBeforeDate.split(/\s+/);
-      if (parts.length >= 3) customer = parts.slice(-3).join(" ");
-    }
+    // IMPORTANT:
+    // Keep the full customer text. Do NOT slice the last 3 tokens.
+    // That was turning "PICK N SAVE #412 KGR" into "SAVE #412 KGR".
+    const customer = stripTrailingTokensBeforeDate(remainingBeforeDate);
+    if (!customer) return null;
 
     return {
       upc,
       item: "",
-      cust_name: customer.trim(),
+      cust_name: customer,
       amt,
       qty: parseInt(qtyRaw, 10),
       rate: parseFloat(rateRaw.replace("%", "")) / 100,
@@ -757,6 +766,7 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       continue;
     }
 
+    // ── Format 1: flat table rows ─────────────────────────────────────────────
     if (inFlatTable) {
       if (
         /^TOTAL\s*:?\s*\$?[\d,]+\.\d{2}$/i.test(line) ||
@@ -770,20 +780,34 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       const flatRow = parseFlatSpoilsTableRowLoose(line);
       if (flatRow) {
         rows.push(flatRow);
-        debug.parsedRows.push({ lineIndex: i, upc: flatRow.upc, customer: flatRow.cust_name, amount: flatRow.amt, mode: "flat-table-loose" });
+        debug.parsedRows.push({
+          lineIndex: i,
+          upc: flatRow.upc,
+          customer: flatRow.cust_name,
+          amount: flatRow.amt,
+          mode: "flat-table-loose",
+        });
         continue;
       }
     }
 
+    // Safety: sometimes OCR gives a flat row even when header wasn't captured
     if (!inFlatTable && looksLikeFlatSpoilsRow(line)) {
       const flatRow = parseFlatSpoilsTableRowLoose(line);
       if (flatRow) {
         rows.push(flatRow);
-        debug.parsedRows.push({ lineIndex: i, upc: flatRow.upc, customer: flatRow.cust_name, amount: flatRow.amt, mode: "flat-opportunistic" });
+        debug.parsedRows.push({
+          lineIndex: i,
+          upc: flatRow.upc,
+          customer: flatRow.cust_name,
+          amount: flatRow.amt,
+          mode: "flat-opportunistic",
+        });
         continue;
       }
     }
 
+    // ── Format 2: grouped UPC blocks ──────────────────────────────────────────
     const upcMatch = line.match(/^UPC\s*:?\s*(\d{10,14})\b/i);
     if (upcMatch) {
       currentUpc = upcMatch[1];
@@ -798,42 +822,79 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       if (nextUpcMatch) {
         currentUpc = nextUpcMatch[1];
         inFlatTable = false;
-        debug.upcHeaders.push({ lineIndex: i, upc: currentUpc, line: `${line} ${nextLine}`, mode: "next-line" });
+        debug.upcHeaders.push({
+          lineIndex: i,
+          upc: currentUpc,
+          line: `${line} ${nextLine}`,
+          mode: "next-line",
+        });
       }
       continue;
     }
 
     if (!currentUpc) continue;
 
+    // Variant 2A: customer and W/E on the same line
     if (/^\d{4,6}\s+/.test(line) && /\bW\/E\b/i.test(line)) {
       const customerMatch = line.match(/^\d{4,6}\s+(.+?)\s+W\/E\b/i);
       const amount = extractAmount(line);
 
       if (customerMatch && amount !== null) {
-        const row: DatasetRow = { upc: currentUpc, item: "", cust_name: customerMatch[1].trim(), amt: amount };
+        const customerName = normalizeCustomerName(customerMatch[1]);
+        const row: DatasetRow = {
+          upc: currentUpc,
+          item: "",
+          cust_name: customerName,
+          amt: amount,
+        };
         rows.push(row);
-        debug.parsedRows.push({ lineIndex: i, upc: currentUpc, customer: row.cust_name, amount: row.amt, mode: "single-line" });
+        debug.parsedRows.push({
+          lineIndex: i,
+          upc: currentUpc,
+          customer: row.cust_name,
+          amount: row.amt,
+          mode: "single-line",
+        });
         continue;
       }
 
-      debug.skipped.push({ lineIndex: i, line, reason: "single-line row failed", currentUpc });
+      debug.skipped.push({
+        lineIndex: i,
+        line,
+        reason: "single-line row failed",
+        currentUpc,
+      });
       continue;
     }
 
+    // Variant 2B: store number on one line, customer lines next, W/E later
     if (/^\d{4,6}$/.test(line)) {
       let weIdx = -1;
       for (let k = i + 1; k < Math.min(i + 10, lines.length); k++) {
-        if (/^W\/E\s+\d{1,2}\/\d{1,2}\/\d{4}/i.test(lines[k])) { weIdx = k; break; }
+        if (/^W\/E\s+\d{1,2}\/\d{1,2}\/\d{4}/i.test(lines[k])) {
+          weIdx = k;
+          break;
+        }
       }
 
       if (weIdx === -1) {
-        debug.skipped.push({ lineIndex: i, line, reason: "no W/E date found in next 10 lines", currentUpc });
+        debug.skipped.push({
+          lineIndex: i,
+          line,
+          reason: "no W/E date found in next 10 lines",
+          currentUpc,
+        });
         continue;
       }
 
-      const customerName = lines.slice(i + 1, weIdx).join(" ").trim();
+      const customerName = normalizeCustomerName(lines.slice(i + 1, weIdx).join(" "));
       if (!customerName) {
-        debug.skipped.push({ lineIndex: i, line, reason: "empty customer name before W/E", currentUpc });
+        debug.skipped.push({
+          lineIndex: i,
+          line,
+          reason: "empty customer name before W/E",
+          currentUpc,
+        });
         continue;
       }
 
@@ -841,22 +902,46 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       let amountIdx = -1;
 
       const weLineAmount = extractAmount(lines[weIdx]);
-      if (weLineAmount !== null) { amount = weLineAmount; amountIdx = weIdx; }
+      if (weLineAmount !== null) {
+        amount = weLineAmount;
+        amountIdx = weIdx;
+      }
 
       if (amount === null) {
         for (let k = weIdx + 1; k < Math.min(weIdx + 8, lines.length); k++) {
           const parsed = extractAmount(lines[k]);
-          if (parsed !== null) { amount = parsed; amountIdx = k; }
+          if (parsed !== null) {
+            amount = parsed;
+            amountIdx = k;
+            break;
+          }
         }
       }
 
       if (amount === null) {
-        debug.skipped.push({ lineIndex: i, line, reason: "no allowance amount found after W/E", currentUpc });
+        debug.skipped.push({
+          lineIndex: i,
+          line,
+          reason: "no allowance amount found after W/E",
+          currentUpc,
+        });
         continue;
       }
 
-      rows.push({ upc: currentUpc, item: "", cust_name: customerName, amt: amount });
-      debug.parsedRows.push({ lineIndex: i, upc: currentUpc, customer: customerName, amount, mode: "split-row" });
+      rows.push({
+        upc: currentUpc,
+        item: "",
+        cust_name: customerName,
+        amt: amount,
+      });
+
+      debug.parsedRows.push({
+        lineIndex: i,
+        upc: currentUpc,
+        customer: customerName,
+        amount,
+        mode: "split-row",
+      });
 
       if (amountIdx > i) i = amountIdx;
       continue;
