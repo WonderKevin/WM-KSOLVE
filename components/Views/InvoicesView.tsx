@@ -724,6 +724,7 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
   
     const upc = upcMatch[1];
     const remainingBeforeDate = beforeDate.slice(upcMatch[0].length).trim();
+  
     const afterParts = afterDate.split(/\s+/).filter(Boolean);
     if (afterParts.length < 4) return null;
   
@@ -737,23 +738,21 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     const amt = extractAmount(amtRaw);
     if (amt === null) return null;
   
-    const extractCustomerFromFlatRow = (value: string): string => {
+    const extractCustomerOnly = (value: string): string => {
       const cleaned = value.replace(/\s+/g, " ").trim();
-    
-      // Customer name starts at a known retailer keyword
-      const retailerMatch = cleaned.match(
-        /\b(KROGER|PICK N SAVE|METRO MARKET|MARIANO'S|MARIANOS|DILLONS|DOOR DASH|GREEN EARTH|FRESH THYME|JEWEL|SMITH'S|SMITHS|RALPH'S|RALPHS|FRED MEYER|HARRIS TEETER|KING SOOPERS)\b.*/i
+  
+      // For this PDF layout, customer starts at the retailer name.
+      const retailerStart = cleaned.match(
+        /\b(KROGER|DILLONS|PICK N SAVE|METRO MARKET|MARIANO'?S|FRESH THYME|JEWEL|SMITH'?S|RALPH'?S|FRED MEYER|HARRIS TEETER|KING SOOPERS)\b.*$/i
       );
-      if (retailerMatch) return retailerMatch[0].trim();
-    
-      // Fallback: store number pattern like "#107" or "KRO..."
-      const storeMatch = cleaned.match(/([A-Z0-9'&.\- ]+#\d+\s*[A-Z]*)$/i);
-      if (storeMatch?.[1]) return storeMatch[1].trim();
-    
-      return cleaned;
+      if (retailerStart) {
+        return retailerStart[0].replace(/\s+/g, " ").trim();
+      }
+  
+      return "";
     };
   
-    const customer = extractCustomerFromFlatRow(remainingBeforeDate);
+    const customer = extractCustomerOnly(remainingBeforeDate);
     if (!customer) return null;
   
     return {
