@@ -739,41 +739,48 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     const amt = extractAmount(amtRaw);
     if (amt === null) return null;
 
-    // IMPORTANT:
-    // Keep the full customer text. Do NOT slice the last 3 tokens.
-    // That was turning "PICK N SAVE #412 KGR" into "SAVE #412 KGR".
-    const extractCustomerFromFlatRow = (value: string): string => {
-      const cleaned = value.replace(/\s+/g, " ").trim();
-    
-      // Known customer tails in this spoil format
-      const customerPatterns = [
-        /(METRO MARKET\s*#\d+\s*KGR)$/i,
-        /(PICK N SAVE\s*#\d+\s*KGR)$/i,
-        /(MARIANO'?S\s*#\d+\s*KGR)$/i,
-        /(SAVE\s*#\d+\s*KGR)$/i,
-        /(MARKET\s*#\d+\s*KGR)$/i,
-      ];
-    
-      for (const pattern of customerPatterns) {
-        const m = cleaned.match(pattern);
-        if (m?.[1]) return m[1].replace(/\s+/g, " ").trim();
-      }
-    
-      return cleaned;
-    };
-    
-    const customer = extractCustomerFromFlatRow(remainingBeforeDate);
-    if (!customer) return null;
+   // IMPORTANT:
+// Keep the full customer text. Do NOT slice the last 3 tokens.
+// That was turning "PICK N SAVE #412 KGR" into "SAVE #412 KGR".
+const extractCustomerFromFlatRow = (value: string): string => {
+  const cleaned = value.replace(/\s+/g, " ").trim();
 
-    return {
-      upc,
-      item: "",
-      cust_name: customer,
-      amt,
-      qty: parseInt(qtyRaw, 10),
-      rate: parseFloat(rateRaw.replace("%", "")) / 100,
-    };
-  };
+  // Split into tokens
+  const tokens = cleaned.split(" ");
+
+  // We walk backwards to capture:
+  // CUSTOMER #NUMBER SUFFIX (like KGR, KG, etc.)
+
+  const result: string[] = [];
+
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const t = tokens[i];
+
+    // Always include last tokens first
+    result.unshift(t);
+
+    // Stop condition:
+    // once we hit something that looks like a product/brand separator
+    // (heuristic: long uppercase words before customer block)
+    if (result.length >= 3 && /^[A-Z]{3,}$/.test(tokens[i - 1] || "")) {
+      break;
+    }
+  }
+
+  return result.join(" ");
+};
+
+const customer = extractCustomerFromFlatRow(remainingBeforeDate);
+if (!customer) return null;
+
+return {
+  upc,
+  item: "",
+  cust_name: customer,
+  amt,
+  qty: parseInt(qtyRaw, 10),
+  rate: parseFloat(rateRaw.replace("%", "")) / 100,
+};
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
