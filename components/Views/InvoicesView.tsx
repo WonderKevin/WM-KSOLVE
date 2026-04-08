@@ -742,7 +742,27 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
     // IMPORTANT:
     // Keep the full customer text. Do NOT slice the last 3 tokens.
     // That was turning "PICK N SAVE #412 KGR" into "SAVE #412 KGR".
-    const customer = stripTrailingTokensBeforeDate(remainingBeforeDate);
+    const extractCustomerFromFlatRow = (value: string): string => {
+      const cleaned = value.replace(/\s+/g, " ").trim();
+    
+      // Known customer tails in this spoil format
+      const customerPatterns = [
+        /(METRO MARKET\s*#\d+\s*KGR)$/i,
+        /(PICK N SAVE\s*#\d+\s*KGR)$/i,
+        /(MARIANO'?S\s*#\d+\s*KGR)$/i,
+        /(SAVE\s*#\d+\s*KGR)$/i,
+        /(MARKET\s*#\d+\s*KGR)$/i,
+      ];
+    
+      for (const pattern of customerPatterns) {
+        const m = cleaned.match(pattern);
+        if (m?.[1]) return m[1].replace(/\s+/g, " ").trim();
+      }
+    
+      return cleaned;
+    };
+    
+    const customer = extractCustomerFromFlatRow(remainingBeforeDate);
     if (!customer) return null;
 
     return {
@@ -1557,24 +1577,13 @@ async function replaceDatasetRowsForInvoice(
   if (deleteError) throw new Error(`Failed clearing old dataset rows: ${deleteError.message}`);
   if (!inserts.length) return 0;
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const { error: insertError } = await supabase
+  .from("broker_commission_datasets")
+  .insert(inserts);
 
-  const res = await fetch(`${supabaseUrl}/rest/v1/broker_commission_datasets`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": supabaseKey,
-      "Authorization": `Bearer ${supabaseKey}`,
-      "Prefer": "return=minimal",
-    },
-    body: JSON.stringify(inserts),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Failed saving dataset rows: ${errText}`);
-  }
+if (insertError) {
+  throw new Error(`Failed saving dataset rows: ${insertError.message}`);
+}
 
   return inserts.length;
 }
