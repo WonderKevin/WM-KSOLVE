@@ -713,52 +713,32 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
   };
 
   const parseFlatSpoilsTableRowLoose = (line: string): DatasetRow | null => {
-    const dateMatch = line.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/);
-    if (!dateMatch || dateMatch.index == null) return null;
+    const rowMatch = line.match(
+      /^(\d{10,14})\s+(.+?)\s+(WONDR)\s+(.+?)\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?%)\s+\$?([.]?\d+\.\d{2})$/i
+    );
   
-    const beforeDate = line.slice(0, dateMatch.index).trim();
-    const afterDate = line.slice(dateMatch.index + dateMatch[0].length).trim();
+    if (!rowMatch) return null;
   
-    const upcMatch = beforeDate.match(/^(\d{10,14})\s+/);
-    if (!upcMatch) return null;
+    const [
+      ,
+      upc,
+      _item,
+      _brand,
+      customerName,
+      _date,
+      _invoice,
+      qtyRaw,
+      rateRaw,
+      amtRaw,
+    ] = rowMatch;
   
-    const upc = upcMatch[1];
-    const remainingBeforeDate = beforeDate.slice(upcMatch[0].length).trim();
-  
-    const afterParts = afterDate.split(/\s+/).filter(Boolean);
-    if (afterParts.length < 4) return null;
-  
-    const qtyRaw = afterParts[1];
-    const rateRaw = afterParts[2];
-    const amtRaw = afterParts[afterParts.length - 1];
-  
-    if (!/^\d+$/.test(qtyRaw)) return null;
-    if (!/^\d+(?:\.\d+)?%$/.test(rateRaw)) return null;
-  
-    const amt = extractAmount(amtRaw);
-    if (amt === null) return null;
-  
-    const extractCustomerOnly = (value: string): string => {
-      const cleaned = value.replace(/\s+/g, " ").trim();
-  
-      // For this PDF layout, customer starts at the retailer name.
-      const retailerStart = cleaned.match(
-        /\b(KROGER|DILLONS|PICK N SAVE|METRO MARKET|MARIANO'?S|FRESH THYME|JEWEL|SMITH'?S|RALPH'?S|FRED MEYER|HARRIS TEETER|KING SOOPERS)\b.*$/i
-      );
-      if (retailerStart) {
-        return retailerStart[0].replace(/\s+/g, " ").trim();
-      }
-  
-      return "";
-    };
-  
-    const customer = extractCustomerOnly(remainingBeforeDate);
-    if (!customer) return null;
+    const amt = parseFloat(amtRaw.startsWith(".") ? `0${amtRaw}` : amtRaw);
+    if (Number.isNaN(amt)) return null;
   
     return {
-      upc,
+      upc: upc.trim(),
       item: "",
-      cust_name: customer,
+      cust_name: customerName.replace(/\s+/g, " ").trim(),
       amt,
       qty: parseInt(qtyRaw, 10),
       rate: parseFloat(rateRaw.replace("%", "")) / 100,
