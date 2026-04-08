@@ -713,21 +713,24 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
   };
 
   const parseFlatSpoilsTableRowLoose = (line: string): DatasetRow | null => {
-    const rowMatch = line.match(
-      /^(\d{10,14})\s+(.+?)\s+(WONDR)\s+(.+?)\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?%)\s+\$?(\d+\.\d{2}|\.\d{2})$/i
+    const cleaned = line.replace(/\s+/g, " ").trim();
+  
+    // Example:
+    // 850067781066 CHEESECAKE KEY LIME PIE WONDR KRO COL 264, LANCASTER 02/12/2026 406863 12 2% $.77
+  
+    const rowMatch = cleaned.match(
+      /^(\d{10,14})\s+(.+?)\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?)%\s+\$?(\d+\.\d{2}|\.\d{2})$/i
     );
   
     if (!rowMatch) {
-      console.log("[parseFlatSpoilsTableRowLoose] NO MATCH:", line);
+      console.log("[parseFlatSpoilsTableRowLoose] NO ROW MATCH:", cleaned);
       return null;
     }
   
     const [
       ,
       upc,
-      _item,
-      _brand,
-      customerName,
+      leftSide,   // ITEM + BRAND + CUSTOMER
       _date,
       _invoice,
       qtyRaw,
@@ -735,17 +738,32 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       amtRaw,
     ] = rowMatch;
   
+    const brandMatch = leftSide.match(/^(.*)\s+\bWONDR\b\s+(.+)$/i);
+    if (!brandMatch) {
+      console.log("[parseFlatSpoilsTableRowLoose] NO BRAND SPLIT:", cleaned);
+      return null;
+    }
+  
+    const customerName = brandMatch[2].trim();
+    if (!customerName) {
+      console.log("[parseFlatSpoilsTableRowLoose] EMPTY CUSTOMER:", cleaned);
+      return null;
+    }
+  
     const normalizedAmt = amtRaw.startsWith(".") ? `0${amtRaw}` : amtRaw;
     const amt = parseFloat(normalizedAmt);
-    if (Number.isNaN(amt)) return null;
+    if (Number.isNaN(amt)) {
+      console.log("[parseFlatSpoilsTableRowLoose] BAD AMOUNT:", cleaned, amtRaw);
+      return null;
+    }
   
     return {
       upc: upc.trim(),
       item: "",
-      cust_name: customerName.replace(/\s+/g, " ").trim(),
+      cust_name: customerName,
       amt,
       qty: parseInt(qtyRaw, 10),
-      rate: parseFloat(rateRaw.replace("%", "")) / 100,
+      rate: parseFloat(rateRaw) / 100,
     };
   };
 
@@ -760,46 +778,55 @@ function parseSpoilsPdfRows(text: string): DatasetRow[] {
       continue;
     }
 
-    // ── Format 1: flat table rows ─────────────────────────────────────────────
-    if (inFlatTable) {
-      if (
-        /^TOTAL\s*:?\s*\$?[\d,]+\.\d{2}$/i.test(line) ||
-        /^invoice\s+total\b/i.test(line) ||
-        /^accounts\s+due\b/i.test(line)
-      ) {
-        inFlatTable = false;
-        continue;
-      }
-
-      const flatRow = parseFlatSpoilsTableRowLoose(line);
-      if (flatRow) {
-        rows.push(flatRow);
-        debug.parsedRows.push({
-          lineIndex: i,
-          upc: flatRow.upc,
-          customer: flatRow.cust_name,
-          amount: flatRow.amt,
-          mode: "flat-table-loose",
-        });
-        continue;
-      }
+  // ── Format 1: flat table rows ─────────────────────────────────────────────
+  if (inFlatTable) {
+    if (
+      /^TOTAL\s*:?\s*\$?[\d,]+\.\d{2}$/i.test(line) ||
+      /^invoice\s+total\b/i.test(line) ||
+      /^accounts\s+due\b/i.test(line)
+    ) {
+      inFlatTable = false;
+      continue;
     }
 
-    // Safety: sometimes OCR gives a flat row even when header wasn't captured
-    if (!inFlatTable && looksLikeFlatSpoilsRow(line)) {
-      const flatRow = parseFlatSpoilsTableRowLoose(line);
-      if (flatRow) {
-        rows.push(flatRow);
-        debug.parsedRows.push({
-          lineIndex: i,
-          upc: flatRow.upc,
-          customer: flatRow.cust_name,
-          amount: flatRow.amt,
-          mode: "flat-opportunistic",
-        });
-        continue;
-      }
+    const flatRow = parseFlatSpoilsTableRowLoose(line);
+
+    if (flatRow) {
+      rows.push(flatRow);
+      debug.parsedRows.push({
+        lineIndex: i,
+        upc: flatRow.upc,
+        customer: flatRow.cust_name,
+        amount: flatRow.amt,
+        mode: "flat-table-loose",
+      });
+      continue;
+    } else {
+      console.log("[parseSpoilsPdfRows] FLAT ROW FAILED:", i, line);
+      debug.skipped.push({
+        lineIndex: i,
+        line,
+        reason: "flat-table row failed",
+        currentUpc,
+      });
     }
+  }
+
+  // Safety: sometimes OCR gives a flat row even when header wasn't captured
+  if (!inFlatTable && looksLikeFlatSpoilsRow(line)) {
+    const flatRow = parseFlatSpoilsTableRowLoose(line);
+    if (flatRow) {
+      rows.push(flatRow);
+      debug.parsedRows.push({
+        lineIndex: i,
+        upc: flatRow.upc,
+        customer: flatRow.cust_name,
+        amount: flatRow.amt,
+        mode: "flat-opportunistic",
+      });
+      continue;
+    }
+  }
 
     // ── Format 2: grouped UPC blocks ──────────────────────────────────────────
     const upcMatch = line.match(/^UPC\s*:?\s*(\d{10,14})\b/i);
