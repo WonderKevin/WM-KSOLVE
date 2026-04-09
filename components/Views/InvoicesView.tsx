@@ -2103,6 +2103,25 @@ export default function InvoicesView({
   const toggleSelectOne = (id: number) =>
     setSelectedIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
+  const handleDeleteRow = async (row: InvoiceRecord) => {
+    if (!window.confirm(`Delete invoice row ${row.invoice_number || ""}?`)) return;
+  
+    try {
+      const { error } = await supabase
+        .from("invoices")
+        .delete()
+        .eq("id", row.id);
+  
+      if (error) throw error;
+  
+      showToast("Row deleted.", "success");
+      await loadData();
+    } catch (e: any) {
+      showToast(e.message || "Delete failed.", "error");
+    }
+  };
+
+
   const handleDeleteSelected = async () => {
     if (selectedIds.length === 0 && deleteMonth === "Delete Month") { showToast("No rows selected.", "info"); return; }
     if (!window.confirm("Are you sure you want to delete the data?")) return;
@@ -2359,9 +2378,9 @@ export default function InvoicesView({
           ) : filteredRows.length === 0 ? (
             <p className="text-sm text-slate-500">No invoices found.</p>
           ) : (
-            <div className="overflow-x-auto rounded-2xl border">
-              <table className="min-w-full text-sm">
-                <thead className="sticky top-0 z-10 bg-slate-100">
+            <div className="max-h-[70vh] overflow-auto rounded-2xl border">
+  <table className="min-w-full text-sm">
+    <thead className="sticky top-0 z-10 bg-slate-100">
                   <tr>
                     {selectMode && <th className="px-4 py-3 text-left font-semibold"></th>}
                     <th className="px-4 py-3 text-left font-semibold">Month</th>
@@ -2406,7 +2425,14 @@ export default function InvoicesView({
                               {docType === "excel" ? <FileSpreadsheet className="h-5 w-5" /> : <FileText className="h-5 w-5" />}
                             </button>
                           ) : (
-                            <span className="text-slate-300" title="No document"><XCircle className="h-5 w-5" /></span>
+                            <button
+  type="button"
+  onClick={() => handleDeleteRow(row)}
+  className="text-slate-300 hover:text-red-600"
+  title="Delete row"
+>
+  <XCircle className="h-5 w-5" />
+</button>
                           )}
                         </td>
                       </tr>
