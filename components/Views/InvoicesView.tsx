@@ -1263,36 +1263,33 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    const soldToInline = line.match(/^sold\s+to:\s*(.+)/i);
-    if (soldToInline && soldToInline[1].trim()) {
+    // Capture customer from SOLD TO:
+    const soldToInline = line.match(/^sold\s+to:\s*(.+)$/i);
+    if (soldToInline?.[1]) {
       currentCustomer = soldToInline[1].trim();
       continue;
     }
 
-    if (/^sold\s+to:\s*$/i.test(line)) {
-      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
-        const next = lines[j].trim();
-        if (next && !/^\d{5,}$/.test(next) && !/^telephone/i.test(next) && next.length > 3) {
-          currentCustomer = next;
-          break;
-        }
+    // Look for product detail row:
+    // Example:
+    // 850067781097 12 WONDR CHEESECAKE 9873689 2/26/26 12/452009 4.62 1.00 12.00
+    const rowMatch = line.match(
+      /^(\d{10,14})\s+(\d+)\s+(.+?)\s+\d+\s+\d{1,2}\/\d{1,2}\/\d{2,4}\s+\S+\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+([\d,]+\.\d{2})$/i
+    );
+
+    if (rowMatch) {
+      const upc = rowMatch[1].trim();
+      const extCost = parseFloat(rowMatch[3].replace(/,/g, ""));
+
+      if (!Number.isNaN(extCost)) {
+        rows.push({
+          upc,
+          item: "",
+          cust_name: currentCustomer,
+          amt: extCost,
+        });
       }
-      continue;
     }
-
-    if (!/^\d{12}$/.test(line)) continue;
-
-    let extCost = 0;
-    for (let j = i + 1; j < Math.min(i + 15, lines.length); j++) {
-      const l = lines[j];
-      if (/^\d{12}$/.test(l) || /^sold\s+to/i.test(l)) break;
-      const numMatch = l.match(/^([\d,]+\.\d{2})$/);
-      if (numMatch) extCost = parseFloat(numMatch[1].replace(/,/g, ""));
-    }
-
-    if (!extCost) continue;
-
-    rows.push({ upc: line, item: "", cust_name: currentCustomer, amt: extCost });
   }
 
   return rows;
