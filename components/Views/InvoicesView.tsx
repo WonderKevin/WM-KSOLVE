@@ -1510,8 +1510,7 @@ function buildDatasetInsert(
   };
 }
 
-const { data: { session } } = await supabase.auth.getSession();
-console.log("Auth session:", session?.user?.email ?? "NO SESSION");
+
 
 async function replaceDatasetRowsForInvoice(
   invoice: string,
@@ -1728,7 +1727,14 @@ export default function InvoicesView({
   };
 
   useEffect(() => {
-    loadData();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      console.log("Auth session:", session?.user?.email ?? "NO SESSION");
+      if (!session) {
+        showToast("You are not logged in. Please sign in.", "error");
+        return;
+      }
+      loadData();
+    });
     fetchDeductionTypes().then(setDeductionTypes);
     fetchProductLookup().then((map) => {
       setExistingDescriptions(Array.from(new Set(Array.from(map.values()).filter(Boolean))).sort());
