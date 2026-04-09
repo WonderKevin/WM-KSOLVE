@@ -1249,6 +1249,8 @@ for (let i = 0; i < lines.length; i++) {
 }
 
 function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
+  console.log("[parseDollarPromotionPdfRows] INPUT TEXT:\n", text);
+
   const rows: DatasetRow[] = [];
   const lines = text
     .replace(/\u00a0/g, " ")
@@ -1264,40 +1266,46 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
     // Capture "SOLD TO: <customer name>" — everything after the colon
     const soldToMatch = line.match(/^SOLD\s+TO:\s*(.+)$/i);
     if (soldToMatch) {
-      // Strip trailing address-like noise — keep only the store name part
-      // e.g. "KRO KS 147, COLORADO SPRINGS" → use as-is
       currentCustomer = soldToMatch[1].trim();
+      console.log("[parseDollarPromotionPdfRows] SOLD TO:", currentCustomer);
       continue;
     }
-
-    // Match data rows:
-    // 850067781097    12 WONDR CHEESECAKE 9873689 2/26/26  12/452009    4.62      1.00     12.00
-    // UPC (12 digits) ... last number on the line = EXT-COST
-    const upcMatch = line.match(/^(\d{10,14})\s+/);
-    if (!upcMatch) continue;
 
     // Skip header/separator lines
     if (/UPC\s*#|---+/i.test(line)) continue;
 
+    // Match data rows by leading 10-14 digit UPC
+    const upcMatch = line.match(/^(\d{10,14})\s+/);
+    if (!upcMatch) continue;
+
     // Extract last numeric value on the line as EXT-COST
     const allNumbers = [...line.matchAll(/([\d,]+\.\d{2})/g)];
-    if (!allNumbers.length) continue;
+    console.log("[parseDollarPromotionPdfRows] LINE:", line, "| ALL NUMBERS:", allNumbers.map(m => m[1]));
+
+    if (!allNumbers.length) {
+      console.log("[parseDollarPromotionPdfRows] SKIPPED (no numbers):", line);
+      continue;
+    }
 
     const extCost = parseFloat(
       allNumbers[allNumbers.length - 1][1].replace(/,/g, "")
     );
 
     if (!Number.isNaN(extCost) && extCost > 0) {
-      rows.push({
+      const row: DatasetRow = {
         upc: upcMatch[1],
         item: "",
         cust_name: currentCustomer,
         amt: extCost,
-      });
+      };
+      console.log("[parseDollarPromotionPdfRows] PUSHED ROW:", row);
+      rows.push(row);
+    } else {
+      console.log("[parseDollarPromotionPdfRows] SKIPPED (bad amount):", line, extCost);
     }
   }
 
-  console.log("[parseDollarPromotionPdfRows] parsed rows:", rows);
+  console.log("[parseDollarPromotionPdfRows] FINAL parsed rows:", rows);
   return rows;
 }
 
@@ -1546,11 +1554,15 @@ async function replaceDatasetRowsForInvoice(
     fetchInvoiceCheckDate(ni),
   ]);
 
+  console.log("[replaceDatasetRowsForInvoice] finalType raw:", it, "| categoryFallback:", categoryFallback);
+  console.log("[replaceDatasetRowsForInvoice] invoiceCheckDate:", invoiceCheckDate);
+
   if (!invoiceCheckDate) {
     throw new Error(`No check date found in invoices for ${ni}. Upload the invoice Excel first.`);
   }
 
   const finalType = normalizeType(it || categoryFallback || "WM Invoice");
+  console.log("[replaceDatasetRowsForInvoice] finalType normalized:", finalType);
 
   if (!detailRows.length) {
     detailRows = [{
@@ -1580,18 +1592,21 @@ async function replaceDatasetRowsForInvoice(
     })
     .map((r) => buildDatasetInsert(r, pl, datasetMonth, datasetCheckDate, ni, finalType));
 
+  console.log("[replaceDatasetRowsForInvoice] inserts:", inserts);
+
   const { error: deleteError } = await supabase.from("broker_commission_datasets").delete().eq("invoice", ni);
   if (deleteError) throw new Error(`Failed clearing old dataset rows: ${deleteError.message}`);
   if (!inserts.length) return 0;
 
   const { error: insertError } = await supabase
-  .from("broker_commission_datasets")
-  .insert(inserts);
+    .from("broker_commission_datasets")
+    .insert(inserts);
 
-if (insertError) {
-  throw new Error(`Failed saving dataset rows: ${insertError.message}`);
-}
+  if (insertError) {
+    throw new Error(`Failed saving dataset rows: ${insertError.message}`);
+  }
 
+  console.log("[replaceDatasetRowsForInvoice] SUCCESS — rows saved:", inserts.length);
   return inserts.length;
 }
 
