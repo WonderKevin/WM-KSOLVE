@@ -1260,26 +1260,20 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
 
   let currentCustomer = "";
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Capture customer from SOLD TO:
-    const soldToInline = line.match(/^sold\s+to:\s*(.+)$/i);
-    if (soldToInline?.[1]) {
-      currentCustomer = soldToInline[1].trim();
+  for (const line of lines) {
+    const soldToMatch = line.match(/^SOLD TO:\s*(.+)$/i);
+    if (soldToMatch) {
+      currentCustomer = soldToMatch[1].trim();
       continue;
     }
 
-    // Look for product detail row:
-    // Example:
-    // 850067781097 12 WONDR CHEESECAKE 9873689 2/26/26 12/452009 4.62 1.00 12.00
     const rowMatch = line.match(
-      /^(\d{10,14})\s+(\d+)\s+(.+?)\s+\d+\s+\d{1,2}\/\d{1,2}\/\d{2,4}\s+\S+\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+([\d,]+\.\d{2})$/i
+      /^(\d{10,14})\s+\d+\s+.+?\s+\d+\s+\d{1,2}\/\d{1,2}\/\d{2,4}\s+\S+\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+([\d,]+\.\d{2})$/i
     );
 
     if (rowMatch) {
-      const upc = rowMatch[1].trim();
-      const extCost = parseFloat(rowMatch[3].replace(/,/g, ""));
+      const upc = rowMatch[1];
+      const extCost = parseFloat(rowMatch[2].replace(/,/g, ""));
 
       if (!Number.isNaN(extCost)) {
         rows.push({
@@ -1292,6 +1286,7 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
     }
   }
 
+  console.log("[parseDollarPromotionPdfRows] parsed rows:", rows);
   return rows;
 }
 
@@ -1524,6 +1519,7 @@ async function replaceDatasetRowsForInvoice(
   } else if (detectedType === "pdf") {
     const { fullText } = await safeExtractPdfText(file);
     detailRows = await parseDetailRows(file, fullText);
+    console.log("[replaceDatasetRowsForInvoice] detailRows:", detailRows);
     console.log("PARSED DETAIL ROWS", { invoice: ni, count: detailRows.length, rows: detailRows.slice(0, 10) });
     if (!categoryFallback) {
       const pm = parseMetadataFromText(fullText);
