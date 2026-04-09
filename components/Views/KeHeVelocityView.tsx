@@ -35,7 +35,7 @@ type MissingLocationEntry = {
 };
 
 const SHIP_DIVISOR = 36.03;
-const RETAILER_OPTIONS = ["INFRA", "KROGER", "FRESH"];
+const RETAILER_OPTIONS = ["INFRA & Others", "Kroger", "Fresh Thyme"];
 
 function formatMonthLabel(monthNumber: number, year: number) {
   const date = new Date(year, monthNumber - 1, 1);
