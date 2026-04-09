@@ -1261,28 +1261,39 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
   let currentCustomer = "";
 
   for (const line of lines) {
-    const soldToMatch = line.match(/^SOLD TO:\s*(.+)$/i);
+    // Capture "SOLD TO: <customer name>" — everything after the colon
+    const soldToMatch = line.match(/^SOLD\s+TO:\s*(.+)$/i);
     if (soldToMatch) {
+      // Strip trailing address-like noise — keep only the store name part
+      // e.g. "KRO KS 147, COLORADO SPRINGS" → use as-is
       currentCustomer = soldToMatch[1].trim();
       continue;
     }
 
-    const rowMatch = line.match(
-      /^(\d{10,14})\s+\d+\s+.+?\s+\d+\s+\d{1,2}\/\d{1,2}\/\d{2,4}\s+\S+\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+([\d,]+\.\d{2})$/i
+    // Match data rows:
+    // 850067781097    12 WONDR CHEESECAKE 9873689 2/26/26  12/452009    4.62      1.00     12.00
+    // UPC (12 digits) ... last number on the line = EXT-COST
+    const upcMatch = line.match(/^(\d{10,14})\s+/);
+    if (!upcMatch) continue;
+
+    // Skip header/separator lines
+    if (/UPC\s*#|---+/i.test(line)) continue;
+
+    // Extract last numeric value on the line as EXT-COST
+    const allNumbers = [...line.matchAll(/([\d,]+\.\d{2})/g)];
+    if (!allNumbers.length) continue;
+
+    const extCost = parseFloat(
+      allNumbers[allNumbers.length - 1][1].replace(/,/g, "")
     );
 
-    if (rowMatch) {
-      const upc = rowMatch[1];
-      const extCost = parseFloat(rowMatch[2].replace(/,/g, ""));
-
-      if (!Number.isNaN(extCost)) {
-        rows.push({
-          upc,
-          item: "",
-          cust_name: currentCustomer,
-          amt: extCost,
-        });
-      }
+    if (!Number.isNaN(extCost) && extCost > 0) {
+      rows.push({
+        upc: upcMatch[1],
+        item: "",
+        cust_name: currentCustomer,
+        amt: extCost,
+      });
     }
   }
 
