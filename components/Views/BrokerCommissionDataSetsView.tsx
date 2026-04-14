@@ -389,6 +389,10 @@ export default function BrokerCommissionDataSetsView() {
 
     // Build the map once, reuse for every dataset row
     const locationFirstTwoMap = buildLocationFirstTwoMap(locations);
+console.log("KRO NASH in map?", locationFirstTwoMap.has("KRO NASH"));
+console.log("Total map size:", locationFirstTwoMap.size);
+console.log("Total locations loaded:", locations.length);
+
 
     const overrideMap = new Map(
       ((overrideData ?? []) as RetailerOverrideRow[]).map((row) => [
