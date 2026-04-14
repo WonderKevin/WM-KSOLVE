@@ -239,6 +239,11 @@ function findRetailer(
   return categorizeRetailerName(twoWordMatch.retailer);
 }
 
+function stripLocationSuffix(rawCustomer: string): string {
+  const dashIndex = rawCustomer.indexOf(" - ");
+  return dashIndex !== -1 ? rawCustomer.slice(0, dashIndex) : rawCustomer;
+}
+
 function applyAmountBasedDiscrepancy(
   baseRows: Omit<Row, "discrepancyShare" | "adjustedAmt">[],
   discrepancyByInvoice: Map<string, number>
