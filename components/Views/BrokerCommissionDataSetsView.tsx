@@ -153,6 +153,28 @@ function stripLocationSuffix(rawCustomer: string): string {
   return dashIndex !== -1 ? rawCustomer.slice(0, dashIndex) : rawCustomer;
 }
 
+/**
+ * Fix for retailer matching:
+ * Normalize both dataset customer names and locations customer names to the same
+ * lookup key by removing trailing digits from each token before taking the first two words.
+ *
+ * Example:
+ * - "KRO NASH 527, NASHVILLE"   -> "KRO NASH"
+ * - "KRO NASH527, NASHVILLE..." -> "KRO NASH"
+ */
+function getCustomerLookupKey(rawCustomer: string) {
+  const normalized = normalizeText(stripLocationSuffix(rawCustomer));
+  if (!normalized) return "";
+
+  const cleanedWords = normalized
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.replace(/\d+$/g, ""))
+    .filter(Boolean);
+
+  return cleanedWords.slice(0, 2).join(" ");
+}
+
 function categorizeRetailerName(rawRetailer: string) {
   const retailer = normalizeText(rawRetailer);
 
@@ -164,18 +186,19 @@ function categorizeRetailerName(rawRetailer: string) {
   return "INFRA & Others";
 }
 
-// Build a lookup map keyed by normalized first-two-words of each location.
-// stripLocationSuffix is called on the RAW string before normalizeText
-// so that " - " is still detectable as a suffix separator.
+// Build a lookup map keyed by normalized customer banner key.
+// stripLocationSuffix is called before normalizeText inside getCustomerLookupKey
+// so location suffixes like " - NASHVILLE, TN" do not affect the match.
 function buildLocationFirstTwoMap(locations: LocationRow[]): Map<string, LocationRow> {
   const map = new Map<string, LocationRow>();
+
   for (const loc of locations) {
-    const stripped = stripLocationSuffix(loc.customer); // strip BEFORE normalizing
-    const firstTwo = getFirstTwoWords(normalizeText(stripped));
-    if (firstTwo && !map.has(firstTwo)) {
-      map.set(firstTwo, loc);
+    const key = getCustomerLookupKey(loc.customer);
+    if (key && !map.has(key)) {
+      map.set(key, loc);
     }
   }
+
   return map;
 }
 
@@ -202,13 +225,10 @@ function findRetailer(
 
   if (/^DC\s*\d+$/i.test(trimmedCustomer)) return "";
 
-  const normalizedCustomer = normalizeText(trimmedCustomer);
-  if (!normalizedCustomer) return "";
+  const customerKey = getCustomerLookupKey(trimmedCustomer);
+  if (!customerKey) return "";
 
-  const firstTwo = getFirstTwoWords(normalizedCustomer);
-  if (!firstTwo) return "";
-
-  const match = locationFirstTwoMap.get(firstTwo);
+  const match = locationFirstTwoMap.get(customerKey);
   if (!match) return "";
 
   return categorizeRetailerName(match.retailer);
@@ -389,10 +409,9 @@ export default function BrokerCommissionDataSetsView() {
 
     // Build the map once, reuse for every dataset row
     const locationFirstTwoMap = buildLocationFirstTwoMap(locations);
-console.log("KRO NASH in map?", locationFirstTwoMap.has("KRO NASH"));
-console.log("Total map size:", locationFirstTwoMap.size);
-console.log("Total locations loaded:", locations.length);
-
+    console.log("KRO NASH in map?", locationFirstTwoMap.has("KRO NASH"));
+    console.log("Total map size:", locationFirstTwoMap.size);
+    console.log("Total locations loaded:", locations.length);
 
     const overrideMap = new Map(
       ((overrideData ?? []) as RetailerOverrideRow[]).map((row) => [
