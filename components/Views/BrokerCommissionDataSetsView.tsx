@@ -210,19 +210,33 @@ function findRetailer(
   const directRetailer = directRetailerFromCustomer(custName);
   if (directRetailer) return directRetailer;
 
-  const firstTwoCustomer = getFirstTwoWords(trimmedCustomer);
+  const normalizedDatasetCustomer = normalizeText(trimmedCustomer);
 
-  if (!firstTwoCustomer) return "";
+  if (!normalizedDatasetCustomer) return "";
   if (/^DC\s*\d+$/i.test(trimmedCustomer)) return "";
 
-  const match = locations.find((loc) => {
-    const firstTwoLocation = getFirstTwoWords(loc.customer);
-    return firstTwoCustomer === firstTwoLocation;
+  const datasetFirstTwo = getFirstTwoWords(normalizedDatasetCustomer);
+
+  // 1. Try exact match first (most precise)
+  const exactMatch = locations.find((loc) => {
+    const normalizedLocation = normalizeText(stripLocationSuffix(loc.customer));
+    return normalizedDatasetCustomer === normalizedLocation;
   });
 
-  if (!match) return "";
+  if (exactMatch) return categorizeRetailerName(exactMatch.retailer);
 
-  return categorizeRetailerName(match.retailer);
+  // 2. Fall back to first-two-words match
+  if (!datasetFirstTwo) return "";
+
+  const twoWordMatch = locations.find((loc) => {
+    const normalizedLocation = normalizeText(stripLocationSuffix(loc.customer));
+    const locationFirstTwo = getFirstTwoWords(normalizedLocation);
+    return datasetFirstTwo === locationFirstTwo;
+  });
+
+  if (!twoWordMatch) return "";
+
+  return categorizeRetailerName(twoWordMatch.retailer);
 }
 
 function applyAmountBasedDiscrepancy(
