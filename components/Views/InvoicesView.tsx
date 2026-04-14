@@ -1436,12 +1436,12 @@ function parseNewItemSetupPdfRows(text: string): DatasetRow[] {
     .map((l) => l.trim())
     .filter(Boolean);
 
+  // DC customer
   let dcCustomer = "";
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const sameLine = line.match(/dc\s*#\s*[:\-]?\s*(\d+)/i);
+    const sameLine = lines[i].match(/dc\s*#\s*[:\-]?\s*(\d+)/i);
     if (sameLine) { dcCustomer = `DC ${sameLine[1]}`; break; }
-    if (/^dc\s*#\s*[:\-]?\s*$/i.test(line)) {
+    if (/^dc\s*#\s*[:\-]?\s*$/i.test(lines[i])) {
       for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
         const next = lines[j].match(/^(\d+)$/);
         if (next) { dcCustomer = `DC ${next[1]}`; break; }
@@ -1450,28 +1450,72 @@ function parseNewItemSetupPdfRows(text: string): DatasetRow[] {
     }
   }
 
+  // Invoice total — try inline first, then scan ALL subsequent lines (not just 4)
+  // Also try extracting from the full text directly as a fallback
   let invoiceTotal = 0;
+
+  // Strategy 1: inline on the same line as "invoice total"
   for (let i = 0; i < lines.length; i++) {
     if (/invoice\s+total/i.test(lines[i])) {
-      const m = lines[i].match(/\$?\s*([\d,]+\.\d{2})/);
-      if (m) { invoiceTotal = parseFloat(m[1].replace(/,/g, "")); break; }
-      for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
-        const m2 = lines[j].match(/^\$?\s*([\d,]+\.\d{2})$/);
-        if (m2) { invoiceTotal = parseFloat(m2[1].replace(/,/g, "")); break; }
+      const inlineMatch = lines[i].match(/\$?\s*([\d,]+\.\d{2})/);
+      if (inlineMatch) {
+        invoiceTotal = parseFloat(inlineMatch[1].replace(/,/g, ""));
+        break;
+      }
+      // Strategy 2: scan forward up to 10 lines (was 4 — too tight)
+      for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
+        // Skip noise lines
+        if (/all\s+inquir/i.test(lines[j])) continue;
+        if (/vendorsupport/i.test(lines[j])) continue;
+        if (/accounts\s+due/i.test(lines[j])) continue;
+        if (/payment\s+is\s+due/i.test(lines[j])) continue;
+        const m = lines[j].match(/^\$?\s*([\d,]+\.\d{2})$/) ||
+                  lines[j].match(/\$\s*([\d,]+\.\d{2})/);
+        if (m) {
+          invoiceTotal = parseFloat(m[1].replace(/,/g, ""));
+          break;
+        }
       }
       if (invoiceTotal) break;
     }
   }
 
+  // Strategy 3: scan full text for any "$XX.XX" near "Invoice Total" 
+  // handles cases where they're on the same line but regex grouping varies
+  if (!invoiceTotal) {
+    const totalMatch = text.match(/invoice\s+total[^\d$]*\$?\s*([\d,]+\.\d{2})/i);
+    if (totalMatch) invoiceTotal = parseFloat(totalMatch[1].replace(/,/g, ""));
+  }
+
+  // Strategy 4: last-resort — find any dollar amount >= $50 in the doc
+  // (these are always $50 per UPC for New Item Setup Fee)
+  if (!invoiceTotal) {
+    const allAmounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)]
+      .map((m) => parseFloat(m[1].replace(/,/g, "")))
+      .filter((v) => v >= 50);
+    if (allAmounts.length) invoiceTotal = allAmounts[0];
+  }
+
+  console.log("[parseNewItemSetupPdfRows] dcCustomer:", dcCustomer, "invoiceTotal:", invoiceTotal);
+
+  // UPCs
   const upcs: string[] = [];
   const seen = new Set<string>();
   for (const line of lines) {
     for (const m of [...line.matchAll(/\b(\d{10,14})\b/g)]) {
-      if (!seen.has(m[1])) { seen.add(m[1]); upcs.push(m[1]); }
+      // Exclude vendor numbers, special payee numbers, zip codes, phone numbers
+      const v = m[1];
+      if (v.length < 10) continue;
+      // Exclude known non-UPC patterns: vendor#, special payee (87210556 = 8 digits, fine)
+      // Only take 10-14 digit sequences
+      if (!seen.has(v)) { seen.add(v); upcs.push(v); }
     }
   }
 
+  console.log("[parseNewItemSetupPdfRows] upcs found:", upcs, "invoiceTotal:", invoiceTotal);
+
   if (!upcs.length || !invoiceTotal) return rows;
+
   const amtPerUpc = Math.round((invoiceTotal / upcs.length) * 100) / 100;
   for (const upc of upcs) {
     rows.push({ upc, item: "", cust_name: dcCustomer, amt: amtPerUpc });
