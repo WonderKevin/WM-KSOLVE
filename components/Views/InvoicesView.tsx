@@ -379,6 +379,7 @@ function parseMetadataFromText(text: string) {
     /fresh\s+thyme\s+sas/i.test(lower) &&
     /chargeback/i.test(lower);
 
+  // ── Category detection ──────────────────────────────────────────────────────
   if (isCustomerSpoilageNatural) category = "Customer Spoils Allowance";
   else if (isDollarPromotion) category = "$1 Promotion";
   else if (isStrictWMInvoice || isWMInvoicePdf) category = "WM Invoice";
@@ -407,73 +408,122 @@ function parseMetadataFromText(text: string) {
     }
   }
 
+  // ── Helper: safe invoice candidate ─────────────────────────────────────────
+  // Rejects reference numbers, dates, comment codes like "12/452009"
+  const isSafeInvoice = (raw: string): boolean => {
+    const v = normalizeInvoiceNumber(raw);
+    if (!v || isBadInvoiceCandidate(v)) return false;
+    // Reject slash-separated values (reference/comment codes like 12/452009)
+    if (/\//.test(raw)) return false;
+    // Reject pure date-like patterns mm/dd/yy or dd/mm/yy
+    if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(raw.trim())) return false;
+    // Reject very long pure-digit strings that look like reference numbers (7+ digits)
+    // UNLESS they start with leading zeros (invoice style like 0101348)
+    if (/^\d{7,}$/.test(v) && !/^0\d+$/.test(v)) return false;
+    return true;
+  };
+
+  // ── WM Invoice / Strict WM Invoice ─────────────────────────────────────────
   if (category === "WM Invoice" || isStrictWMInvoice || isWMInvoicePdf) {
     const m =
       norm.match(/invoice\s*no\.?\s*[:\-]?\s*([A-Z0-9\-\/]+)/i) ||
       norm.match(/invoice\s*#\s*[:\-]?\s*([A-Z0-9\-\/]+)/i);
-    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    if (m?.[1] && isSafeInvoice(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+
     const d =
       norm.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
       norm.match(/ship\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
     if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
+  // ── $1 Promotion / Distributor Charge ──────────────────────────────────────
   if (category === "$1 Promotion" || isDollarPromotion) {
-    const m =
-      norm.match(/invoice\s*#\s*0*(\d+)/i) ||
-      norm.match(/invoice\s+#(\d+)/i);
-    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    // Priority 1: explicit "INVOICE #XXXXXXX" pattern — handles leading zeros
+    const explicit =
+      norm.match(/INVOICE\s*#\s*(\d+)/i) ||
+      norm.match(/INVOICE\s+NUMBER\s*[:\-]?\s*(\d+)/i);
+    if (explicit?.[1] && isSafeInvoice(explicit[1])) {
+      invoice = normalizeInvoiceNumber(explicit[1]);
+    }
+
+    // Priority 2: "Invoice #" anywhere with optional leading zeros
+    if (invoice === "Unknown") {
+      const m = norm.match(/invoice\s*#\s*0*(\d+)/i);
+      if (m?.[1] && isSafeInvoice(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    }
+
+    // Priority 3: filename-style invoice at very start of text (e.g. "#0101348")
+    if (invoice === "Unknown") {
+      const m = norm.match(/#\s*(0\d{4,})\b/);
+      if (m?.[1] && isSafeInvoice(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    }
+
+    // Date
     const d = norm.match(/\bdate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i);
     if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
+
+    // Fallback date: bottom "Date MM/DD/YYYY" stamp common in these PDFs
+    if (pdf_date === "Unknown") {
+      const d2 = norm.match(/\bDate\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/);
+      if (d2?.[1]) pdf_date = normalizeDocDate(d2[1]);
+    }
   }
 
+  // ── Pass Thru Deduction / Fresh Thyme SAS ──────────────────────────────────
   if (invoice === "Unknown" && (category === "Pass Thru Deduction" || isFreshThymeSas)) {
     const m = norm.match(/invoice\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
-    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    if (m?.[1] && isSafeInvoice(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+
     const d =
       norm.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
       norm.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
     if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
+  // ── Customer Spoils Allowance ───────────────────────────────────────────────
   if (invoice === "Unknown" && category === "Customer Spoils Allowance") {
     const m =
       norm.match(/invoice\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i) ||
       norm.match(/\b(CN\d{9,})\b/i);
-    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    if (m?.[1] && isSafeInvoice(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+
     const d =
       norm.match(/invoice\s*date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i) ||
       norm.match(/date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
     if (d?.[1]) pdf_date = normalizeDocDate(d[1]);
   }
 
+  // ── Generic CN / CS / alphanumeric fallbacks ────────────────────────────────
   if (invoice === "Unknown") {
     for (const p of [/\b(CN\d{9,})\b/i, /\b(CS\d{6,})\b/i, /\b([A-Z]{1,6}\d{6,})\b/]) {
       const m = norm.match(p);
-      if (m?.[1] && !isBadInvoiceCandidate(m[1])) { invoice = normalizeInvoiceNumber(m[1]); break; }
+      if (m?.[1] && isSafeInvoice(m[1])) { invoice = normalizeInvoiceNumber(m[1]); break; }
     }
   }
 
+  // ── Generic "Invoice Number/No/#" label ─────────────────────────────────────
   if (invoice === "Unknown") {
     const generic = norm.match(/Invoice\s*(?:Number|No\.?|#)\s*[:\-]?\s*([A-Z0-9.\-\/]+)/i);
-    if (generic?.[1] && !isBadInvoiceCandidate(generic[1])) invoice = normalizeInvoiceNumber(generic[1]);
+    if (generic?.[1] && isSafeInvoice(generic[1])) invoice = normalizeInvoiceNumber(generic[1]);
   }
 
+  // ── WM Invoice last-chance numeric ──────────────────────────────────────────
   if (invoice === "Unknown" && (category === "WM Invoice" || /wonder\s+monday/i.test(lower))) {
     const m =
       norm.match(/invoice\s*no\.?\s*[:\-]?\s*(\d{1,10})\b/i) ||
       norm.match(/invoice\s*#\s*[:\-]?\s*(\d{1,10})\b/i);
-    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
+    if (m?.[1] && isSafeInvoice(m[1])) invoice = normalizeInvoiceNumber(m[1]);
   }
 
-  if (invoice === "Unknown") {
-    const m = norm.match(/\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{1,})\b/);
-    if (m?.[1] && !isBadInvoiceCandidate(m[1])) invoice = normalizeInvoiceNumber(m[1]);
-  }
+  // ── REMOVED the old greedy catch-all fallback ────────────────────────────────
+  // The old regex /\b([A-Z]{0,10}\d[A-Z0-9.\-\/]{1,})\b/ was grabbing
+  // reference numbers like 8975225 and comment codes like 12/452009.
+  // Each category now has its own targeted fallback above instead.
 
+  // ── Date fallbacks ──────────────────────────────────────────────────────────
   if (pdf_date === "Unknown") {
     for (const p of [
-      /\bDate\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i,
+      /\bDate\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/i,
       /Invoice\s+date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
       /Date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
       /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/,
