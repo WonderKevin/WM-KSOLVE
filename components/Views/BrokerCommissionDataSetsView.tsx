@@ -146,33 +146,11 @@ function getFirstTwoWords(value: string) {
     .join(" ");
 }
 
-function directRetailerFromCustomer(custName: string) {
-  const customer = normalizeText(custName);
-
-  if (!customer) return "";
-
-  if (
-    customer.startsWith("KROGER ") ||
-    customer.startsWith("KRO ") ||
-    customer.includes(" KROGER ") ||
-    customer.includes(" KRO ")
-  ) {
-    return "Kroger";
-  }
-
-  if (
-    customer.includes("FRESH THYME") ||
-    customer.includes("FRSH THYME") ||
-    customer.includes("FRMR MKT")
-  ) {
-    return "Fresh Thyme";
-  }
-
-  if (customer === "HEB" || customer.startsWith("HEB ")) {
-    return "HEB";
-  }
-
-  return "";
+function stripLocationSuffix(rawCustomer: string): string {
+  // Location names follow pattern "STORE NAME - CITY, STATE"
+  // Strip from " - " onward to get just the store identifier
+  const dashIndex = rawCustomer.indexOf(" - ");
+  return dashIndex !== -1 ? rawCustomer.slice(0, dashIndex) : rawCustomer;
 }
 
 function categorizeRetailerName(rawRetailer: string) {
@@ -184,6 +162,23 @@ function categorizeRetailerName(rawRetailer: string) {
   if (retailer === "HEB" || retailer.includes(" HEB ")) return "HEB";
 
   return "INFRA & Others";
+}
+
+function directRetailerFromCustomer(custName: string, locations: LocationRow[]) {
+  const normalized = normalizeText(custName);
+  if (!normalized) return "";
+
+  const firstTwo = getFirstTwoWords(normalized);
+  if (!firstTwo) return "";
+
+  const match = locations.find((loc) => {
+    const locFirstTwo = getFirstTwoWords(normalizeText(stripLocationSuffix(loc.customer)));
+    return firstTwo === locFirstTwo;
+  });
+
+  if (!match) return "";
+
+  return categorizeRetailerName(match.retailer);
 }
 
 function findRetailer(
@@ -207,41 +202,9 @@ function findRetailer(
     }
   }
 
-  const directRetailer = directRetailerFromCustomer(custName);
-  if (directRetailer) return directRetailer;
-
-  const normalizedDatasetCustomer = normalizeText(trimmedCustomer);
-
-  if (!normalizedDatasetCustomer) return "";
   if (/^DC\s*\d+$/i.test(trimmedCustomer)) return "";
 
-  const datasetFirstTwo = getFirstTwoWords(normalizedDatasetCustomer);
-
-  // 1. Try exact match first (most precise)
-  const exactMatch = locations.find((loc) => {
-    const normalizedLocation = normalizeText(stripLocationSuffix(loc.customer));
-    return normalizedDatasetCustomer === normalizedLocation;
-  });
-
-  if (exactMatch) return categorizeRetailerName(exactMatch.retailer);
-
-  // 2. Fall back to first-two-words match
-  if (!datasetFirstTwo) return "";
-
-  const twoWordMatch = locations.find((loc) => {
-    const normalizedLocation = normalizeText(stripLocationSuffix(loc.customer));
-    const locationFirstTwo = getFirstTwoWords(normalizedLocation);
-    return datasetFirstTwo === locationFirstTwo;
-  });
-
-  if (!twoWordMatch) return "";
-
-  return categorizeRetailerName(twoWordMatch.retailer);
-}
-
-function stripLocationSuffix(rawCustomer: string): string {
-  const dashIndex = rawCustomer.indexOf(" - ");
-  return dashIndex !== -1 ? rawCustomer.slice(0, dashIndex) : rawCustomer;
+  return directRetailerFromCustomer(custName, locations);
 }
 
 function applyAmountBasedDiscrepancy(
