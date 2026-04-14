@@ -139,16 +139,16 @@ function isWmInvoiceType(value: string) {
 }
 
 function getFirstTwoWords(value: string) {
-  return normalizeText(value)
+  return value
     .split(" ")
     .filter(Boolean)
     .slice(0, 2)
     .join(" ");
 }
 
+// Must be called on the RAW string BEFORE normalizeText,
+// because normalizeText turns " - " into a space and destroys the suffix marker.
 function stripLocationSuffix(rawCustomer: string): string {
-  // Location names follow pattern "STORE NAME - CITY, STATE"
-  // Strip from " - " onward to get just the store identifier
   const dashIndex = rawCustomer.indexOf(" - ");
   return dashIndex !== -1 ? rawCustomer.slice(0, dashIndex) : rawCustomer;
 }
@@ -164,28 +164,26 @@ function categorizeRetailerName(rawRetailer: string) {
   return "INFRA & Others";
 }
 
-function directRetailerFromCustomer(custName: string, locations: LocationRow[]) {
-  const normalized = normalizeText(custName);
-  if (!normalized) return "";
-
-  const firstTwo = getFirstTwoWords(normalized);
-  if (!firstTwo) return "";
-
-  const match = locations.find((loc) => {
-    const locFirstTwo = getFirstTwoWords(normalizeText(stripLocationSuffix(loc.customer)));
-    return firstTwo === locFirstTwo;
-  });
-
-  if (!match) return "";
-
-  return categorizeRetailerName(match.retailer);
+// Build a lookup map keyed by normalized first-two-words of each location.
+// stripLocationSuffix is called on the RAW string before normalizeText
+// so that " - " is still detectable as a suffix separator.
+function buildLocationFirstTwoMap(locations: LocationRow[]): Map<string, LocationRow> {
+  const map = new Map<string, LocationRow>();
+  for (const loc of locations) {
+    const stripped = stripLocationSuffix(loc.customer); // strip BEFORE normalizing
+    const firstTwo = getFirstTwoWords(normalizeText(stripped));
+    if (firstTwo && !map.has(firstTwo)) {
+      map.set(firstTwo, loc);
+    }
+  }
+  return map;
 }
 
 function findRetailer(
   custName: string,
   itemName: string,
   upc: string,
-  locations: LocationRow[]
+  locationFirstTwoMap: Map<string, LocationRow>
 ) {
   const trimmedCustomer = custName.trim();
   const normalizedItem = normalizeText(itemName);
@@ -204,7 +202,16 @@ function findRetailer(
 
   if (/^DC\s*\d+$/i.test(trimmedCustomer)) return "";
 
-  return directRetailerFromCustomer(custName, locations);
+  const normalizedCustomer = normalizeText(trimmedCustomer);
+  if (!normalizedCustomer) return "";
+
+  const firstTwo = getFirstTwoWords(normalizedCustomer);
+  if (!firstTwo) return "";
+
+  const match = locationFirstTwoMap.get(firstTwo);
+  if (!match) return "";
+
+  return categorizeRetailerName(match.retailer);
 }
 
 function applyAmountBasedDiscrepancy(
@@ -380,6 +387,9 @@ export default function BrokerCommissionDataSetsView() {
       retailer: row.retailer ?? "",
     }));
 
+    // Build the map once, reuse for every dataset row
+    const locationFirstTwoMap = buildLocationFirstTwoMap(locations);
+
     const overrideMap = new Map(
       ((overrideData ?? []) as RetailerOverrideRow[]).map((row) => [
         row.dataset_id,
@@ -422,7 +432,7 @@ export default function BrokerCommissionDataSetsView() {
         row.cust_name ?? "",
         row.item ?? "",
         row.upc ?? "",
-        locations
+        locationFirstTwoMap
       );
       const overrideRetailer = overrideMap.get(row.id) ?? "";
       const derivedMonth =
