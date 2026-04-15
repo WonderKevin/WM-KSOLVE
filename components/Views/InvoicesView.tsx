@@ -630,11 +630,141 @@ async function extractExcelMetadata(file: File) {
 }
 
 async function extractDocumentMetadata(
-  file: File
-): Promise<{ category: string; invoice: string; pdf_date: string; file_type: "pdf" | "excel" }> {
+  file: File,
+  deductionTypes: DeductionTypeRecord[]
+): Promise<{
+  category: string;
+  invoice: string;
+  pdf_date: string;
+  file_type: "pdf" | "excel";
+  detected_name?: string;
+}> {
   const detected = await detectFileTypeFromContent(file);
-  if (detected === "excel") return { ...(await extractExcelMetadata(file)), file_type: "excel" };
-  if (detected === "pdf") return { ...(await extractPdfMetadata(file)), file_type: "pdf" };
+
+  const cleanText = (value: string) =>
+    String(value || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\s*\n\s*/g, "\n")
+      .trim();
+
+  const findHeaderMatch = (headerText: string) => {
+    const normalizedHeader = cleanText(headerText).toLowerCase();
+
+    const exactMatch = (deductionTypes || []).find((d) =>
+      cleanText(d.document_type).toLowerCase() === normalizedHeader
+    );
+    if (exactMatch) return exactMatch;
+
+    const containsMatch = (deductionTypes || []).find((d) => {
+      const docType = cleanText(d.document_type).toLowerCase();
+      return docType && normalizedHeader.includes(docType);
+    });
+    if (containsMatch) return containsMatch;
+
+    return null;
+  };
+
+  if (detected === "excel") {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
+
+    const firstSheetName = wb.SheetNames[0];
+    const firstSheet = wb.Sheets[firstSheetName];
+
+    const firstRows = XLSX.utils.sheet_to_json<any[]>(firstSheet, {
+      header: 1,
+      raw: false,
+      defval: "",
+    });
+
+    // Only use the top area of the first sheet for header/title detection
+    const topRows = firstRows.slice(0, 20);
+
+    // Prefer the longest meaningful line from the top rows as header/title
+    const topLines = topRows
+      .map((row) =>
+        row
+          .map((c) => String(c || "").trim())
+          .filter(Boolean)
+          .join(" ")
+      )
+      .map((line) => cleanText(line))
+      .filter(Boolean);
+
+    const headerCandidate =
+      topLines
+        .filter((line) => line.length >= 4)
+        .sort((a, b) => b.length - a.length)[0] || "";
+
+    // Build full workbook text for invoice/date extraction only
+    let fullText = "";
+    for (const sn of wb.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[sn], {
+        header: 1,
+        raw: false,
+        defval: "",
+      });
+      fullText +=
+        " " +
+        rows
+          .flat()
+          .map((c) => String(c || "").trim())
+          .filter(Boolean)
+          .join(" ");
+    }
+    fullText = cleanText(fullText);
+
+    const parsed = parseMetadataFromText(fullText);
+
+    // Did we get an explicit type from the document content?
+    const explicitTypeFound =
+      parsed.category &&
+      parsed.category !== "Unknown" &&
+      parsed.category.trim() !== "";
+
+    // NEW RULE:
+    // If there's no Type, use the header/title from the first sheet.
+    if (!explicitTypeFound) {
+      const headerMatch = findHeaderMatch(headerCandidate);
+
+      if (headerMatch) {
+        return {
+          category: headerMatch.deduction_type,
+          invoice: parsed.invoice,
+          pdf_date: parsed.pdf_date,
+          file_type: "excel",
+          detected_name: headerMatch.document_type,
+        };
+      }
+
+      // Not in deduction types -> return Unknown so popup appears
+      return {
+        category: "Unknown",
+        invoice: parsed.invoice,
+        pdf_date: parsed.pdf_date,
+        file_type: "excel",
+        detected_name: headerCandidate || "Unknown Header",
+      };
+    }
+
+    return {
+      category: parsed.category,
+      invoice: parsed.invoice,
+      pdf_date: parsed.pdf_date,
+      file_type: "excel",
+      detected_name: parsed.category,
+    };
+  }
+
+  if (detected === "pdf") {
+    const parsed = await extractPdfMetadata(file);
+    return {
+      ...parsed,
+      file_type: "pdf",
+      detected_name: parsed.category,
+    };
+  }
+
   throw new Error(`${file.name}: unsupported file type. Please upload PDF, XLSX, or XLS.`);
 }
 
@@ -2096,7 +2226,7 @@ export default function InvoicesView({
           const detectedType = await detectFileTypeFromContent(file);
           if (detectedType === "unknown") { showToast(`${file.name}: unsupported file type.`, "error"); skip++; continue; }
 
-          const meta = await extractDocumentMetadata(file);
+          const meta = await extractDocumentMetadata(file, deductionTypes);
           const ni = normalizeInvoiceNumber(meta.invoice);
           if (meta.invoice === "Unknown" || !ni) { showToast(`${file.name}: invoice reference not found.`, "error"); skip++; continue; }
 
