@@ -82,25 +82,19 @@ function formatMonthShort(value: string): string {
 
 function formatMonthFromDate(value: string): string {
   if (!value) return "";
-
   const parts = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!parts) return "";
-
   const year = parseInt(parts[1], 10);
   const month = parseInt(parts[2], 10) - 1;
   const d = new Date(year, month, 1);
-
   if (isNaN(d.getTime())) return "";
-
   return `${d.toLocaleString("en-US", { month: "long" })} '${String(year).slice(-2)}`;
 }
 
 function formatCheckDate(value: string): string {
   if (!value) return "-";
-
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-
   return parsed.toLocaleDateString("en-US", {
     month: "long",
     day: "numeric",
@@ -111,7 +105,6 @@ function formatCheckDate(value: string): string {
 function normalizeInvoice(value: string | number | null | undefined) {
   const raw = String(value ?? "").trim().toUpperCase();
   if (!raw) return "";
-
   return raw
     .replace(/\.0+$/g, "")
     .replace(/[.]+$/g, "")
@@ -138,100 +131,156 @@ function isWmInvoiceType(value: string) {
   return t === "WM INVOICE" || t === "WMINVOICE";
 }
 
-function getFirstTwoWords(value: string) {
-  return value
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .join(" ");
-}
-
-// Must be called on the RAW string BEFORE normalizeText,
-// because normalizeText turns " - " into a space and destroys the suffix marker.
+/**
+ * Strip the location suffix (everything after " - ") from a raw customer string.
+ * e.g. "KRO DELT 481, COLLIERVILLE - COLLIERVILLE, TN" → "KRO DELT 481, COLLIERVILLE"
+ */
 function stripLocationSuffix(rawCustomer: string): string {
   const dashIndex = rawCustomer.indexOf(" - ");
   return dashIndex !== -1 ? rawCustomer.slice(0, dashIndex) : rawCustomer;
 }
 
 /**
- * Fix for retailer matching:
- * Normalize both dataset customer names and locations customer names to the same
- * lookup key by removing trailing digits from each token before taking the first two words.
- *
- * Example:
- * - "KRO NASH 527, NASHVILLE"   -> "KRO NASH"
- * - "KRO NASH527, NASHVILLE..." -> "KRO NASH"
+ * Get the first N meaningful words from a normalized customer string.
+ * "Meaningful" = not a pure number token.
+ * e.g. normalizeText("KRO DELT 481, COLLIERVILLE") = "KRO DELT 481 COLLIERVILLE"
+ *      → ["KRO", "DELT", "COLLIERVILLE"] (481 dropped) → first 2 → "KRO DELT"
  */
-function getCustomerLookupKey(rawCustomer: string) {
-  const normalized = normalizeText(stripLocationSuffix(rawCustomer));
-  if (!normalized) return "";
-
-  const cleanedWords = normalized
+function getMeaningfulWords(normalized: string): string[] {
+  return normalized
     .split(" ")
-    .filter(Boolean)
-    .map((word) => word.replace(/\d+$/g, ""))
-    .filter(Boolean);
-
-  return cleanedWords.slice(0, 2).join(" ");
+    .filter((w) => w.length > 0 && !/^\d+$/.test(w));
 }
 
-function categorizeRetailerName(rawRetailer: string) {
-  const retailer = normalizeText(rawRetailer);
+/**
+ * Returns the first-N-meaningful-words key for location map lookup.
+ * Strips the location suffix before normalizing so "KRO DELT 481, COLLIERVILLE - COLLIERVILLE, TN"
+ * and "KRO DELT 481, COLLIERVILL" both produce the same key.
+ */
+function getFirstNWordsKey(raw: string, n: number): string {
+  const stripped = stripLocationSuffix(raw);
+  const normalized = normalizeText(stripped);
+  const words = getMeaningfulWords(normalized);
+  return words.slice(0, n).join(" ");
+}
 
+/**
+ * Returns all "significant" words (≥4 chars, not a pure number) from a raw customer string.
+ * Used for the word-overlap fallback matching.
+ * e.g. "660 FRYS OPERATING DIVISI" → ["FRYS", "OPERATING", "DIVISI"]
+ */
+function getSignificantWords(raw: string): string[] {
+  const normalized = normalizeText(stripLocationSuffix(raw));
+  return normalized
+    .split(" ")
+    .filter((w) => w.length >= 4 && !/^\d+$/.test(w));
+}
+
+function categorizeRetailerName(rawRetailer: string): string {
+  const retailer = normalizeText(rawRetailer);
   if (!retailer) return "";
-  if (retailer.includes("KROGER") || retailer === "KRO") return "Kroger";
+  if (retailer.includes("KROGER") || retailer === "KRO" || retailer.startsWith("KRO ")) return "Kroger";
   if (retailer.includes("FRESH THYME")) return "Fresh Thyme";
   if (retailer === "HEB" || retailer.includes(" HEB ")) return "HEB";
-
   return "INFRA & Others";
 }
 
-// Build a lookup map keyed by normalized customer banner key.
-// stripLocationSuffix is called before normalizeText inside getCustomerLookupKey
-// so location suffixes like " - NASHVILLE, TN" do not affect the match.
-function buildLocationFirstTwoMap(locations: LocationRow[]): Map<string, LocationRow> {
-  const map = new Map<string, LocationRow>();
+/**
+ * Location index — built once, used for every dataset row.
+ *
+ * Strategy (in priority order):
+ *   1. Exact first-2-meaningful-words match  (e.g. "KRO DELT" → "KRO DELT")
+ *   2. First-1-meaningful-word match          (e.g. "KRO" catches any KRO* customer)
+ *   3. Significant-word overlap               (e.g. "FRYS" in "660 FRYS OPERATING"
+ *                                              matches "KRO FRYS ..." in locations)
+ *
+ * We build three maps from the locations table:
+ *   - twoWordMap  : "KRO DELT" → LocationRow
+ *   - oneWordMap  : "KRO"      → LocationRow (first entry wins per key)
+ *   - wordMap     : "FRYS"     → LocationRow (each significant word → first location that has it)
+ */
+type LocationIndex = {
+  twoWordMap: Map<string, LocationRow>;
+  oneWordMap: Map<string, LocationRow>;
+  wordMap: Map<string, LocationRow>;
+};
+
+function buildLocationIndex(locations: LocationRow[]): LocationIndex {
+  const twoWordMap = new Map<string, LocationRow>();
+  const oneWordMap = new Map<string, LocationRow>();
+  const wordMap = new Map<string, LocationRow>();
 
   for (const loc of locations) {
-    const key = getCustomerLookupKey(loc.customer);
-    if (key && !map.has(key)) {
-      map.set(key, loc);
+    const twoKey = getFirstNWordsKey(loc.customer, 2);
+    const oneKey = getFirstNWordsKey(loc.customer, 1);
+    const sigWords = getSignificantWords(loc.customer);
+
+    // Only insert if not already present (first-match-wins keeps the map stable)
+    if (twoKey && !twoWordMap.has(twoKey)) twoWordMap.set(twoKey, loc);
+    if (oneKey && !oneWordMap.has(oneKey)) oneWordMap.set(oneKey, loc);
+    for (const w of sigWords) {
+      if (!wordMap.has(w)) wordMap.set(w, loc);
     }
   }
 
-  return map;
+  return { twoWordMap, oneWordMap, wordMap };
 }
 
+/**
+ * Find the retailer for a dataset row.
+ *
+ * Priority:
+ *   0. KEHE DC rows → infer from UPC/item prefix (existing logic, unchanged)
+ *   1. Two-word key match against locations
+ *   2. One-word key match against locations  (e.g. "KRO" → Kroger for all KRO* customers
+ *      even if their specific division like "KRO DELT" is missing from the table)
+ *   3. Significant-word overlap              (e.g. "FRYS" matches "KRO FRYS")
+ *   4. Empty string (unknown)
+ */
 function findRetailer(
   custName: string,
   itemName: string,
   upc: string,
-  locationFirstTwoMap: Map<string, LocationRow>
-) {
+  index: LocationIndex
+): string {
   const trimmedCustomer = custName.trim();
   const normalizedItem = normalizeText(itemName);
   const normalizedUpc = normalizeText(upc);
   const skuSource = normalizedUpc || normalizedItem;
 
+  // Priority 0: KEHE DC rows — infer from SKU prefix
   if (
     /KEHE DISTRIBUTORS DC/i.test(trimmedCustomer) ||
     /\bDC\s*\d+\b/i.test(trimmedCustomer)
   ) {
     if (skuSource.startsWith("HP")) return "Kroger";
-    if (skuSource.startsWith("CK") || skuSource.startsWith("NSA")) {
-      return "Fresh Thyme";
-    }
+    if (skuSource.startsWith("CK") || skuSource.startsWith("NSA")) return "Fresh Thyme";
   }
 
   if (/^DC\s*\d+$/i.test(trimmedCustomer)) return "";
 
-  const customerKey = getCustomerLookupKey(trimmedCustomer);
-  if (!customerKey) return "";
+  // Priority 1: Two-word key exact match
+  const twoKey = getFirstNWordsKey(trimmedCustomer, 2);
+  const twoMatch = index.twoWordMap.get(twoKey);
+  if (twoMatch) return categorizeRetailerName(twoMatch.retailer);
 
-  const match = locationFirstTwoMap.get(customerKey);
-  if (!match) return "";
+  // Priority 2: One-word key match
+  // Catches cases where the specific division (e.g. "KRO DELT") is missing from locations
+  // but the brand prefix ("KRO") is present for at least one other location entry.
+  const oneKey = getFirstNWordsKey(trimmedCustomer, 1);
+  const oneMatch = index.oneWordMap.get(oneKey);
+  if (oneMatch) return categorizeRetailerName(oneMatch.retailer);
 
-  return categorizeRetailerName(match.retailer);
+  // Priority 3: Significant-word overlap
+  // Handles cases like "660 FRYS OPERATING DIVISI" matching "KRO FRYS 123, PHOENIX"
+  // because both share the meaningful word "FRYS".
+  const custSigWords = getSignificantWords(trimmedCustomer);
+  for (const w of custSigWords) {
+    const wordMatch = index.wordMap.get(w);
+    if (wordMatch) return categorizeRetailerName(wordMatch.retailer);
+  }
+
+  return "";
 }
 
 function applyAmountBasedDiscrepancy(
@@ -250,15 +299,12 @@ function applyAmountBasedDiscrepancy(
 
   for (const [invoiceKey, invoiceRows] of grouped.entries()) {
     const invoiceDiscrepancy = round2(discrepancyByInvoice.get(invoiceKey) ?? 0);
-
     const wmRows = invoiceRows.filter(
       (row) => isWmInvoiceType(row.type) && Number(row.amt ?? 0) !== 0
     );
-
     const totalWmAmount = round2(
       wmRows.reduce((sum, row) => sum + Number(row.amt ?? 0), 0)
     );
-
     let runningShare = 0;
 
     for (const row of invoiceRows) {
@@ -390,28 +436,23 @@ export default function BrokerCommissionDataSetsView() {
       return;
     }
 
-    if (invoiceError) {
-      console.error("Failed to load invoices:", invoiceError);
-    }
-
-    if (locationsError) {
-      console.error("Failed to load locations:", locationsError);
-    }
-
-    if (overrideError) {
-      console.error("Failed to load retailer overrides:", overrideError);
-    }
+    if (invoiceError) console.error("Failed to load invoices:", invoiceError);
+    if (locationsError) console.error("Failed to load locations:", locationsError);
+    if (overrideError) console.error("Failed to load retailer overrides:", overrideError);
 
     const locations: LocationRow[] = (locationsData ?? []).map((row: any) => ({
       customer: row.customer ?? "",
       retailer: row.retailer ?? "",
     }));
 
-    // Build the map once, reuse for every dataset row
-    const locationFirstTwoMap = buildLocationFirstTwoMap(locations);
-    console.log("KRO NASH in map?", locationFirstTwoMap.has("KRO NASH"));
-    console.log("Total map size:", locationFirstTwoMap.size);
-    console.log("Total locations loaded:", locations.length);
+    // Build the three-tier location index once, reuse for every dataset row
+    const locationIndex = buildLocationIndex(locations);
+
+    // Debug helpers — remove after confirming fix
+    console.log("[locationIndex] twoWordMap size:", locationIndex.twoWordMap.size);
+    console.log("[locationIndex] KRO DELT in twoWordMap?", locationIndex.twoWordMap.has("KRO DELT"));
+    console.log("[locationIndex] KRO CINN in twoWordMap?", locationIndex.twoWordMap.has("KRO CINN"));
+    console.log("[locationIndex] KRO in oneWordMap?", locationIndex.oneWordMap.has("KRO"));
 
     const overrideMap = new Map(
       ((overrideData ?? []) as RetailerOverrideRow[]).map((row) => [
@@ -424,7 +465,6 @@ export default function BrokerCommissionDataSetsView() {
     for (const row of (invoiceData ?? []) as InvoiceRow[]) {
       const invoice = normalizeInvoice(row.invoice_number);
       if (!invoice) continue;
-
       ksolveByInvoice.set(
         invoice,
         round2((ksolveByInvoice.get(invoice) ?? 0) + Number(row.invoice_amt ?? 0))
@@ -436,7 +476,6 @@ export default function BrokerCommissionDataSetsView() {
       const invoice = normalizeInvoice(row.invoice);
       if (!invoice) continue;
       if (!isWmInvoiceType(row.type ?? "")) continue;
-
       wmByInvoice.set(
         invoice,
         round2((wmByInvoice.get(invoice) ?? 0) + Number(row.amt ?? 0))
@@ -455,7 +494,7 @@ export default function BrokerCommissionDataSetsView() {
         row.cust_name ?? "",
         row.item ?? "",
         row.upc ?? "",
-        locationFirstTwoMap
+        locationIndex
       );
       const overrideRetailer = overrideMap.get(row.id) ?? "";
       const derivedMonth =
@@ -481,11 +520,8 @@ export default function BrokerCommissionDataSetsView() {
       setMissingInvoices([]);
     } else {
       const datasetInvoiceSet = new Set(
-        datasetData
-          .map((row) => normalizeInvoice(row.invoice))
-          .filter(Boolean)
+        datasetData.map((row) => normalizeInvoice(row.invoice)).filter(Boolean)
       );
-
       const ksolveInvoiceList = Array.from(
         new Set(
           ((invoiceData ?? []) as InvoiceRow[])
@@ -493,11 +529,9 @@ export default function BrokerCommissionDataSetsView() {
             .filter(Boolean)
         )
       );
-
       const missing = ksolveInvoiceList.filter(
         (invoice) => !datasetInvoiceSet.has(invoice)
       );
-
       setMissingInvoices(missing.sort((a, b) => a.localeCompare(b)));
     }
 
@@ -511,89 +545,52 @@ export default function BrokerCommissionDataSetsView() {
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
-
-      if (notifRef.current && !notifRef.current.contains(target)) {
-        setNotifOpen(false);
-      }
-      if (typeFilterRef.current && !typeFilterRef.current.contains(target)) {
-        setTypeFilterOpen(false);
-      }
-      if (
-        retailerFilterRef.current &&
-        !retailerFilterRef.current.contains(target)
-      ) {
-        setRetailerFilterOpen(false);
-      }
-      if (monthFilterRef.current && !monthFilterRef.current.contains(target)) {
-        setMonthFilterOpen(false);
-      }
-
+      if (notifRef.current && !notifRef.current.contains(target)) setNotifOpen(false);
+      if (typeFilterRef.current && !typeFilterRef.current.contains(target)) setTypeFilterOpen(false);
+      if (retailerFilterRef.current && !retailerFilterRef.current.contains(target)) setRetailerFilterOpen(false);
+      if (monthFilterRef.current && !monthFilterRef.current.contains(target)) setMonthFilterOpen(false);
       if (menuRowId) {
         const menuRef = actionMenuRefs.current[menuRowId];
-        if (menuRef && !menuRef.contains(target)) {
-          setMenuRowId(null);
-        }
+        if (menuRef && !menuRef.contains(target)) setMenuRowId(null);
       }
     };
-
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [menuRowId]);
 
   const types = useMemo(
-    () => [
-      "All Types",
-      ...Array.from(new Set(rows.map((r) => r.type).filter(Boolean))),
-    ],
+    () => ["All Types", ...Array.from(new Set(rows.map((r) => r.type).filter(Boolean)))],
     [rows]
   );
 
   const months = useMemo(
-    () => [
-      "All Months",
-      ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean))),
-    ],
+    () => ["All Months", ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean)))],
     [rows]
   );
 
   const retailerOptions = useMemo(() => {
     const options = ["All Retailers"];
-    const hasFreshThyme = rows.some((r) => r.retailer === "Fresh Thyme");
-    const hasKroger = rows.some((r) => r.retailer === "Kroger");
-    const hasInfra = rows.some((r) => r.retailer === "INFRA & Others");
-    const hasHeb = rows.some((r) => r.retailer === "HEB");
-    const hasBlank = rows.some((r) => !r.retailer);
-
-    if (hasFreshThyme) options.push("Fresh Thyme");
-    if (hasKroger) options.push("Kroger");
-    if (hasInfra) options.push("INFRA & Others");
-    if (hasHeb) options.push("HEB");
-    if (hasBlank) options.push("Blank");
-
+    if (rows.some((r) => r.retailer === "Fresh Thyme")) options.push("Fresh Thyme");
+    if (rows.some((r) => r.retailer === "Kroger")) options.push("Kroger");
+    if (rows.some((r) => r.retailer === "INFRA & Others")) options.push("INFRA & Others");
+    if (rows.some((r) => r.retailer === "HEB")) options.push("HEB");
+    if (rows.some((r) => !r.retailer)) options.push("Blank");
     return options;
   }, [rows]);
 
   useEffect(() => {
-    if (!retailerOptions.includes(selectedRetailer)) {
-      setSelectedRetailer("All Retailers");
-    }
+    if (!retailerOptions.includes(selectedRetailer)) setSelectedRetailer("All Retailers");
   }, [retailerOptions, selectedRetailer]);
 
   const data = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-
     return rows.filter((row) => {
-      const matchesType =
-        selectedType === "All Types" || row.type === selectedType;
-
+      const matchesType = selectedType === "All Types" || row.type === selectedType;
       const matchesRetailer =
         selectedRetailer === "All Retailers" ||
         (selectedRetailer === "Blank" && !row.retailer) ||
         row.retailer === selectedRetailer;
-
-      const matchesMonth =
-        selectedMonth === "All Months" || row.month === selectedMonth;
-
+      const matchesMonth = selectedMonth === "All Months" || row.month === selectedMonth;
       const matchesSearch =
         !keyword ||
         row.type.toLowerCase().includes(keyword) ||
@@ -604,10 +601,7 @@ export default function BrokerCommissionDataSetsView() {
         row.item.toLowerCase().includes(keyword) ||
         row.custName.toLowerCase().includes(keyword) ||
         row.retailer.toLowerCase().includes(keyword) ||
-        (
-          isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt
-        ).toFixed(2).includes(keyword);
-
+        (isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt).toFixed(2).includes(keyword);
       return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
   }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
@@ -615,48 +609,33 @@ export default function BrokerCommissionDataSetsView() {
   const visibleRowIds = useMemo(() => data.map((row) => row.id), [data]);
 
   const allVisibleSelected =
-    visibleRowIds.length > 0 &&
-    visibleRowIds.every((id) => selectedRowIds.includes(id));
+    visibleRowIds.length > 0 && visibleRowIds.every((id) => selectedRowIds.includes(id));
 
   const someVisibleSelected =
-    visibleRowIds.some((id) => selectedRowIds.includes(id)) &&
-    !allVisibleSelected;
+    visibleRowIds.some((id) => selectedRowIds.includes(id)) && !allVisibleSelected;
 
   const toggleRowSelection = (rowId: string) => {
     setSelectedRowIds((prev) =>
-      prev.includes(rowId)
-        ? prev.filter((id) => id !== rowId)
-        : [...prev, rowId]
+      prev.includes(rowId) ? prev.filter((id) => id !== rowId) : [...prev, rowId]
     );
   };
 
   const toggleSelectAllVisible = () => {
     if (allVisibleSelected) {
-      setSelectedRowIds((prev) =>
-        prev.filter((id) => !visibleRowIds.includes(id))
-      );
+      setSelectedRowIds((prev) => prev.filter((id) => !visibleRowIds.includes(id)));
       return;
     }
-
     setSelectedRowIds((prev) => Array.from(new Set([...prev, ...visibleRowIds])));
   };
 
   const startEditing = (row: Row) => {
     setMenuRowId(null);
-
-    const shouldEditSelected =
-      selectedRowIds.length > 1 && selectedRowIds.includes(row.id);
+    const shouldEditSelected = selectedRowIds.length > 1 && selectedRowIds.includes(row.id);
 
     if (shouldEditSelected) {
       const selectedRows = rows.filter((r) => selectedRowIds.includes(r.id));
       const firstRetailer = selectedRows[0]?.retailer ?? "";
-
-      if (
-        firstRetailer === "Fresh Thyme" ||
-        firstRetailer === "Kroger" ||
-        firstRetailer === "INFRA & Others" ||
-        firstRetailer === "HEB"
-      ) {
+      if (["Fresh Thyme", "Kroger", "INFRA & Others", "HEB"].includes(firstRetailer)) {
         setBulkRetailerChoice(firstRetailer);
         setBulkCustomRetailer("");
       } else if (firstRetailer) {
@@ -666,19 +645,12 @@ export default function BrokerCommissionDataSetsView() {
         setBulkRetailerChoice("Fresh Thyme");
         setBulkCustomRetailer("");
       }
-
       setBulkEditOpen(true);
       return;
     }
 
     setEditingRowId(row.id);
-
-    if (
-      row.retailer === "Fresh Thyme" ||
-      row.retailer === "Kroger" ||
-      row.retailer === "INFRA & Others" ||
-      row.retailer === "HEB"
-    ) {
+    if (["Fresh Thyme", "Kroger", "INFRA & Others", "HEB"].includes(row.retailer)) {
       setEditRetailerChoice(row.retailer);
       setCustomRetailer("");
     } else if (row.retailer) {
@@ -707,19 +679,13 @@ export default function BrokerCommissionDataSetsView() {
       editRetailerChoice === "Add new retailer..."
         ? customRetailer.trim()
         : editRetailerChoice.trim();
-
     if (!finalRetailer) return;
 
     setSavingRowId(rowId);
-
     const { data, error } = await supabase
       .from("retailer_overrides")
       .upsert(
-        {
-          dataset_id: rowId,
-          retailer: finalRetailer,
-          updated_at: new Date().toISOString(),
-        },
+        { dataset_id: rowId, retailer: finalRetailer, updated_at: new Date().toISOString() },
         { onConflict: "dataset_id" }
       )
       .select();
@@ -732,13 +698,9 @@ export default function BrokerCommissionDataSetsView() {
     }
 
     console.log("Saved retailer override:", data);
-
     setRows((prev) =>
-      prev.map((row) =>
-        row.id === rowId ? { ...row, retailer: finalRetailer } : row
-      )
+      prev.map((row) => (row.id === rowId ? { ...row, retailer: finalRetailer } : row))
     );
-
     setSavingRowId(null);
     cancelEditing();
     await loadData();
@@ -755,11 +717,9 @@ export default function BrokerCommissionDataSetsView() {
       bulkRetailerChoice === "Add new retailer..."
         ? bulkCustomRetailer.trim()
         : bulkRetailerChoice.trim();
-
     if (!finalRetailer || selectedRowIds.length === 0) return;
 
     setBulkSaving(true);
-
     const payload = selectedRowIds.map((rowId) => ({
       dataset_id: rowId,
       retailer: finalRetailer,
@@ -779,15 +739,11 @@ export default function BrokerCommissionDataSetsView() {
     }
 
     console.log("Saved bulk retailer overrides:", data);
-
     setRows((prev) =>
       prev.map((row) =>
-        selectedRowIds.includes(row.id)
-          ? { ...row, retailer: finalRetailer }
-          : row
+        selectedRowIds.includes(row.id) ? { ...row, retailer: finalRetailer } : row
       )
     );
-
     setBulkSaving(false);
     setBulkEditOpen(false);
     setSelectedRowIds([]);
@@ -826,11 +782,7 @@ export default function BrokerCommissionDataSetsView() {
           <div className="relative" ref={typeFilterRef}>
             <Button
               type="button"
-              onClick={() => {
-                setTypeFilterOpen((prev) => !prev);
-                setRetailerFilterOpen(false);
-                setMonthFilterOpen(false);
-              }}
+              onClick={() => { setTypeFilterOpen((prev) => !prev); setRetailerFilterOpen(false); setMonthFilterOpen(false); }}
               variant="outline"
               className="rounded-2xl"
             >
@@ -838,19 +790,10 @@ export default function BrokerCommissionDataSetsView() {
               {selectedType}
               <ChevronDown className="ml-2 h-4 w-4" />
             </Button>
-
             {typeFilterOpen && (
               <div className="absolute right-0 z-20 mt-2 max-h-72 w-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
                 {types.map((type) => (
-                  <button
-                    key={type}
-                    type="button"
-                    onClick={() => {
-                      setSelectedType(type);
-                      setTypeFilterOpen(false);
-                    }}
-                    className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
-                  >
+                  <button key={type} type="button" onClick={() => { setSelectedType(type); setTypeFilterOpen(false); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100">
                     {type}
                   </button>
                 ))}
@@ -861,30 +804,17 @@ export default function BrokerCommissionDataSetsView() {
           <div className="relative" ref={retailerFilterRef}>
             <Button
               type="button"
-              onClick={() => {
-                setRetailerFilterOpen((prev) => !prev);
-                setTypeFilterOpen(false);
-                setMonthFilterOpen(false);
-              }}
+              onClick={() => { setRetailerFilterOpen((prev) => !prev); setTypeFilterOpen(false); setMonthFilterOpen(false); }}
               variant="outline"
               className="rounded-2xl"
             >
               {selectedRetailer}
               <ChevronDown className="ml-2 h-4 w-4" />
             </Button>
-
             {retailerFilterOpen && (
               <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
                 {retailerOptions.map((retailer) => (
-                  <button
-                    key={retailer}
-                    type="button"
-                    onClick={() => {
-                      setSelectedRetailer(retailer);
-                      setRetailerFilterOpen(false);
-                    }}
-                    className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
-                  >
+                  <button key={retailer} type="button" onClick={() => { setSelectedRetailer(retailer); setRetailerFilterOpen(false); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100">
                     {retailer}
                   </button>
                 ))}
@@ -895,32 +825,17 @@ export default function BrokerCommissionDataSetsView() {
           <div className="relative" ref={monthFilterRef}>
             <Button
               type="button"
-              onClick={() => {
-                setMonthFilterOpen((prev) => !prev);
-                setTypeFilterOpen(false);
-                setRetailerFilterOpen(false);
-              }}
+              onClick={() => { setMonthFilterOpen((prev) => !prev); setTypeFilterOpen(false); setRetailerFilterOpen(false); }}
               variant="outline"
               className="rounded-2xl"
             >
-              {selectedMonth === "All Months"
-                ? selectedMonth
-                : formatMonthShort(selectedMonth)}
+              {selectedMonth === "All Months" ? selectedMonth : formatMonthShort(selectedMonth)}
               <ChevronDown className="ml-2 h-4 w-4" />
             </Button>
-
             {monthFilterOpen && (
               <div className="absolute right-0 z-20 mt-2 max-h-72 w-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
                 {months.map((month) => (
-                  <button
-                    key={month}
-                    type="button"
-                    onClick={() => {
-                      setSelectedMonth(month);
-                      setMonthFilterOpen(false);
-                    }}
-                    className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
-                  >
+                  <button key={month} type="button" onClick={() => { setSelectedMonth(month); setMonthFilterOpen(false); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100">
                     {month === "All Months" ? month : formatMonthShort(month)}
                   </button>
                 ))}
@@ -944,30 +859,17 @@ export default function BrokerCommissionDataSetsView() {
                 </span>
               )}
             </Button>
-
             {notifOpen && (
               <div className="absolute right-0 z-30 mt-2 w-[360px] rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">
-                      Missing in Data Sets
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      In Ksolve Invoices / Invoices but not yet in Data Sets
-                    </p>
+                    <p className="text-sm font-semibold text-slate-900">Missing in Data Sets</p>
+                    <p className="text-xs text-slate-500">In Ksolve Invoices / Invoices but not yet in Data Sets</p>
                   </div>
-
-                  <span
-                    className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                      missingInvoices.length > 0
-                        ? "bg-red-50 text-red-600"
-                        : "bg-emerald-50 text-emerald-600"
-                    }`}
-                  >
+                  <span className={`rounded-full px-2 py-1 text-xs font-semibold ${missingInvoices.length > 0 ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"}`}>
                     {missingInvoices.length} missing
                   </span>
                 </div>
-
                 <div className="max-h-80 overflow-auto">
                   {missingInvoices.length === 0 ? (
                     <div className="rounded-xl bg-slate-50 px-3 py-4 text-sm text-slate-500">
@@ -976,17 +878,11 @@ export default function BrokerCommissionDataSetsView() {
                   ) : (
                     <div className="space-y-2">
                       <div className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
-                        {missingInvoices.length} invoice
-                        {missingInvoices.length > 1 ? "s are" : " is"} still missing
-                        from Data Sets.
+                        {missingInvoices.length} invoice{missingInvoices.length > 1 ? "s are" : " is"} still missing from Data Sets.
                       </div>
-
                       <div className="space-y-1">
                         {missingInvoices.map((invoice) => (
-                          <div
-                            key={invoice}
-                            className="rounded-xl border border-slate-100 px-3 py-2 text-sm text-slate-700"
-                          >
+                          <div key={invoice} className="rounded-xl border border-slate-100 px-3 py-2 text-sm text-slate-700">
                             {invoice}
                           </div>
                         ))}
@@ -1005,24 +901,9 @@ export default function BrokerCommissionDataSetsView() {
           <div className="text-sm font-medium text-slate-700">
             {selectedRowIds.length} row{selectedRowIds.length > 1 ? "s" : ""} selected
           </div>
-
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="rounded-2xl"
-              onClick={openBulkEdit}
-            >
-              Edit selected
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="rounded-2xl"
-              onClick={() => setSelectedRowIds([])}
-            >
-              Clear selection
-            </Button>
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={openBulkEdit}>Edit selected</Button>
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={() => setSelectedRowIds([])}>Clear selection</Button>
           </div>
         </div>
       )}
@@ -1031,11 +912,9 @@ export default function BrokerCommissionDataSetsView() {
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3">
             <h3 className="text-sm font-semibold text-slate-900">
-              Edit retailer for {selectedRowIds.length} selected row
-              {selectedRowIds.length > 1 ? "s" : ""}
+              Edit retailer for {selectedRowIds.length} selected row{selectedRowIds.length > 1 ? "s" : ""}
             </h3>
           </div>
-
           <div className="flex flex-wrap items-start gap-3">
             <select
               value={bulkRetailerChoice}
@@ -1043,12 +922,9 @@ export default function BrokerCommissionDataSetsView() {
               className="min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
             >
               {EDITABLE_RETAILERS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
+                <option key={option} value={option}>{option}</option>
               ))}
             </select>
-
             {bulkRetailerChoice === "Add new retailer..." && (
               <input
                 type="text"
@@ -1058,41 +934,22 @@ export default function BrokerCommissionDataSetsView() {
                 className="min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
               />
             )}
-
             <div className="flex items-center gap-2">
               <Button
                 type="button"
                 className="rounded-2xl"
                 onClick={saveBulkRetailerEdit}
-                disabled={
-                  bulkSaving ||
-                  !(
-                    bulkRetailerChoice &&
-                    (bulkRetailerChoice !== "Add new retailer..." ||
-                      bulkCustomRetailer.trim())
-                  )
-                }
+                disabled={bulkSaving || !(bulkRetailerChoice && (bulkRetailerChoice !== "Add new retailer..." || bulkCustomRetailer.trim()))}
               >
                 {bulkSaving ? "Saving..." : "Save selected"}
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-2xl"
-                onClick={cancelBulkEdit}
-                disabled={bulkSaving}
-              >
-                Cancel
-              </Button>
+              <Button type="button" variant="outline" className="rounded-2xl" onClick={cancelBulkEdit} disabled={bulkSaving}>Cancel</Button>
             </div>
           </div>
         </div>
       )}
 
-      <div
-        className="overflow-auto rounded-2xl border bg-white"
-        style={{ maxHeight: "70vh" }}
-      >
+      <div className="overflow-auto rounded-2xl border bg-white" style={{ maxHeight: "70vh" }}>
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 bg-gray-50 shadow-sm">
             <tr>
@@ -1100,9 +957,7 @@ export default function BrokerCommissionDataSetsView() {
                 <input
                   type="checkbox"
                   checked={allVisibleSelected}
-                  ref={(el) => {
-                    if (el) el.indeterminate = someVisibleSelected;
-                  }}
+                  ref={(el) => { if (el) el.indeterminate = someVisibleSelected; }}
                   onChange={toggleSelectAllVisible}
                   className="h-4 w-4 rounded border-slate-300"
                 />
@@ -1120,17 +975,9 @@ export default function BrokerCommissionDataSetsView() {
           </thead>
           <tbody>
             {loading ? (
-              <tr>
-                <td colSpan={10} className="p-6 text-center text-gray-500">
-                  Loading data...
-                </td>
-              </tr>
+              <tr><td colSpan={10} className="p-6 text-center text-gray-500">Loading data...</td></tr>
             ) : data.length === 0 ? (
-              <tr>
-                <td colSpan={10} className="p-6 text-center text-gray-500">
-                  No data found.
-                </td>
-              </tr>
+              <tr><td colSpan={10} className="p-6 text-center text-gray-500">No data found.</td></tr>
             ) : (
               data.map((row) => {
                 const isEditing = editingRowId === row.id;
@@ -1149,15 +996,12 @@ export default function BrokerCommissionDataSetsView() {
                     </td>
                     <td className="p-3">{row.type}</td>
                     <td className="p-3">
-                      {row.checkDate
-                        ? formatCheckDate(row.checkDate)
-                        : formatMonthShort(row.month)}
+                      {row.checkDate ? formatCheckDate(row.checkDate) : formatMonthShort(row.month)}
                     </td>
                     <td className="p-3 font-medium">{row.invoice}</td>
                     <td className="p-3">{row.upc}</td>
                     <td className="p-3">{row.item}</td>
                     <td className="p-3">{row.custName}</td>
-
                     <td className="p-3">
                       {isEditing ? (
                         <div className="space-y-2">
@@ -1167,12 +1011,9 @@ export default function BrokerCommissionDataSetsView() {
                             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
                           >
                             {EDITABLE_RETAILERS.map((option) => (
-                              <option key={option} value={option}>
-                                {option}
-                              </option>
+                              <option key={option} value={option}>{option}</option>
                             ))}
                           </select>
-
                           {editRetailerChoice === "Add new retailer..." && (
                             <input
                               type="text"
@@ -1187,28 +1028,15 @@ export default function BrokerCommissionDataSetsView() {
                         row.retailer || "-"
                       )}
                     </td>
-
                     <td className="p-3">
-                      ${(
-                        isWmInvoiceType(row.type)
-                          ? row.adjustedAmt
-                          : row.amt
-                      ).toFixed(2)}
+                      ${(isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt).toFixed(2)}
                     </td>
-
                     <td className="p-3">
                       {isEditing ? (
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            disabled={
-                              isSaving ||
-                              !(
-                                editRetailerChoice &&
-                                (editRetailerChoice !== "Add new retailer..." ||
-                                  customRetailer.trim())
-                              )
-                            }
+                            disabled={isSaving || !(editRetailerChoice && (editRetailerChoice !== "Add new retailer..." || customRetailer.trim()))}
                             onClick={() => saveRetailerEdit(row.id)}
                             className="rounded-md p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-50"
                             title="Save"
@@ -1228,23 +1056,16 @@ export default function BrokerCommissionDataSetsView() {
                       ) : (
                         <div
                           className="relative"
-                          ref={(el) => {
-                            actionMenuRefs.current[row.id] = el;
-                          }}
+                          ref={(el) => { actionMenuRefs.current[row.id] = el; }}
                         >
                           <button
                             type="button"
-                            onClick={() =>
-                              setMenuRowId((prev) =>
-                                prev === row.id ? null : row.id
-                              )
-                            }
+                            onClick={() => setMenuRowId((prev) => prev === row.id ? null : row.id)}
                             className="rounded-md p-2 text-slate-600 hover:bg-slate-100"
                             title="Actions"
                           >
                             <MoreHorizontal className="h-4 w-4" />
                           </button>
-
                           {menuRowId === row.id && (
                             <div className="absolute right-0 z-20 mt-2 w-32 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
                               <button
