@@ -739,14 +739,7 @@ async function extractDocumentMetadata(
     };
   }
 
-    return {
-      category: parsed.category,
-      invoice: parsed.invoice,
-      pdf_date: parsed.pdf_date,
-      file_type: "excel",
-      detected_name: parsed.category,
-    };
-  }
+   
 
   if (detected === "pdf") {
     const parsed = await extractPdfMetadata(file);
