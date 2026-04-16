@@ -1514,57 +1514,129 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
   if (!json.length) return rows;
 
   const keys = Object.keys(json[0]);
+
   const ck = keys.find((k) => /customer\s*name/i.test(k)) ?? "";
   const dk = keys.find((k) => /^division$/i.test(k)) ?? "";
   const hk = keys.find((k) => /kehe\s*dc/i.test(k)) ?? "";
-  const ak = keys.find((k) => /scanned\s*sales/i.test(k)) ?? keys.find((k) => /bill\s*amount/i.test(k)) ?? "";
-  const uk = keys.find((k) => /^upc$/i.test(k)) ?? "";
-  const qk = keys.find((k) => /qty\s*ship/i.test(k)) ?? keys.find((k) => /^qty$/i.test(k)) ?? keys.find((k) => /qty/i.test(k)) ?? "";
+
+  // IMPORTANT: prefer Bill Amount, not Scanned Sales
+  const ak =
+    keys.find((k) => /bill\s*amount/i.test(k)) ??
+    keys.find((k) => /scanned\s*sales/i.test(k)) ??
+    "";
+
+  const uk =
+    keys.find((k) => /^upc$/i.test(k)) ??
+    keys.find((k) => /upc/i.test(k)) ??
+    "";
+
+  const qk =
+    keys.find((k) => /qty\s*ship/i.test(k)) ??
+    keys.find((k) => /^qty$/i.test(k)) ??
+    keys.find((k) => /quantity/i.test(k)) ??
+    keys.find((k) => /qty/i.test(k)) ??
+    "";
 
   let epFee = 0;
+
   for (const sheetName of wb.SheetNames) {
     if (epFee) break;
-    const allRows = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[sheetName], { header: 1, raw: false, defval: "" });
+
+    const allRows = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[sheetName], {
+      header: 1,
+      raw: false,
+      defval: "",
+    });
+
     for (let ri = 0; ri < allRows.length; ri++) {
       const row = allRows[ri];
+
       for (let ci = 0; ci < row.length; ci++) {
         if (/ep\s*fee/i.test(String(row[ci] || "").trim())) {
           for (let cj = ci + 1; cj < row.length; cj++) {
             const val = parseAmount(row[cj]);
-            if (val !== null && val > 0) { epFee = val; break; }
+            if (val !== null && val > 0) {
+              epFee = val;
+              break;
+            }
           }
+
           if (!epFee && ri + 1 < allRows.length) {
             const nextRow = allRows[ri + 1];
             for (let cj = ci; cj < Math.min(ci + 3, nextRow.length); cj++) {
               const val = parseAmount(nextRow[cj]);
-              if (val !== null && val > 0) { epFee = val; break; }
+              if (val !== null && val > 0) {
+                epFee = val;
+                break;
+              }
             }
           }
+
           break;
         }
       }
+
       if (epFee) break;
     }
   }
 
-  const rawData: Array<{ upc: string; cust: string; amt: number; qty: number }> = [];
+  const rawData: Array<{ upc: string; cust: string; amt: number; qty: number | null }> = [];
+
   for (const row of json) {
     const upc = String(row[uk] || "").trim();
     if (!upc || !/^\d{10,14}$/.test(upc)) continue;
+
     let cust = "";
     if (ck && row[ck]) cust = String(row[ck]).trim();
     else if (dk && row[dk]) cust = String(row[dk]).trim();
     else if (hk && row[hk]) cust = `DC ${String(row[hk]).trim()}`;
+
     const amt = parseAmount(row[ak]);
     if (amt === null || amt === 0) continue;
-    rawData.push({ upc, cust, amt, qty: parseAmount(row[qk]) ?? 0 });
+
+    const qtyRaw = qk ? parseAmount(row[qk]) : null;
+    const qty = qtyRaw !== null && qtyRaw > 0 ? qtyRaw : null;
+
+    rawData.push({ upc, cust, amt, qty });
   }
 
   if (!rawData.length) return rows;
-  const totalQty = rawData.reduce((s, r) => s + r.qty, 0);
-  for (const r of rawData) {
-    const epShare = epFee > 0 && totalQty > 0 ? (r.qty / totalQty) * epFee : 0;
-    rows.push({ upc: r.upc, item: "", cust_name: r.cust, amt: Math.round((r.amt + epShare) * 100) / 100 });
+
+  const hasAnyQty = rawData.some((r) => r.qty !== null);
+  const totalQty = rawData.reduce((sum, r) => sum + (r.qty ?? 0), 0);
+
+  for (let i = 0; i < rawData.length; i++) {
+    const r = rawData[i];
+
+    let epShare = 0;
+
+    if (epFee > 0) {
+      if (hasAnyQty && totalQty > 0) {
+        epShare = (r.qty ?? 0) / totalQty * epFee;
+      } else {
+        epShare = epFee / rawData.length;
+      }
+    }
+
+    rows.push({
+      upc: r.upc,
+      item: "",
+      cust_name: r.cust,
+      amt: Math.round((r.amt + epShare) * 100) / 100,
+    });
+  }
+
+  // fix rounding drift on last row
+  if (epFee > 0 && rows.length) {
+    const baseTotal = rawData.reduce((sum, r) => sum + r.amt, 0);
+    const currentTotal = rows.reduce((sum, r) => sum + r.amt, 0);
+    const expectedTotal = Math.round((baseTotal + epFee) * 100) / 100;
+    const drift = Math.round((expectedTotal - currentTotal) * 100) / 100;
+
+    if (drift !== 0) {
+      rows[rows.length - 1].amt =
+        Math.round((rows[rows.length - 1].amt + drift) * 100) / 100;
+    }
   }
 
   return rows;
@@ -2046,12 +2118,24 @@ export default function InvoicesView({
     }
     return Array.from(v).sort((a, b) => a.localeCompare(b));
   }, [rows, uploadMap]);
-
+  
+  const uniqueDeductionTypeOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        deductionTypes
+          .map((t) => String(t.deduction_type || "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [deductionTypes]);
+  
   const documentFilterLabel = useMemo(() => {
     if (documentFilter === "With Document") return "With Document";
     if (documentFilter === "Without Document") return "Without Document";
     return "Documents";
   }, [documentFilter]);
+
+  
 
   const filteredRows = useMemo(
     () => rows.filter((row) => {
@@ -2514,11 +2598,11 @@ export default function InvoicesView({
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
                 >
                   <option value="">Select deduction type</option>
-                  {deductionTypes.map((t) => (
-                    <option key={t.id} value={t.deduction_type}>
-                      {t.deduction_type}
-                    </option>
-                  ))}
+                  {uniqueDeductionTypeOptions.map((type) => (
+  <option key={type} value={type}>
+    {type}
+  </option>
+))}
                 </select>
               </div>
             </div>
