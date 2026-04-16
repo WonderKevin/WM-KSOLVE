@@ -643,6 +643,35 @@ async function extractDocumentMetadata(
       .replace(/[ \t]+/g, " ")
       .replace(/\s*\n\s*/g, "\n")
       .trim();
+  
+  const isBoilerplateLine = (line: string) =>
+    /please|refer|details|attached|support|supplier|phone|deerpark|elkton|invoice total|master reference|special payee|invoice number|invoice date|po #|wonder monday llc|supplier esn/i.test(
+      line
+    );
+  
+  const scoreHeaderCandidate = (line: string) => {
+    const clean = cleanText(line);
+    if (!clean) return -999;
+  
+    let score = 0;
+  
+    if (clean.length >= 8 && clean.length <= 40) score += 4;
+    else if (clean.length <= 60) score += 2;
+    else score -= 3;
+  
+    if (isBoilerplateLine(clean)) score -= 10;
+  
+    if (/^[A-Za-z][A-Za-z\s&/-]+$/.test(clean)) score += 3;
+  
+    if (clean === clean.toUpperCase()) score += 2;
+    if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+$/.test(clean)) score += 2;
+  
+    if (/\d/.test(clean)) score -= 4;
+    if (/[:@]/.test(clean)) score -= 4;
+  
+    return score;
+  };
+  
 
   const findHeaderMatch = (headerText: string) => {
     const normalizedHeader = cleanText(headerText).toLowerCase();
@@ -685,10 +714,10 @@ async function extractDocumentMetadata(
       .map((line) => cleanText(line))
       .filter(Boolean);
 
-    const headerCandidate =
+      const headerCandidate =
       topLines
-        .filter((line) => line.length >= 4)
-        .sort((a, b) => b.length - a.length)[0] || "";
+        .map((line) => ({ line, score: scoreHeaderCandidate(line) }))
+        .sort((a, b) => b.score - a.score)[0]?.line || "";
 
     let fullText = "";
     for (const sn of wb.SheetNames) {
