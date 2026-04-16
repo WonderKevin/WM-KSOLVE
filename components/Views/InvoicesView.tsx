@@ -338,14 +338,10 @@ function parseMetadataFromText(text: string) {
   let pdf_date = "Unknown";
 
   const isCustomerSpoilageNatural =
-    /customer\s+spoilage\s+natural/i.test(lower) ||
-    (
-      /special\s+payee\s+number/i.test(lower) &&
-      /master\s+reference\s+no/i.test(lower) &&
-      /wonder\s+monday/i.test(lower) &&
-      !/fresh\s+thyme\s+ppf/i.test(lower) &&
-      !/fresh\s+thyme\s+sas/i.test(lower)
-    );
+  /customer\s+spoils\s+allowance/i.test(lower) ||
+  /customer\s+spoilage\s+natural/i.test(lower) ||
+  /customer\s+spoilage/i.test(lower) ||
+  /spoilage\s+detail\s+below/i.test(lower);
 
   const isWMInvoicePdf =
     /wonder\s*monday/i.test(lower) &&
@@ -716,36 +712,37 @@ async function extractDocumentMetadata(
 
     const parsed = parseMetadataFromText(fullText);
 
-    // Did we get an explicit type from the document content?
-    const explicitTypeFound =
-      parsed.category &&
-      parsed.category !== "Unknown" &&
-      parsed.category.trim() !== "";
+// First: try to map the visible Excel header/title
+const headerMatch = findHeaderMatch(headerCandidate);
+if (headerMatch) {
+  return {
+    category: headerMatch.deduction_type,
+    invoice: parsed.invoice,
+    pdf_date: parsed.pdf_date,
+    file_type: "excel",
+    detected_name: headerMatch.document_type,
+  };
+}
 
-    // NEW RULE:
-    // If there's no Type, use the header/title from the first sheet.
-    if (!explicitTypeFound) {
-      const headerMatch = findHeaderMatch(headerCandidate);
+// Second: if header exists but is not in deduction_types, force popup
+if (headerCandidate) {
+  return {
+    category: "Unknown",
+    invoice: parsed.invoice,
+    pdf_date: parsed.pdf_date,
+    file_type: "excel",
+    detected_name: headerCandidate,
+  };
+}
 
-      if (headerMatch) {
-        return {
-          category: headerMatch.deduction_type,
-          invoice: parsed.invoice,
-          pdf_date: parsed.pdf_date,
-          file_type: "excel",
-          detected_name: headerMatch.document_type,
-        };
-      }
 
-      // Not in deduction types -> return Unknown so popup appears
-      return {
-        category: "Unknown",
-        invoice: parsed.invoice,
-        pdf_date: parsed.pdf_date,
-        file_type: "excel",
-        detected_name: headerCandidate || "Unknown Header",
-      };
-    }
+return {
+  category: "Unknown",
+  invoice: parsed.invoice,
+  pdf_date: parsed.pdf_date,
+  file_type: "excel",
+  detected_name: "Unknown Header",
+};
 
     return {
       category: parsed.category,
@@ -2450,26 +2447,36 @@ export default function InvoicesView({
                   placeholder="e.g. Invoice, Chargeback, Credit Memo"
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400" />
               </div>
+
+
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">Deduction Type</label>
-                <input type="text" value={deductionModal.deductionName}
-                  onChange={(e) => setDeductionModal((p) => ({ ...p, deductionName: e.target.value }))}
-                  placeholder="e.g. Customer Spoils Allowance"
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400" />
-                {deductionTypes.length > 0 && (
-                  <div className="mt-2">
-                    <p className="mb-1 text-xs text-slate-400">Or pick existing:</p>
-                    <div className="flex flex-wrap gap-1">
-                      {deductionTypes.map((t) => (
-                        <button key={t.id} type="button"
-                          onClick={() => setDeductionModal((p) => ({ ...p, deductionName: t.deduction_type, docTypeName: t.document_type }))}
-                          className={`rounded-full border px-2 py-0.5 text-xs ${deductionModal.deductionName === t.deduction_type ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 hover:bg-slate-50"}`}>
-                          {t.deduction_type}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+  <label className="mb-1 block text-xs font-medium text-slate-600">
+    Deduction Type
+  </label>
+
+  <select
+    value={deductionModal.deductionName}
+    onChange={(e) => {
+      const selected = deductionTypes.find(
+        (t) => t.deduction_type === e.target.value
+      );
+
+      setDeductionModal((p) => ({
+        ...p,
+        deductionName: e.target.value,
+        docTypeName: selected?.document_type || p.docTypeName,
+      }));
+    }}
+    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
+  >
+    <option value="">Select deduction type</option>
+    {deductionTypes.map((t) => (
+      <option key={t.id} value={t.deduction_type}>
+        {t.deduction_type}
+      </option>
+    ))}
+  </select>
+</div>
               </div>
             </div>
             <div className="flex gap-3">
