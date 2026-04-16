@@ -2226,9 +2226,9 @@ export default function InvoicesView({
             const eu2 = dup2 && dup2.length > 0 ? dup2[0] : null;
             setDeductionModal({
               open: true,
-              detectedName: meta.category === "Unknown" ? "" : meta.category,
-              docTypeName: "",
-              deductionName: meta.category === "Unknown" ? "" : meta.category,
+              detectedName: meta.detected_name || "",
+              docTypeName: meta.detected_name || "",
+              deductionName: "",
               pendingFile: file,
               pendingMeta: { ...meta, invoice: matchedInvoice.invoice_number || meta.invoice },
               pendingIsReplace: !!eu2,
@@ -2421,20 +2421,29 @@ export default function InvoicesView({
 {deductionModal.open && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40">
           <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
-            <h3 className="mb-1 text-lg font-semibold">Unknown Deduction Type</h3>
-            <p className="mb-4 text-sm text-slate-500">
-              {deductionModal.detectedName ? (
-                <>
-                  The detected type{" "}
-                  <span className="font-semibold text-slate-700">
-                    "{deductionModal.detectedName}"
-                  </span>{" "}
-                  is not in your deduction types. Would you like to add it?
-                </>
-              ) : (
-                "No deduction type was detected. Please enter one to proceed."
-              )}
-            </p>
+          <h3 className="mb-1 text-lg font-semibold">Unknown Deduction Type</h3>
+<p className="mb-4 text-sm text-slate-500">
+  {deductionModal.detectedName ? (
+    <>
+      The detected type{" "}
+      <span className="font-semibold text-slate-700">
+        "{deductionModal.detectedName}"
+      </span>{" "}
+      is not in your deduction types. Would you like to add it?
+    </>
+  ) : (
+    "No deduction type was detected. Please enter one to proceed."
+  )}
+</p>
+
+{deductionModal.pendingMeta?.invoice && (
+  <p className="mb-4 text-sm text-slate-600">
+    Invoice Reference:{" "}
+    <span className="font-semibold text-slate-800">
+      {deductionModal.pendingMeta.invoice}
+    </span>
+  </p>
+)}
 
             <div className="mb-5 space-y-3">
               <div>
