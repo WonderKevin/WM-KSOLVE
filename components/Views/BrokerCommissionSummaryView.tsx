@@ -534,7 +534,7 @@ export default function BrokerCommissionSummaryView() {
     setExpandedMonths((prev) => {
       const next = { ...prev };
       months.forEach((m) => {
-        if (!(m in next)) next[m] = true;
+        if (!(m in next)) next[m] = false;
       });
       return next;
     });
