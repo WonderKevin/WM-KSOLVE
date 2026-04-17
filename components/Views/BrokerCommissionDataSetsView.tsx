@@ -567,17 +567,16 @@ export default function BrokerCommissionDataSetsView() {
     console.log("selectedType:", selectedType);
     console.log("sample row types:", JSON.stringify(rows.slice(0, 5).map(r => ({ raw: r.type, clean: cleanType(r.type) }))));
     const keyword = search.trim().toLowerCase();
-    return rows.filter((row) => {
-      // FIX 1: Direct string comparison after cleanType() — no more normalizeFilterType mismatch
+    const filtered = rows.filter((row) => {
       const matchesType =
         selectedType === "All Types" || cleanType(row.type) === selectedType;
 
-        if (selectedType === "WM Invoice" && !matchesType) {
-          console.log("EXCLUDED row type:", JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType }));
-        }
-        if (selectedType === "WM Invoice" && matchesType && row.type !== "WM Invoice") {
-          console.log("WRONGLY INCLUDED row type:", JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType }));
-        }
+      if (selectedType === "WM Invoice" && !matchesType) {
+        console.log("EXCLUDED row type:", JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType }));
+      }
+      if (selectedType === "WM Invoice" && matchesType && row.type !== "WM Invoice") {
+        console.log("WRONGLY INCLUDED row type:", JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType }));
+      }
 
       const matchesRetailer =
         selectedRetailer === "All Retailers" ||
@@ -601,6 +600,10 @@ export default function BrokerCommissionDataSetsView() {
 
       return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
+
+    // ADD THIS LINE:
+    console.log("FILTERED COUNT:", filtered.length, "of", rows.length, "total rows");
+    return filtered;
   }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
 
   const visibleRowIds = useMemo(() => data.map((row) => row.id), [data]);
