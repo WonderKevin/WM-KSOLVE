@@ -572,6 +572,13 @@ export default function BrokerCommissionDataSetsView() {
       const matchesType =
         selectedType === "All Types" || cleanType(row.type) === selectedType;
 
+        if (selectedType === "WM Invoice" && !matchesType) {
+          console.log("EXCLUDED row type:", JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType }));
+        }
+        if (selectedType === "WM Invoice" && matchesType && row.type !== "WM Invoice") {
+          console.log("WRONGLY INCLUDED row type:", JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType }));
+        }
+
       const matchesRetailer =
         selectedRetailer === "All Retailers" ||
         (selectedRetailer === "Blank" && !row.retailer) ||
