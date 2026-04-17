@@ -126,6 +126,14 @@ function normalizeType(value: string) {
   return String(value || "").trim().toUpperCase();
 }
 
+function normalizeFilterType(value: string) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
 function isWmInvoiceType(value: string) {
   const t = normalizeType(value);
   return t === "WM INVOICE" || t === "WMINVOICE";
@@ -505,7 +513,10 @@ export default function BrokerCommissionDataSetsView() {
         month: derivedMonth,
         checkDate: row.check_date ?? "",
         invoice: row.invoice ?? "",
-        type: row.type ?? "",
+        type: String(row.type ?? "")
+  .replace(/\u00a0/g, " ")
+  .replace(/\s+/g, " ")
+  .trim(),
         upc: row.upc ?? "",
         item: row.item ?? "",
         custName: row.cust_name ?? "",
@@ -558,10 +569,23 @@ export default function BrokerCommissionDataSetsView() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [menuRowId]);
 
-  const types = useMemo(
-    () => ["All Types", ...Array.from(new Set(rows.map((r) => r.type).filter(Boolean)))],
-    [rows]
-  );
+  const types = useMemo(() => {
+    const map = new Map<string, string>();
+  
+    for (const row of rows) {
+      const raw = String(row.type || "")
+        .replace(/\u00a0/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+  
+      if (!raw) continue;
+  
+      const key = normalizeFilterType(raw);
+      if (!map.has(key)) map.set(key, raw);
+    }
+  
+    return ["All Types", ...Array.from(map.values()).sort((a, b) => a.localeCompare(b))];
+  }, [rows]);
 
   const months = useMemo(
     () => ["All Months", ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean)))],
@@ -585,7 +609,11 @@ export default function BrokerCommissionDataSetsView() {
   const data = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return rows.filter((row) => {
-      const matchesType = selectedType === "All Types" || row.type === selectedType;
+      const selectedTypeKey = normalizeFilterType(selectedType);
+const rowTypeKey = normalizeFilterType(row.type);
+
+const matchesType =
+  selectedType === "All Types" || rowTypeKey === selectedTypeKey;
       const matchesRetailer =
         selectedRetailer === "All Retailers" ||
         (selectedRetailer === "Blank" && !row.retailer) ||
