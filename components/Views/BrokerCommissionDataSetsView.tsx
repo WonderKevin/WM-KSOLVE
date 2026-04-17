@@ -565,7 +565,7 @@ export default function BrokerCommissionDataSetsView() {
 
   const data = useMemo(() => {
     console.log("selectedType:", selectedType);
-  console.log("sample row types:", rows.slice(0, 5).map(r => ({ raw: r.type, clean: cleanType(r.type) })));
+    console.log("sample row types:", JSON.stringify(rows.slice(0, 5).map(r => ({ raw: r.type, clean: cleanType(r.type) }))));
     const keyword = search.trim().toLowerCase();
     return rows.filter((row) => {
       // FIX 1: Direct string comparison after cleanType() — no more normalizeFilterType mismatch
