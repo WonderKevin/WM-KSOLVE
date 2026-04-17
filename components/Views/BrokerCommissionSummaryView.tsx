@@ -86,6 +86,7 @@ type MonthSummary = {
 };
 
 const INFRA_HP_CASE_RATE = 35.68;
+const PAGE_SIZE = 1000;
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -362,8 +363,6 @@ function applyAmountBasedDiscrepancy(
   return result;
 }
 
-const PAGE_SIZE = 1000;
-
 async function fetchAllDatasetRows(): Promise<DatasetDbRow[]> {
   let allRows: DatasetDbRow[] = [];
   let from = 0;
@@ -412,18 +411,21 @@ export default function BrokerCommissionSummaryView() {
       setLoading(true);
     }
 
+    let datasetData: DatasetDbRow[] = [];
+    let datasetError: any = null;
+
+    try {
+      datasetData = await fetchAllDatasetRows();
+    } catch (error) {
+      datasetError = error;
+    }
+
     const [
-      { data: datasetData, error: datasetError },
       { data: overrideData, error: overrideError },
       { data: locationData, error: locationError },
       { data: invoiceData, error: invoiceError },
       { data: velocityData, error: velocityError },
     ] = await Promise.all([
-      supabase
-        .from("broker_commission_datasets")
-        .select("id, month, check_date, invoice, type, upc, item, cust_name, amt")
-        .order("check_date", { ascending: false, nullsFirst: false })
-        .order("invoice", { ascending: false }),
       supabase.from("retailer_overrides").select("dataset_id, retailer"),
       supabase.from("locations").select("customer, retailer"),
       supabase
@@ -493,8 +495,13 @@ export default function BrokerCommissionSummaryView() {
         locations
       );
       const override = overrides.get(r.id) ?? "";
-      const derivedMonth =
-        normalizeMonthLabel(formatMonthFromDate(r.check_date ?? "") || (r.month ?? ""));
+
+      const rawMonth = String(r.month ?? "").trim();
+      const rawCheckDate = String(r.check_date ?? "").trim();
+
+      const derivedMonth = normalizeMonthLabel(
+        rawMonth || formatMonthFromDate(rawCheckDate) || ""
+      );
 
       return {
         id: r.id,
@@ -558,7 +565,9 @@ export default function BrokerCommissionSummaryView() {
     const filteredVelocityRows =
       selectedMonth === "All Months"
         ? velocityRows
-        : velocityRows.filter((r) => normalizeMonthLabel(r.month ?? "") === normalizeMonthLabel(selectedMonth));
+        : velocityRows.filter(
+            (r) => normalizeMonthLabel(r.month ?? "") === normalizeMonthLabel(selectedMonth)
+          );
 
     const monthMap = new Map<string, MonthSummary>();
 
@@ -617,7 +626,6 @@ export default function BrokerCommissionSummaryView() {
       }
     }
 
-    // Duplicate first WM invoice into INFRA & Others based on INFRA HP cases.
     for (const [month, firstInvoice] of firstWmInvoiceByMonth.entries()) {
       const hpCases = filteredVelocityRows.reduce((sum, row) => {
         if (normalizeMonthLabel(row.month ?? "") !== normalizeMonthLabel(month)) {
@@ -648,7 +656,6 @@ export default function BrokerCommissionSummaryView() {
         round2(Math.max(krogerAmount - transferAmount, 0))
       );
 
-      // This is the duplication part even if INFRA had no invoice row originally.
       wmInvoiceTotalsByMonthInvoiceRetailer.set(
         infraKey,
         round2(infraAmount + transferAmount)
@@ -758,7 +765,8 @@ export default function BrokerCommissionSummaryView() {
 
         block.details = [...mergedInvoiceSummaries, ...deductionLines];
         block.total = round2(block.wmInvoiceTotal + block.deductionsTotal);
-        block.brokerFee = block.retailer === "Kroger" ? round2(block.total * 0.04) : 0;
+        block.brokerFee =
+          block.retailer === "Kroger" ? round2(block.total * 0.04) : 0;
       }
 
       monthSummary.retailers.sort((a, b) => {
