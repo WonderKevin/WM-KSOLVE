@@ -803,7 +803,43 @@ async function fetchDeductionTypes(): Promise<DeductionTypeRecord[]> {
 }
 
 async function saveDeductionType(documentType: string, deductionType: string): Promise<void> {
-  await supabase.from("deduction_types").insert({ document_type: documentType, deduction_type: deductionType });
+  const doc = String(documentType || "").trim();
+  const ded = String(deductionType || "").trim();
+
+  if (!doc || !ded) {
+    throw new Error("Document type and deduction type are required.");
+  }
+
+  const { data: existing, error: fetchError } = await supabase
+    .from("deduction_types")
+    .select("id")
+    .ilike("document_type", doc)
+    .limit(1);
+
+  if (fetchError) throw new Error(fetchError.message);
+
+  if (existing && existing.length > 0) {
+    const { error: updateError } = await supabase
+      .from("deduction_types")
+      .update({
+        deduction_type: ded,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existing[0].id);
+
+    if (updateError) throw new Error(updateError.message);
+    return;
+  }
+
+  const { error: insertError } = await supabase
+    .from("deduction_types")
+    .insert({
+      document_type: doc,
+      deduction_type: ded,
+      updated_at: new Date().toISOString(),
+    });
+
+  if (insertError) throw new Error(insertError.message);
 }
 
 async function saveProductListEntry(upc: string, description: string): Promise<void> {
@@ -2584,17 +2620,12 @@ export default function InvoicesView({
 
                 <select
                   value={deductionModal.deductionName}
-                  onChange={(e) => {
-                    const selected = deductionTypes.find(
-                      (t) => t.deduction_type === e.target.value
-                    );
-
+                  onChange={(e) =>
                     setDeductionModal((p) => ({
                       ...p,
                       deductionName: e.target.value,
-                      docTypeName: selected?.document_type || p.docTypeName,
-                    }));
-                  }}
+                    }))
+                  }
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
                 >
                   <option value="">Select deduction type</option>
