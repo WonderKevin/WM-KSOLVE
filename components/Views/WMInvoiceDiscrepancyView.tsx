@@ -32,6 +32,8 @@ type DiscrepancyRow = {
   percentage: number;
 };
 
+const PAGE_SIZE = 1000;
+
 function formatMoney(value: number) {
   return value.toLocaleString("en-US", {
     style: "currency",
@@ -48,7 +50,8 @@ function normalizeInvoice(value: string) {
     .replace(/\s+/g, "")
     .replace(/[.]+$/g, "")
     .trim()
-    .toUpperCase();
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
 }
 
 function normalizeType(value: string) {
@@ -112,6 +115,61 @@ function parseMonthOrder(value: string) {
   return year * 100 + monthIndex;
 }
 
+async function fetchAllWmDatasetRows(): Promise<WMRow[]> {
+  let allRows: WMRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("broker_commission_datasets")
+      .select("month, check_date, invoice, type, amt")
+      .order("check_date", { ascending: false, nullsFirst: false })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as WMRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
+async function fetchAllKsolveInvoiceRows(): Promise<KsolveRow[]> {
+  let allRows: KsolveRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("invoices")
+      .select("month, check_date, check_number, invoice_number, invoice_amt, type")
+      .eq("type", "WM Invoice")
+      .order("check_date", { ascending: false, nullsFirst: false })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as KsolveRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
 export default function WMInvoiceDiscrepancyView() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<DiscrepancyRow[]>([]);
@@ -122,20 +180,27 @@ export default function WMInvoiceDiscrepancyView() {
     const load = async () => {
       setLoading(true);
 
-      const { data: wmData, error: wmError } = await supabase
-        .from("broker_commission_datasets")
-        .select("month, check_date, invoice, type, amt")
-        .order("check_date", { ascending: false, nullsFirst: false });
+      let wmData: WMRow[] = [];
+      let wmError: any = null;
+
+      try {
+        wmData = await fetchAllWmDatasetRows();
+      } catch (error) {
+        wmError = error;
+      }
 
       if (wmError) {
         console.error("Failed to load WM dataset rows:", wmError);
       }
 
-      const { data: ksolveData, error: ksolveError } = await supabase
-        .from("invoices")
-        .select("month, check_date, check_number, invoice_number, invoice_amt, type")
-        .eq("type", "WM Invoice")
-        .order("check_date", { ascending: false, nullsFirst: false });
+      let ksolveData: KsolveRow[] = [];
+      let ksolveError: any = null;
+
+      try {
+        ksolveData = await fetchAllKsolveInvoiceRows();
+      } catch (error) {
+        ksolveError = error;
+      }
 
       if (ksolveError) {
         console.error("Failed to load Ksolve invoice rows:", ksolveError);
@@ -146,6 +211,21 @@ export default function WMInvoiceDiscrepancyView() {
       );
 
       const ksolveRows = (ksolveData ?? []) as KsolveRow[];
+
+      console.log("[WM Discrepancy] wmRows count:", wmRows.length);
+      console.log(
+        "[WM Discrepancy] ksolveRows count:",
+        ksolveRows.length
+      );
+      console.log(
+        "[WM Discrepancy] sample dataset invoices:",
+        wmRows.slice(0, 20).map((r) => ({
+          invoice: r.invoice,
+          check_date: r.check_date,
+          type: r.type,
+          amt: r.amt,
+        }))
+      );
 
       const wmByInvoice = new Map<
         string,
@@ -223,8 +303,6 @@ export default function WMInvoiceDiscrepancyView() {
 
         const wmAmount = wm?.wmAmount ?? 0;
         const ksolveAmount = ks?.ksolveAmount ?? 0;
-
-        // REVERSED: Ksolve Amount - WM Amount
         const discrepancy = ksolveAmount - wmAmount;
         const percentage = wmAmount !== 0 ? (discrepancy / wmAmount) * 100 : 0;
 
@@ -240,6 +318,18 @@ export default function WMInvoiceDiscrepancyView() {
           percentage,
         };
       });
+
+      console.log(
+        "[WM Discrepancy] rows with zero WM amount:",
+        merged
+          .filter((r) => r.wmAmount === 0)
+          .slice(0, 20)
+          .map((r) => ({
+            invoice: r.invoice,
+            checkDate: r.checkDate,
+            ksolveAmount: r.ksolveAmount,
+          }))
+      );
 
       merged.sort((a, b) => {
         const aTime = a.checkDate ? new Date(a.checkDate).getTime() : 0;
