@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { Plus, RefreshCw } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { Plus, RefreshCw, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,10 @@ export default function DeductionTypesView() {
   const [deductionType, setDeductionType] = useState("");
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   const loadRows = async (silent = false) => {
     try {
@@ -72,10 +76,38 @@ export default function DeductionTypesView() {
     };
   }, []);
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setOpenMenuId(null);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const resetForm = () => {
     setDocumentType("");
     setDeductionType("");
     setShowForm(false);
+    setEditingId(null);
+  };
+
+  const startAdd = () => {
+    setEditingId(null);
+    setDocumentType("");
+    setDeductionType("");
+    setShowForm(true);
+    setOpenMenuId(null);
+  };
+
+  const startEdit = (row: DeductionTypeRow) => {
+    setEditingId(row.id);
+    setDocumentType(row.document_type);
+    setDeductionType(row.deduction_type);
+    setShowForm(true);
+    setOpenMenuId(null);
   };
 
   const handleSave = async () => {
@@ -91,34 +123,47 @@ export default function DeductionTypesView() {
         return;
       }
 
-      const { data: existing, error: existingError } = await supabase
-        .from("deduction_types")
-        .select("id")
-        .ilike("document_type", cleanedDocumentType)
-        .limit(1);
-
-      if (existingError) throw existingError;
-
-      if (existing && existing.length > 0) {
-        const { error: updateError } = await supabase
+      if (editingId) {
+        const { error } = await supabase
           .from("deduction_types")
           .update({
-            deduction_type: cleanedDeductionType,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", existing[0].id);
-
-        if (updateError) throw updateError;
-      } else {
-        const { error: insertError } = await supabase
-          .from("deduction_types")
-          .insert({
             document_type: cleanedDocumentType,
             deduction_type: cleanedDeductionType,
             updated_at: new Date().toISOString(),
-          });
+          })
+          .eq("id", editingId);
 
-        if (insertError) throw insertError;
+        if (error) throw error;
+      } else {
+        const { data: existing, error: existingError } = await supabase
+          .from("deduction_types")
+          .select("id")
+          .ilike("document_type", cleanedDocumentType)
+          .limit(1);
+
+        if (existingError) throw existingError;
+
+        if (existing && existing.length > 0) {
+          const { error: updateError } = await supabase
+            .from("deduction_types")
+            .update({
+              deduction_type: cleanedDeductionType,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", existing[0].id);
+
+          if (updateError) throw updateError;
+        } else {
+          const { error: insertError } = await supabase
+            .from("deduction_types")
+            .insert({
+              document_type: cleanedDocumentType,
+              deduction_type: cleanedDeductionType,
+              updated_at: new Date().toISOString(),
+            });
+
+          if (insertError) throw insertError;
+        }
       }
 
       resetForm();
@@ -127,6 +172,29 @@ export default function DeductionTypesView() {
       setError(err.message || "Failed to save deduction type.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async (row: DeductionTypeRow) => {
+    const ok = window.confirm(
+      `Delete mapping "${row.document_type}" -> "${row.deduction_type}"?`
+    );
+    if (!ok) return;
+
+    try {
+      setError(null);
+      const { error } = await supabase
+        .from("deduction_types")
+        .delete()
+        .eq("id", row.id);
+
+      if (error) throw error;
+
+      if (editingId === row.id) resetForm();
+      setOpenMenuId(null);
+      await loadRows(true);
+    } catch (err: any) {
+      setError(err.message || "Failed to delete deduction type.");
     }
   };
 
@@ -152,9 +220,7 @@ export default function DeductionTypesView() {
             disabled={loading || refreshing}
           >
             <RefreshCw
-              className={`mr-2 h-4 w-4 ${
-                refreshing ? "animate-spin" : ""
-              }`}
+              className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
             />
             Refresh
           </Button>
@@ -162,7 +228,7 @@ export default function DeductionTypesView() {
           <Button
             type="button"
             className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-            onClick={() => setShowForm((prev) => !prev)}
+            onClick={startAdd}
           >
             <Plus className="mr-2 h-4 w-4" />
             Add Deduction
@@ -214,7 +280,7 @@ export default function DeductionTypesView() {
               onClick={handleSave}
               disabled={saving}
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? "Saving..." : editingId ? "Update" : "Save"}
             </Button>
           </div>
         </div>
@@ -243,8 +309,12 @@ export default function DeductionTypesView() {
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Deduction Type
                 </th>
+                <th className="w-16 px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Actions
+                </th>
               </tr>
             </thead>
+
             <tbody className="divide-y divide-slate-200 bg-white">
               {rows.map((row) => (
                 <tr key={row.id}>
@@ -253,6 +323,41 @@ export default function DeductionTypesView() {
                   </td>
                   <td className="px-4 py-3 text-sm font-medium text-slate-900">
                     {row.deduction_type}
+                  </td>
+                  <td className="relative px-4 py-3 text-right">
+                    <div className="inline-block" ref={openMenuId === row.id ? menuRef : null}>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpenMenuId((prev) => (prev === row.id ? null : row.id))
+                        }
+                        className="rounded-full p-2 hover:bg-slate-100"
+                        title="More actions"
+                      >
+                        <MoreHorizontal className="h-4 w-4 text-slate-600" />
+                      </button>
+
+                      {openMenuId === row.id && (
+                        <div className="absolute right-4 top-12 z-20 min-w-[140px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+                          <button
+                            type="button"
+                            onClick={() => startEdit(row)}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                          >
+                            <Pencil className="h-4 w-4" />
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(row)}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
