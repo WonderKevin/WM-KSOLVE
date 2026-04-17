@@ -1523,7 +1523,12 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
 
     // Extract last numeric value on the line as EXT-COST
     const allNumbers = [...line.matchAll(/([\d,]+\.\d{2})/g)];
-    console.log("[parseDollarPromotionPdfRows] LINE:", line, "| ALL NUMBERS:", allNumbers.map(m => m[1]));
+    console.log(
+      "[parseDollarPromotionPdfRows] LINE:",
+      line,
+      "| ALL NUMBERS:",
+      allNumbers.map((m) => m[1])
+    );
 
     if (!allNumbers.length) {
       console.log("[parseDollarPromotionPdfRows] SKIPPED (no numbers):", line);
@@ -1548,7 +1553,31 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
     }
   }
 
-  console.log("[parseDollarPromotionPdfRows] FINAL parsed rows:", rows);
+  console.log("[parseDollarPromotionPdfRows] FINAL parsed rows (before promo add):", rows);
+
+  // Distribute $65 evenly across all items, then add that share to each row's existing amount
+  const TOTAL_PROMO_ADD = 65;
+
+  if (rows.length > 0) {
+    const baseShare = Math.round((TOTAL_PROMO_ADD / rows.length) * 100) / 100;
+    let allocated = 0;
+
+    rows.forEach((row, idx) => {
+      const isLast = idx === rows.length - 1;
+
+      let share: number;
+      if (isLast) {
+        share = Math.round((TOTAL_PROMO_ADD - allocated) * 100) / 100;
+      } else {
+        share = baseShare;
+        allocated = Math.round((allocated + share) * 100) / 100;
+      }
+
+      row.amt = Math.round((row.amt + share) * 100) / 100;
+    });
+  }
+
+  console.log("[parseDollarPromotionPdfRows] FINAL rows (after promo add):", rows);
   return rows;
 }
 
