@@ -1505,69 +1505,66 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
 
   let currentCustomer = "";
 
+  // ✅ STEP 1: Extract TOTAL FEE
+  let totalFee = 0;
   for (const line of lines) {
-    // Capture "SOLD TO: <customer name>" — everything after the colon
+    const feeMatch =
+      line.match(/TOTAL\s+FEE\s+\$?\s*([\d,]+\.\d{2})/i) ||
+      line.match(/TOTAL\s+FEE\s+([\d,]+\.\d{2})/i);
+
+    if (feeMatch) {
+      totalFee = parseFloat(feeMatch[1].replace(/,/g, ""));
+      break;
+    }
+  }
+
+  console.log("[parseDollarPromotionPdfRows] TOTAL FEE:", totalFee);
+
+  // ── Parse rows ─────────────────────────────────────────────
+  for (const line of lines) {
     const soldToMatch = line.match(/^SOLD\s+TO:\s*(.+)$/i);
     if (soldToMatch) {
       currentCustomer = soldToMatch[1].trim();
-      console.log("[parseDollarPromotionPdfRows] SOLD TO:", currentCustomer);
       continue;
     }
 
-    // Skip header/separator lines
     if (/UPC\s*#|---+/i.test(line)) continue;
 
-    // Match data rows by leading 10-14 digit UPC
     const upcMatch = line.match(/^(\d{10,14})\s+/);
     if (!upcMatch) continue;
 
-    // Extract last numeric value on the line as EXT-COST
     const allNumbers = [...line.matchAll(/([\d,]+\.\d{2})/g)];
-    console.log(
-      "[parseDollarPromotionPdfRows] LINE:",
-      line,
-      "| ALL NUMBERS:",
-      allNumbers.map((m) => m[1])
-    );
-
-    if (!allNumbers.length) {
-      console.log("[parseDollarPromotionPdfRows] SKIPPED (no numbers):", line);
-      continue;
-    }
+    if (!allNumbers.length) continue;
 
     const extCost = parseFloat(
       allNumbers[allNumbers.length - 1][1].replace(/,/g, "")
     );
 
     if (!Number.isNaN(extCost) && extCost > 0) {
-      const row: DatasetRow = {
+      rows.push({
         upc: upcMatch[1],
         item: "",
         cust_name: currentCustomer,
         amt: extCost,
-      };
-      console.log("[parseDollarPromotionPdfRows] PUSHED ROW:", row);
-      rows.push(row);
-    } else {
-      console.log("[parseDollarPromotionPdfRows] SKIPPED (bad amount):", line, extCost);
+      });
     }
   }
 
-  console.log("[parseDollarPromotionPdfRows] FINAL parsed rows (before promo add):", rows);
+  console.log("[parseDollarPromotionPdfRows] BEFORE ADD:", rows);
 
-  // Distribute $65 evenly across all items, then add that share to each row's existing amount
-  const TOTAL_PROMO_ADD = 65;
+  // ── STEP 2: Distribute TOTAL FEE across rows ─────────────────
+  if (rows.length > 0 && totalFee > 0) {
+    const baseShare = Math.round((totalFee / rows.length) * 100) / 100;
 
-  if (rows.length > 0) {
-    const baseShare = Math.round((TOTAL_PROMO_ADD / rows.length) * 100) / 100;
     let allocated = 0;
 
     rows.forEach((row, idx) => {
       const isLast = idx === rows.length - 1;
 
       let share: number;
+
       if (isLast) {
-        share = Math.round((TOTAL_PROMO_ADD - allocated) * 100) / 100;
+        share = Math.round((totalFee - allocated) * 100) / 100;
       } else {
         share = baseShare;
         allocated = Math.round((allocated + share) * 100) / 100;
@@ -1577,9 +1574,10 @@ function parseDollarPromotionPdfRows(text: string): DatasetRow[] {
     });
   }
 
-  console.log("[parseDollarPromotionPdfRows] FINAL rows (after promo add):", rows);
+  console.log("[parseDollarPromotionPdfRows] AFTER ADD:", rows);
   return rows;
 }
+
 
 
 function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
