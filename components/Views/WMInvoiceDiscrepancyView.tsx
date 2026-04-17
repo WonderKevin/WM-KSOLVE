@@ -45,11 +45,21 @@ function formatPercent(value: number) {
   return `${value.toFixed(2)}%`;
 }
 
-function normalizeInvoice(value: string) {
-  return String(value || "")
+function normalizeInvoice(value: string | null | undefined) {
+  if (value === null || value === undefined) return "";
+
+  let v = String(value).trim();
+
+  if (!v) return "";
+
+  v = v.replace(/,/g, "");
+
+  if (!Number.isNaN(Number(v))) {
+    v = String(Number(v));
+  }
+
+  return v
     .replace(/\s+/g, "")
-    .replace(/[.]+$/g, "")
-    .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
 }
@@ -213,19 +223,7 @@ export default function WMInvoiceDiscrepancyView() {
       const ksolveRows = (ksolveData ?? []) as KsolveRow[];
 
       console.log("[WM Discrepancy] wmRows count:", wmRows.length);
-      console.log(
-        "[WM Discrepancy] ksolveRows count:",
-        ksolveRows.length
-      );
-      console.log(
-        "[WM Discrepancy] sample dataset invoices:",
-        wmRows.slice(0, 20).map((r) => ({
-          invoice: r.invoice,
-          check_date: r.check_date,
-          type: r.type,
-          amt: r.amt,
-        }))
-      );
+      console.log("[WM Discrepancy] ksolveRows count:", ksolveRows.length);
 
       const wmByInvoice = new Map<
         string,
@@ -239,7 +237,7 @@ export default function WMInvoiceDiscrepancyView() {
       >();
 
       for (const row of wmRows) {
-        const invoice = normalizeInvoice(row.invoice ?? "");
+        const invoice = normalizeInvoice(row.invoice);
         if (!invoice) continue;
 
         const current = wmByInvoice.get(invoice);
@@ -248,7 +246,7 @@ export default function WMInvoiceDiscrepancyView() {
           wmByInvoice.set(invoice, {
             month:
               formatMonthFromDate(row.check_date ?? "") ||
-              row.month ||
+              String(row.month || "").trim() ||
               "",
             checkDate: row.check_date ?? "",
             invoice,
@@ -272,7 +270,7 @@ export default function WMInvoiceDiscrepancyView() {
       >();
 
       for (const row of ksolveRows) {
-        const invoice = normalizeInvoice(row.invoice_number ?? "");
+        const invoice = normalizeInvoice(row.invoice_number);
         if (!invoice) continue;
 
         const current = ksolveByInvoice.get(invoice);
@@ -281,7 +279,7 @@ export default function WMInvoiceDiscrepancyView() {
           ksolveByInvoice.set(invoice, {
             month:
               formatMonthFromDate(row.check_date ?? "") ||
-              row.month ||
+              String(row.month || "").trim() ||
               "",
             checkDate: row.check_date ?? "",
             checkNo: row.check_number ?? "",
@@ -329,6 +327,28 @@ export default function WMInvoiceDiscrepancyView() {
             checkDate: r.checkDate,
             ksolveAmount: r.ksolveAmount,
           }))
+      );
+
+      console.log("[WM Discrepancy] 1764 dataset matches:", wmRows
+        .filter((r) => normalizeInvoice(r.invoice) === "1764")
+        .map((r) => ({
+          rawInvoice: r.invoice,
+          normalizedInvoice: normalizeInvoice(r.invoice),
+          check_date: r.check_date,
+          amt: r.amt,
+          type: r.type,
+        }))
+      );
+
+      console.log("[WM Discrepancy] 1764 ksolve matches:", ksolveRows
+        .filter((r) => normalizeInvoice(r.invoice_number) === "1764")
+        .map((r) => ({
+          rawInvoice: r.invoice_number,
+          normalizedInvoice: normalizeInvoice(r.invoice_number),
+          check_date: r.check_date,
+          invoice_amt: r.invoice_amt,
+          check_number: r.check_number,
+        }))
       );
 
       merged.sort((a, b) => {
