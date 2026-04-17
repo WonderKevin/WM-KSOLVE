@@ -126,45 +126,46 @@ function normalizeType(value: string) {
   return String(value || "").trim().toUpperCase();
 }
 
-function normalizeFilterType(value: string) {
-  return String(value || "")
-    .replace(/\u00a0/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toUpperCase();
-}
-
 function isWmInvoiceType(value: string) {
   const t = normalizeType(value);
   return t === "WM INVOICE" || t === "WMINVOICE";
 }
 
 /**
- * Strip the location suffix (everything after " - ") from a raw customer string.
- * e.g. "KRO DELT 481, COLLIERVILLE - COLLIERVILLE, TN" → "KRO DELT 481, COLLIERVILLE"
+ * Normalize a raw type string from the DB — strips non-breaking spaces,
+ * collapses whitespace, and trims. Used consistently for both storing
+ * and comparing type values so the filter always matches correctly.
  */
+function cleanType(value: string | null | undefined): string {
+  return String(value ?? "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * De-duplicate a string that has been accidentally doubled.
+ * e.g. "KeHE Distributors DC16 KeHE Distributors DC16"
+ *   → "KeHE Distributors DC16"
+ * Only strips if the string is exactly X+X (even length, both halves identical).
+ */
+function dedupString(value: string): string {
+  if (!value || value.length % 2 !== 0) return value;
+  const half = value.slice(0, value.length / 2);
+  return value === half + half ? half : value;
+}
+
 function stripLocationSuffix(rawCustomer: string): string {
   const dashIndex = rawCustomer.indexOf(" - ");
   return dashIndex !== -1 ? rawCustomer.slice(0, dashIndex) : rawCustomer;
 }
 
-/**
- * Get the first N meaningful words from a normalized customer string.
- * "Meaningful" = not a pure number token.
- * e.g. normalizeText("KRO DELT 481, COLLIERVILLE") = "KRO DELT 481 COLLIERVILLE"
- *      → ["KRO", "DELT", "COLLIERVILLE"] (481 dropped) → first 2 → "KRO DELT"
- */
 function getMeaningfulWords(normalized: string): string[] {
   return normalized
     .split(" ")
     .filter((w) => w.length > 0 && !/^\d+$/.test(w));
 }
 
-/**
- * Returns the first-N-meaningful-words key for location map lookup.
- * Strips the location suffix before normalizing so "KRO DELT 481, COLLIERVILLE - COLLIERVILLE, TN"
- * and "KRO DELT 481, COLLIERVILL" both produce the same key.
- */
 function getFirstNWordsKey(raw: string, n: number): string {
   const stripped = stripLocationSuffix(raw);
   const normalized = normalizeText(stripped);
@@ -172,11 +173,6 @@ function getFirstNWordsKey(raw: string, n: number): string {
   return words.slice(0, n).join(" ");
 }
 
-/**
- * Returns all "significant" words (≥4 chars, not a pure number) from a raw customer string.
- * Used for the word-overlap fallback matching.
- * e.g. "660 FRYS OPERATING DIVISI" → ["FRYS", "OPERATING", "DIVISI"]
- */
 function getSignificantWords(raw: string): string[] {
   const normalized = normalizeText(stripLocationSuffix(raw));
   return normalized
@@ -193,20 +189,6 @@ function categorizeRetailerName(rawRetailer: string): string {
   return "INFRA & Others";
 }
 
-/**
- * Location index — built once, used for every dataset row.
- *
- * Strategy (in priority order):
- *   1. Exact first-2-meaningful-words match  (e.g. "KRO DELT" → "KRO DELT")
- *   2. First-1-meaningful-word match          (e.g. "KRO" catches any KRO* customer)
- *   3. Significant-word overlap               (e.g. "FRYS" in "660 FRYS OPERATING"
- *                                              matches "KRO FRYS ..." in locations)
- *
- * We build three maps from the locations table:
- *   - twoWordMap  : "KRO DELT" → LocationRow
- *   - oneWordMap  : "KRO"      → LocationRow (first entry wins per key)
- *   - wordMap     : "FRYS"     → LocationRow (each significant word → first location that has it)
- */
 type LocationIndex = {
   twoWordMap: Map<string, LocationRow>;
   oneWordMap: Map<string, LocationRow>;
@@ -223,7 +205,6 @@ function buildLocationIndex(locations: LocationRow[]): LocationIndex {
     const oneKey = getFirstNWordsKey(loc.customer, 1);
     const sigWords = getSignificantWords(loc.customer);
 
-    // Only insert if not already present (first-match-wins keeps the map stable)
     if (twoKey && !twoWordMap.has(twoKey)) twoWordMap.set(twoKey, loc);
     if (oneKey && !oneWordMap.has(oneKey)) oneWordMap.set(oneKey, loc);
     for (const w of sigWords) {
@@ -234,17 +215,6 @@ function buildLocationIndex(locations: LocationRow[]): LocationIndex {
   return { twoWordMap, oneWordMap, wordMap };
 }
 
-/**
- * Find the retailer for a dataset row.
- *
- * Priority:
- *   0. KEHE DC rows → infer from UPC/item prefix (existing logic, unchanged)
- *   1. Two-word key match against locations
- *   2. One-word key match against locations  (e.g. "KRO" → Kroger for all KRO* customers
- *      even if their specific division like "KRO DELT" is missing from the table)
- *   3. Significant-word overlap              (e.g. "FRYS" matches "KRO FRYS")
- *   4. Empty string (unknown)
- */
 function findRetailer(
   custName: string,
   itemName: string,
@@ -256,7 +226,6 @@ function findRetailer(
   const normalizedUpc = normalizeText(upc);
   const skuSource = normalizedUpc || normalizedItem;
 
-  // Priority 0: KEHE DC rows — infer from SKU prefix
   if (
     /KEHE DISTRIBUTORS DC/i.test(trimmedCustomer) ||
     /\bDC\s*\d+\b/i.test(trimmedCustomer)
@@ -267,21 +236,14 @@ function findRetailer(
 
   if (/^DC\s*\d+$/i.test(trimmedCustomer)) return "";
 
-  // Priority 1: Two-word key exact match
   const twoKey = getFirstNWordsKey(trimmedCustomer, 2);
   const twoMatch = index.twoWordMap.get(twoKey);
   if (twoMatch) return categorizeRetailerName(twoMatch.retailer);
 
-  // Priority 2: One-word key match
-  // Catches cases where the specific division (e.g. "KRO DELT") is missing from locations
-  // but the brand prefix ("KRO") is present for at least one other location entry.
   const oneKey = getFirstNWordsKey(trimmedCustomer, 1);
   const oneMatch = index.oneWordMap.get(oneKey);
   if (oneMatch) return categorizeRetailerName(oneMatch.retailer);
 
-  // Priority 3: Significant-word overlap
-  // Handles cases like "660 FRYS OPERATING DIVISI" matching "KRO FRYS 123, PHOENIX"
-  // because both share the meaningful word "FRYS".
   const custSigWords = getSignificantWords(trimmedCustomer);
   for (const w of custSigWords) {
     const wordMatch = index.wordMap.get(w);
@@ -453,14 +415,7 @@ export default function BrokerCommissionDataSetsView() {
       retailer: row.retailer ?? "",
     }));
 
-    // Build the three-tier location index once, reuse for every dataset row
     const locationIndex = buildLocationIndex(locations);
-
-    // Debug helpers — remove after confirming fix
-    console.log("[locationIndex] twoWordMap size:", locationIndex.twoWordMap.size);
-    console.log("[locationIndex] KRO DELT in twoWordMap?", locationIndex.twoWordMap.has("KRO DELT"));
-    console.log("[locationIndex] KRO CINN in twoWordMap?", locationIndex.twoWordMap.has("KRO CINN"));
-    console.log("[locationIndex] KRO in oneWordMap?", locationIndex.oneWordMap.has("KRO"));
 
     const overrideMap = new Map(
       ((overrideData ?? []) as RetailerOverrideRow[]).map((row) => [
@@ -508,18 +463,22 @@ export default function BrokerCommissionDataSetsView() {
       const derivedMonth =
         formatMonthFromDate(row.check_date ?? "") || (row.month ?? "");
 
+      // FIX 1: Use cleanType() for consistent type normalization
+      const rowType = cleanType(row.type);
+
+      // FIX 2: Deduplicate customer name if it was accidentally doubled in the DB
+      const rawCustName = row.cust_name ?? "";
+      const custName = dedupString(rawCustName.trim());
+
       return {
         id: row.id,
         month: derivedMonth,
         checkDate: row.check_date ?? "",
         invoice: row.invoice ?? "",
-        type: String(row.type ?? "")
-  .replace(/\u00a0/g, " ")
-  .replace(/\s+/g, " ")
-  .trim(),
+        type: rowType,
         upc: row.upc ?? "",
         item: row.item ?? "",
-        custName: row.cust_name ?? "",
+        custName,
         retailer: overrideRetailer || inferredRetailer || "",
         amt: Number(row.amt ?? 0),
       };
@@ -569,22 +528,20 @@ export default function BrokerCommissionDataSetsView() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [menuRowId]);
 
+  // FIX 1: Build type options using cleanType() — same normalization used when storing row.type
   const types = useMemo(() => {
-    const map = new Map<string, string>();
-  
+    const seen = new Set<string>();
+    const result: string[] = [];
+
     for (const row of rows) {
-      const raw = String(row.type || "")
-        .replace(/\u00a0/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-  
-      if (!raw) continue;
-  
-      const key = normalizeFilterType(raw);
-      if (!map.has(key)) map.set(key, raw);
+      const t = cleanType(row.type);
+      if (t && !seen.has(t)) {
+        seen.add(t);
+        result.push(t);
+      }
     }
-  
-    return ["All Types", ...Array.from(map.values()).sort((a, b) => a.localeCompare(b))];
+
+    return ["All Types", ...result.sort((a, b) => a.localeCompare(b))];
   }, [rows]);
 
   const months = useMemo(
@@ -609,16 +566,18 @@ export default function BrokerCommissionDataSetsView() {
   const data = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return rows.filter((row) => {
-      const selectedTypeKey = normalizeFilterType(selectedType);
-const rowTypeKey = normalizeFilterType(row.type);
+      // FIX 1: Direct string comparison after cleanType() — no more normalizeFilterType mismatch
+      const matchesType =
+        selectedType === "All Types" || cleanType(row.type) === selectedType;
 
-const matchesType =
-  selectedType === "All Types" || rowTypeKey === selectedTypeKey;
       const matchesRetailer =
         selectedRetailer === "All Retailers" ||
         (selectedRetailer === "Blank" && !row.retailer) ||
         row.retailer === selectedRetailer;
-      const matchesMonth = selectedMonth === "All Months" || row.month === selectedMonth;
+
+      const matchesMonth =
+        selectedMonth === "All Months" || row.month === selectedMonth;
+
       const matchesSearch =
         !keyword ||
         row.type.toLowerCase().includes(keyword) ||
@@ -630,6 +589,7 @@ const matchesType =
         row.custName.toLowerCase().includes(keyword) ||
         row.retailer.toLowerCase().includes(keyword) ||
         (isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt).toFixed(2).includes(keyword);
+
       return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
   }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
@@ -821,7 +781,12 @@ const matchesType =
             {typeFilterOpen && (
               <div className="absolute right-0 z-20 mt-2 max-h-72 w-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
                 {types.map((type) => (
-                  <button key={type} type="button" onClick={() => { setSelectedType(type); setTypeFilterOpen(false); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100">
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => { setSelectedType(type); setTypeFilterOpen(false); }}
+                    className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
+                  >
                     {type}
                   </button>
                 ))}
@@ -842,7 +807,12 @@ const matchesType =
             {retailerFilterOpen && (
               <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
                 {retailerOptions.map((retailer) => (
-                  <button key={retailer} type="button" onClick={() => { setSelectedRetailer(retailer); setRetailerFilterOpen(false); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100">
+                  <button
+                    key={retailer}
+                    type="button"
+                    onClick={() => { setSelectedRetailer(retailer); setRetailerFilterOpen(false); }}
+                    className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
+                  >
                     {retailer}
                   </button>
                 ))}
@@ -863,7 +833,12 @@ const matchesType =
             {monthFilterOpen && (
               <div className="absolute right-0 z-20 mt-2 max-h-72 w-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
                 {months.map((month) => (
-                  <button key={month} type="button" onClick={() => { setSelectedMonth(month); setMonthFilterOpen(false); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100">
+                  <button
+                    key={month}
+                    type="button"
+                    onClick={() => { setSelectedMonth(month); setMonthFilterOpen(false); }}
+                    className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
+                  >
                     {month === "All Months" ? month : formatMonthShort(month)}
                   </button>
                 ))}
