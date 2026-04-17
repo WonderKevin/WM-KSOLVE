@@ -362,6 +362,36 @@ function applyAmountBasedDiscrepancy(
   return result;
 }
 
+const PAGE_SIZE = 1000;
+
+async function fetchAllDatasetRows(): Promise<DatasetDbRow[]> {
+  let allRows: DatasetDbRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("broker_commission_datasets")
+      .select("id, month, check_date, invoice, type, upc, item, cust_name, amt")
+      .order("check_date", { ascending: false, nullsFirst: false })
+      .order("invoice", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as DatasetDbRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
 export default function BrokerCommissionSummaryView() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
