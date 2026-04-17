@@ -89,6 +89,19 @@ type NewDeductionTypeModal = {
   pendingExistingUpload: UploadRecord | null;
 };
 
+type PendingUnknownDeduction = {
+  file: File;
+  meta: {
+    category: string;
+    invoice: string;
+    pdf_date: string;
+    file_type: "pdf" | "excel";
+    detected_name?: string;
+  };
+  matchedInvoiceNumber: string;
+  existingUpload: UploadRecord | null;
+};
+
 type UpcEntry = {
   upc: string;
   description: string;
@@ -2037,6 +2050,7 @@ export default function InvoicesView({
   });
 
   const [deductionTypes, setDeductionTypes] = useState<DeductionTypeRecord[]>([]);
+const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<PendingUnknownDeduction[]>([]);
 
   const [upcModal, setUpcModal] = useState<NewUpcModal>({
     open: false, upcs: [], pendingInvoice: "", pendingPdfDate: "", pendingFile: null, pendingCategory: "",
