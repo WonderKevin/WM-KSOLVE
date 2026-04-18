@@ -1595,7 +1595,7 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
   const dk = keys.find((k) => /^division$/i.test(k)) ?? "";
   const hk = keys.find((k) => /kehe\s*dc/i.test(k)) ?? "";
 
-  // IMPORTANT: prefer Bill Amount, not Scanned Sales
+  // Prefer Bill Amount, not Scanned Sales
   const ak =
     keys.find((k) => /bill\s*amount/i.test(k)) ??
     keys.find((k) => /scanned\s*sales/i.test(k)) ??
@@ -1615,6 +1615,7 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
 
   let epFee = 0;
 
+  // ✅ EP only: read from the SAME ROW only
   for (const sheetName of wb.SheetNames) {
     if (epFee) break;
 
@@ -1628,23 +1629,22 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
       const row = allRows[ri];
 
       for (let ci = 0; ci < row.length; ci++) {
-        if (/ep\s*fee/i.test(String(row[ci] || "").trim())) {
-          for (let cj = ci + 1; cj < row.length; cj++) {
-            const val = parseAmount(row[cj]);
-            if (val !== null && val > 0) {
-              epFee = val;
-              break;
-            }
+        const cellText = String(row[ci] || "").trim();
+
+        if (/^ep\s*fee:?$/i.test(cellText) || /^ep\s*fee\b/i.test(cellText)) {
+          // Try inline format like "EP Fee: 25.26"
+          const inlineMatch = cellText.match(/ep\s*fee[^0-9]*([\d,]+\.\d{2})/i);
+          if (inlineMatch) {
+            epFee = parseFloat(inlineMatch[1].replace(/,/g, ""));
+            break;
           }
 
-          if (!epFee && ri + 1 < allRows.length) {
-            const nextRow = allRows[ri + 1];
-            for (let cj = ci; cj < Math.min(ci + 3, nextRow.length); cj++) {
-              const val = parseAmount(nextRow[cj]);
-              if (val !== null && val > 0) {
-                epFee = val;
-                break;
-              }
+          // Try values to the right on the SAME ROW only
+          for (let cj = ci + 1; cj < row.length; cj++) {
+            const val = parseAmount(row[cj]);
+            if (val !== null) {
+              epFee = val;
+              break;
             }
           }
 
@@ -1655,6 +1655,8 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
       if (epFee) break;
     }
   }
+
+  console.log("[parseExcelProductDetailsRows] detected EP Fee:", epFee);
 
   const rawData: Array<{ upc: string; cust: string; amt: number; qty: number | null }> = [];
 
@@ -1702,7 +1704,7 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
     });
   }
 
-  // fix rounding drift on last row
+  // Fix rounding drift on last row
   if (epFee > 0 && rows.length) {
     const baseTotal = rawData.reduce((sum, r) => sum + r.amt, 0);
     const currentTotal = rows.reduce((sum, r) => sum + r.amt, 0);
@@ -1714,6 +1716,9 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
         Math.round((rows[rows.length - 1].amt + drift) * 100) / 100;
     }
   }
+
+  console.log("[parseExcelProductDetailsRows] rawData:", rawData);
+  console.log("[parseExcelProductDetailsRows] final rows:", rows);
 
   return rows;
 }
