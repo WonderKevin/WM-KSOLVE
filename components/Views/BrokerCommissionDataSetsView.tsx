@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
+import * as XLSX from "xlsx";
 
 type Row = {
   id: string;
@@ -463,10 +464,7 @@ export default function BrokerCommissionDataSetsView() {
       const derivedMonth =
         formatMonthFromDate(row.check_date ?? "") || (row.month ?? "");
 
-      // FIX 1: Use cleanType() for consistent type normalization
       const rowType = cleanType(row.type);
-
-      // FIX 2: Deduplicate customer name if it was accidentally doubled in the DB
       const rawCustName = row.cust_name ?? "";
       const custName = dedupString(rawCustName.trim());
 
@@ -528,7 +526,6 @@ export default function BrokerCommissionDataSetsView() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [menuRowId]);
 
-  // FIX 1: Build type options using cleanType() — same normalization used when storing row.type
   const types = useMemo(() => {
     const seen = new Set<string>();
     const result: string[] = [];
@@ -565,17 +562,27 @@ export default function BrokerCommissionDataSetsView() {
 
   const data = useMemo(() => {
     console.log("selectedType:", selectedType);
-    console.log("sample row types:", JSON.stringify(rows.slice(0, 5).map(r => ({ raw: r.type, clean: cleanType(r.type) }))));
+    console.log(
+      "sample row types:",
+      JSON.stringify(rows.slice(0, 5).map((r) => ({ raw: r.type, clean: cleanType(r.type) })))
+    );
+
     const keyword = search.trim().toLowerCase();
     const filtered = rows.filter((row) => {
       const matchesType =
         selectedType === "All Types" || cleanType(row.type) === selectedType;
 
       if (selectedType === "WM Invoice" && !matchesType) {
-        console.log("EXCLUDED row type:", JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType }));
+        console.log(
+          "EXCLUDED row type:",
+          JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType })
+        );
       }
       if (selectedType === "WM Invoice" && matchesType && row.type !== "WM Invoice") {
-        console.log("WRONGLY INCLUDED row type:", JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType }));
+        console.log(
+          "WRONGLY INCLUDED row type:",
+          JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType })
+        );
       }
 
       const matchesRetailer =
@@ -601,10 +608,39 @@ export default function BrokerCommissionDataSetsView() {
       return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
 
-    // ADD THIS LINE:
     console.log("FILTERED COUNT:", filtered.length, "of", rows.length, "total rows");
     return filtered;
   }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
+
+  const handleExportToExcel = () => {
+    if (!data.length) {
+      alert("No rows to export.");
+      return;
+    }
+
+    const exportRows = data.map((row) => ({
+      Type: row.type,
+      Month: row.month,
+      "Check Date": row.checkDate || "",
+      Invoice: row.invoice,
+      UPC: row.upc,
+      Item: row.item,
+      Customer: row.custName,
+      Retailer: row.retailer || "",
+      Amount: isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt,
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Data Sets");
+
+    const fileNameParts = ["broker_commission_datasets"];
+    if (selectedType !== "All Types") fileNameParts.push(selectedType.replace(/\s+/g, "_"));
+    if (selectedRetailer !== "All Retailers") fileNameParts.push(selectedRetailer.replace(/\s+/g, "_"));
+    if (selectedMonth !== "All Months") fileNameParts.push(selectedMonth.replace(/\s+/g, "_"));
+
+    XLSX.writeFile(workbook, `${fileNameParts.join("_")}.xlsx`);
+  };
 
   const visibleRowIds = useMemo(() => data.map((row) => row.id), [data]);
 
@@ -782,7 +818,11 @@ export default function BrokerCommissionDataSetsView() {
           <div className="relative" ref={typeFilterRef}>
             <Button
               type="button"
-              onClick={() => { setTypeFilterOpen((prev) => !prev); setRetailerFilterOpen(false); setMonthFilterOpen(false); }}
+              onClick={() => {
+                setTypeFilterOpen((prev) => !prev);
+                setRetailerFilterOpen(false);
+                setMonthFilterOpen(false);
+              }}
               variant="outline"
               className="rounded-2xl"
             >
@@ -796,7 +836,10 @@ export default function BrokerCommissionDataSetsView() {
                   <button
                     key={type}
                     type="button"
-                    onClick={() => { setSelectedType(type); setTypeFilterOpen(false); }}
+                    onClick={() => {
+                      setSelectedType(type);
+                      setTypeFilterOpen(false);
+                    }}
                     className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
                   >
                     {type}
@@ -809,7 +852,11 @@ export default function BrokerCommissionDataSetsView() {
           <div className="relative" ref={retailerFilterRef}>
             <Button
               type="button"
-              onClick={() => { setRetailerFilterOpen((prev) => !prev); setTypeFilterOpen(false); setMonthFilterOpen(false); }}
+              onClick={() => {
+                setRetailerFilterOpen((prev) => !prev);
+                setTypeFilterOpen(false);
+                setMonthFilterOpen(false);
+              }}
               variant="outline"
               className="rounded-2xl"
             >
@@ -822,7 +869,10 @@ export default function BrokerCommissionDataSetsView() {
                   <button
                     key={retailer}
                     type="button"
-                    onClick={() => { setSelectedRetailer(retailer); setRetailerFilterOpen(false); }}
+                    onClick={() => {
+                      setSelectedRetailer(retailer);
+                      setRetailerFilterOpen(false);
+                    }}
                     className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
                   >
                     {retailer}
@@ -835,7 +885,11 @@ export default function BrokerCommissionDataSetsView() {
           <div className="relative" ref={monthFilterRef}>
             <Button
               type="button"
-              onClick={() => { setMonthFilterOpen((prev) => !prev); setTypeFilterOpen(false); setRetailerFilterOpen(false); }}
+              onClick={() => {
+                setMonthFilterOpen((prev) => !prev);
+                setTypeFilterOpen(false);
+                setRetailerFilterOpen(false);
+              }}
               variant="outline"
               className="rounded-2xl"
             >
@@ -848,7 +902,10 @@ export default function BrokerCommissionDataSetsView() {
                   <button
                     key={month}
                     type="button"
-                    onClick={() => { setSelectedMonth(month); setMonthFilterOpen(false); }}
+                    onClick={() => {
+                      setSelectedMonth(month);
+                      setMonthFilterOpen(false);
+                    }}
                     className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
                   >
                     {month === "All Months" ? month : formatMonthShort(month)}
@@ -857,6 +914,16 @@ export default function BrokerCommissionDataSetsView() {
               </div>
             )}
           </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-2xl"
+            onClick={handleExportToExcel}
+            disabled={!data.length}
+          >
+            Export to Excel
+          </Button>
 
           <div className="relative" ref={notifRef}>
             <Button
@@ -879,9 +946,17 @@ export default function BrokerCommissionDataSetsView() {
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-slate-900">Missing in Data Sets</p>
-                    <p className="text-xs text-slate-500">In Ksolve Invoices / Invoices but not yet in Data Sets</p>
+                    <p className="text-xs text-slate-500">
+                      In Ksolve Invoices / Invoices but not yet in Data Sets
+                    </p>
                   </div>
-                  <span className={`rounded-full px-2 py-1 text-xs font-semibold ${missingInvoices.length > 0 ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"}`}>
+                  <span
+                    className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                      missingInvoices.length > 0
+                        ? "bg-red-50 text-red-600"
+                        : "bg-emerald-50 text-emerald-600"
+                    }`}
+                  >
                     {missingInvoices.length} missing
                   </span>
                 </div>
@@ -897,7 +972,10 @@ export default function BrokerCommissionDataSetsView() {
                       </div>
                       <div className="space-y-1">
                         {missingInvoices.map((invoice) => (
-                          <div key={invoice} className="rounded-xl border border-slate-100 px-3 py-2 text-sm text-slate-700">
+                          <div
+                            key={invoice}
+                            className="rounded-xl border border-slate-100 px-3 py-2 text-sm text-slate-700"
+                          >
                             {invoice}
                           </div>
                         ))}
@@ -917,8 +995,12 @@ export default function BrokerCommissionDataSetsView() {
             {selectedRowIds.length} row{selectedRowIds.length > 1 ? "s" : ""} selected
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" className="rounded-2xl" onClick={openBulkEdit}>Edit selected</Button>
-            <Button type="button" variant="outline" className="rounded-2xl" onClick={() => setSelectedRowIds([])}>Clear selection</Button>
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={openBulkEdit}>
+              Edit selected
+            </Button>
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={() => setSelectedRowIds([])}>
+              Clear selection
+            </Button>
           </div>
         </div>
       )}
@@ -937,7 +1019,9 @@ export default function BrokerCommissionDataSetsView() {
               className="min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
             >
               {EDITABLE_RETAILERS.map((option) => (
-                <option key={option} value={option}>{option}</option>
+                <option key={option} value={option}>
+                  {option}
+                </option>
               ))}
             </select>
             {bulkRetailerChoice === "Add new retailer..." && (
@@ -954,11 +1038,23 @@ export default function BrokerCommissionDataSetsView() {
                 type="button"
                 className="rounded-2xl"
                 onClick={saveBulkRetailerEdit}
-                disabled={bulkSaving || !(bulkRetailerChoice && (bulkRetailerChoice !== "Add new retailer..." || bulkCustomRetailer.trim()))}
+                disabled={
+                  bulkSaving ||
+                  !(bulkRetailerChoice &&
+                    (bulkRetailerChoice !== "Add new retailer..." || bulkCustomRetailer.trim()))
+                }
               >
                 {bulkSaving ? "Saving..." : "Save selected"}
               </Button>
-              <Button type="button" variant="outline" className="rounded-2xl" onClick={cancelBulkEdit} disabled={bulkSaving}>Cancel</Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-2xl"
+                onClick={cancelBulkEdit}
+                disabled={bulkSaving}
+              >
+                Cancel
+              </Button>
             </div>
           </div>
         </div>
@@ -972,7 +1068,9 @@ export default function BrokerCommissionDataSetsView() {
                 <input
                   type="checkbox"
                   checked={allVisibleSelected}
-                  ref={(el) => { if (el) el.indeterminate = someVisibleSelected; }}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someVisibleSelected;
+                  }}
                   onChange={toggleSelectAllVisible}
                   className="h-4 w-4 rounded border-slate-300"
                 />
@@ -990,9 +1088,17 @@ export default function BrokerCommissionDataSetsView() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={10} className="p-6 text-center text-gray-500">Loading data...</td></tr>
+              <tr>
+                <td colSpan={10} className="p-6 text-center text-gray-500">
+                  Loading data...
+                </td>
+              </tr>
             ) : data.length === 0 ? (
-              <tr><td colSpan={10} className="p-6 text-center text-gray-500">No data found.</td></tr>
+              <tr>
+                <td colSpan={10} className="p-6 text-center text-gray-500">
+                  No data found.
+                </td>
+              </tr>
             ) : (
               data.map((row) => {
                 const isEditing = editingRowId === row.id;
@@ -1026,7 +1132,9 @@ export default function BrokerCommissionDataSetsView() {
                             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
                           >
                             {EDITABLE_RETAILERS.map((option) => (
-                              <option key={option} value={option}>{option}</option>
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
                             ))}
                           </select>
                           {editRetailerChoice === "Add new retailer..." && (
@@ -1051,7 +1159,11 @@ export default function BrokerCommissionDataSetsView() {
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            disabled={isSaving || !(editRetailerChoice && (editRetailerChoice !== "Add new retailer..." || customRetailer.trim()))}
+                            disabled={
+                              isSaving ||
+                              !(editRetailerChoice &&
+                                (editRetailerChoice !== "Add new retailer..." || customRetailer.trim()))
+                            }
                             onClick={() => saveRetailerEdit(row.id)}
                             className="rounded-md p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-50"
                             title="Save"
@@ -1071,11 +1183,13 @@ export default function BrokerCommissionDataSetsView() {
                       ) : (
                         <div
                           className="relative"
-                          ref={(el) => { actionMenuRefs.current[row.id] = el; }}
+                          ref={(el) => {
+                            actionMenuRefs.current[row.id] = el;
+                          }}
                         >
                           <button
                             type="button"
-                            onClick={() => setMenuRowId((prev) => prev === row.id ? null : row.id)}
+                            onClick={() => setMenuRowId((prev) => (prev === row.id ? null : row.id))}
                             className="rounded-md p-2 text-slate-600 hover:bg-slate-100"
                             title="Actions"
                           >
