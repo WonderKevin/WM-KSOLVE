@@ -88,6 +88,22 @@ function formatMonthFromDate(value: string) {
   });
 }
 
+function formatDisplayDate(value: string | null | undefined) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+  }
+
+  return raw;
+}
+
 function parseMonthOrder(value: string) {
   const monthMap: Record<string, number> = {
     january: 0,
@@ -215,9 +231,6 @@ export default function WMInvoiceDiscrepancyView() {
 
       const ksolveRows = (ksolveData ?? []) as KsolveRow[];
 
-      console.log("[WM Discrepancy] wmRows count:", wmRows.length);
-      console.log("[WM Discrepancy] ksolveRows count:", ksolveRows.length);
-
       const wmByInvoice = new Map<
         string,
         {
@@ -241,7 +254,7 @@ export default function WMInvoiceDiscrepancyView() {
               formatMonthFromDate(row.check_date ?? "") ||
               String(row.month || "").trim() ||
               "",
-            checkDate: row.check_date ?? "",
+            checkDate: formatDisplayDate(row.check_date),
             invoice,
             type: row.type ?? "WM Invoice",
             wmAmount: Math.abs(Number(row.amt ?? 0)),
@@ -274,7 +287,7 @@ export default function WMInvoiceDiscrepancyView() {
               formatMonthFromDate(row.check_date ?? "") ||
               String(row.month || "").trim() ||
               "",
-            checkDate: row.check_date ?? "",
+            checkDate: formatDisplayDate(row.check_date),
             checkNo: row.check_number ?? "",
             invoice,
             ksolveAmount: Number(row.invoice_amt ?? 0),
@@ -283,11 +296,6 @@ export default function WMInvoiceDiscrepancyView() {
           current.ksolveAmount += Number(row.invoice_amt ?? 0);
         }
       }
-
-      console.log(
-        "[WM Discrepancy] wmByInvoice keys sample:",
-        Array.from(wmByInvoice.keys()).slice(0, 50)
-      );
 
       console.log(
         "[WM Discrepancy] has 1764 / 1762:",
@@ -320,70 +328,6 @@ export default function WMInvoiceDiscrepancyView() {
           percentage,
         };
       });
-
-      console.log(
-        "[WM Discrepancy] rows with zero WM amount:",
-        merged
-          .filter((r) => r.wmAmount === 0)
-          .slice(0, 20)
-          .map((r) => ({
-            invoice: r.invoice,
-            checkDate: r.checkDate,
-            ksolveAmount: r.ksolveAmount,
-          }))
-      );
-
-      console.log(
-        "[WM Discrepancy] 1764 dataset matches:",
-        wmRows
-          .filter((r) => normalizeInvoice(r.invoice) === "1764")
-          .map((r) => ({
-            rawInvoice: r.invoice,
-            normalizedInvoice: normalizeInvoice(r.invoice),
-            check_date: r.check_date,
-            amt: r.amt,
-            type: r.type,
-          }))
-      );
-
-      console.log(
-        "[WM Discrepancy] 1764 ksolve matches:",
-        ksolveRows
-          .filter((r) => normalizeInvoice(r.invoice_number) === "1764")
-          .map((r) => ({
-            rawInvoice: r.invoice_number,
-            normalizedInvoice: normalizeInvoice(r.invoice_number),
-            check_date: r.check_date,
-            invoice_amt: r.invoice_amt,
-            check_number: r.check_number,
-          }))
-      );
-
-      console.log(
-        "[WM Discrepancy] 1762 dataset matches:",
-        wmRows
-          .filter((r) => normalizeInvoice(r.invoice) === "1762")
-          .map((r) => ({
-            rawInvoice: r.invoice,
-            normalizedInvoice: normalizeInvoice(r.invoice),
-            check_date: r.check_date,
-            amt: r.amt,
-            type: r.type,
-          }))
-      );
-
-      console.log(
-        "[WM Discrepancy] 1762 ksolve matches:",
-        ksolveRows
-          .filter((r) => normalizeInvoice(r.invoice_number) === "1762")
-          .map((r) => ({
-            rawInvoice: r.invoice_number,
-            normalizedInvoice: normalizeInvoice(r.invoice_number),
-            check_date: r.check_date,
-            invoice_amt: r.invoice_amt,
-            check_number: r.check_number,
-          }))
-      );
 
       merged.sort((a, b) => {
         const aTime = a.checkDate ? new Date(a.checkDate).getTime() : 0;
