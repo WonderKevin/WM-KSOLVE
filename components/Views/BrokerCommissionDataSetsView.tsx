@@ -477,7 +477,10 @@ export default function BrokerCommissionDataSetsView() {
         upc: row.upc ?? "",
         item: row.item ?? "",
         custName,
-        retailer: overrideRetailer || inferredRetailer || "",
+        retailer: (overrideRetailer || inferredRetailer || "")
+  .replace(/\u00a0/g, " ")   // remove hidden NBSP
+  .replace(/\s+/g, " ")      // collapse spaces
+  .trim(),
         amt: Number(row.amt ?? 0),
       };
     });
@@ -560,57 +563,88 @@ export default function BrokerCommissionDataSetsView() {
     if (!retailerOptions.includes(selectedRetailer)) setSelectedRetailer("All Retailers");
   }, [retailerOptions, selectedRetailer]);
 
+  const normalizedRows = useMemo(() => {
+    return rows.map((row) => {
+      const normalizedType = cleanType(row.type).toUpperCase();
+      const normalizedRetailer = String(row.retailer || "")
+        .replace(/\u00a0/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toUpperCase();
+      const normalizedMonth = String(row.month || "")
+        .replace(/\u00a0/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+  
+      return {
+        ...row,
+        _normalizedType: normalizedType,
+        _normalizedRetailer: normalizedRetailer,
+        _normalizedMonth: normalizedMonth,
+      };
+    });
+  }, [rows]);
+
+
   const data = useMemo(() => {
     const keyword = search.trim().toLowerCase();
   
     const selectedTypeNorm =
-      selectedType === "All Types" ? "All Types" : cleanType(selectedType).toUpperCase();
+      selectedType === "All Types"
+        ? "ALL TYPES"
+        : cleanType(selectedType).toUpperCase();
   
     const selectedRetailerNorm =
       selectedRetailer === "All Retailers"
-        ? "All Retailers"
+        ? "ALL RETAILERS"
         : selectedRetailer === "Blank"
-          ? "Blank"
-          : selectedRetailer.trim().toUpperCase();
+          ? "BLANK"
+          : String(selectedRetailer || "")
+              .replace(/\u00a0/g, " ")
+              .replace(/\s+/g, " ")
+              .trim()
+              .toUpperCase();
   
     const selectedMonthNorm =
-      selectedMonth === "All Months" ? "All Months" : selectedMonth.trim();
+      selectedMonth === "All Months"
+        ? "ALL MONTHS"
+        : String(selectedMonth || "")
+            .replace(/\u00a0/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
   
-    const filtered = rows.filter((row) => {
-      const rowType = cleanType(row.type).toUpperCase();
-      const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
-      const rowRetailerNorm = rowRetailer.toUpperCase();
-      const rowMonth = String(row.month || "").trim();
-  
+    const filtered = normalizedRows.filter((row) => {
       const matchesType =
-        selectedTypeNorm === "All Types" || rowType === selectedTypeNorm;
+        selectedTypeNorm === "ALL TYPES" ||
+        row._normalizedType === selectedTypeNorm;
   
       const matchesRetailer =
-        selectedRetailerNorm === "All Retailers" ||
-        (selectedRetailerNorm === "Blank" && rowRetailer === "") ||
-        rowRetailerNorm === selectedRetailerNorm;
+        selectedRetailerNorm === "ALL RETAILERS" ||
+        (selectedRetailerNorm === "BLANK" && row._normalizedRetailer === "") ||
+        row._normalizedRetailer === selectedRetailerNorm;
   
       const matchesMonth =
-        selectedMonthNorm === "All Months" || rowMonth === selectedMonthNorm;
+        selectedMonthNorm === "ALL MONTHS" ||
+        row._normalizedMonth === selectedMonthNorm;
   
       const displayAmount = isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt;
   
       const matchesSearch =
         !keyword ||
-        rowType.toLowerCase().includes(keyword) ||
+        row._normalizedType.toLowerCase().includes(keyword) ||
         formatMonthShort(row.month).toLowerCase().includes(keyword) ||
         formatCheckDate(row.checkDate).toLowerCase().includes(keyword) ||
         row.invoice.toLowerCase().includes(keyword) ||
         row.upc.toLowerCase().includes(keyword) ||
         row.item.toLowerCase().includes(keyword) ||
         row.custName.toLowerCase().includes(keyword) ||
-        rowRetailer.toLowerCase().includes(keyword) ||
+        row._normalizedRetailer.toLowerCase().includes(keyword) ||
         displayAmount.toFixed(2).includes(keyword);
   
       return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
   
-    console.log("FILTER STATE", {
+    console.log("FILTER DEBUG", {
       selectedType,
       selectedTypeNorm,
       selectedRetailer,
@@ -618,11 +652,12 @@ export default function BrokerCommissionDataSetsView() {
       selectedMonth,
       selectedMonthNorm,
       filteredCount: filtered.length,
-      totalRows: rows.length,
+      totalRows: normalizedRows.length,
+      sampleTypes: filtered.slice(0, 10).map((r) => r.type),
     });
   
     return filtered;
-  }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
+  }, [normalizedRows, selectedType, selectedRetailer, selectedMonth, search]);
 
   const handleExportToExcel = () => {
     if (!data.length) {
@@ -655,6 +690,10 @@ export default function BrokerCommissionDataSetsView() {
   };
 
   const visibleRowIds = useMemo(() => data.map((row) => row.id), [data]);
+
+  useEffect(() => {
+    setSelectedRowIds((prev) => prev.filter((id) => visibleRowIds.includes(id)));
+  }, [visibleRowIds]);
 
   const allVisibleSelected =
     visibleRowIds.length > 0 && visibleRowIds.every((id) => selectedRowIds.includes(id));
