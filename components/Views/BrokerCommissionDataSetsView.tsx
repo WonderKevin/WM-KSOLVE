@@ -562,6 +562,7 @@ export default function BrokerCommissionDataSetsView() {
   }, [retailerOptions, selectedRetailer]);
 
   const data = useMemo(() => {
+    console.log("[DataSets] data useMemo running — selectedType:", JSON.stringify(selectedType), "rows:", rows.length);
     return rows.filter((row) => {
       // Type filter — simple case-insensitive string match, nothing fancy
       if (selectedType !== "All Types") {
@@ -837,6 +838,7 @@ export default function BrokerCommissionDataSetsView() {
                     key={type}
                     type="button"
                     onClick={() => {
+                      console.log("[DataSets] Type filter clicked:", JSON.stringify(type));
                       setSelectedType(type);
                       setTypeFilterOpen(false);
                       setSelectedRowIds([]);
