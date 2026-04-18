@@ -45,22 +45,15 @@ function formatPercent(value: number) {
   return `${value.toFixed(2)}%`;
 }
 
-function normalizeInvoice(value: string | null | undefined) {
-  if (value === null || value === undefined) return "";
+function normalizeInvoice(value: string | number | null | undefined) {
+  const raw = String(value ?? "").trim().toUpperCase();
+  if (!raw) return "";
 
-  let v = String(value).trim();
-
-  if (!v) return "";
-
-  v = v.replace(/,/g, "");
-
-  if (!Number.isNaN(Number(v))) {
-    v = String(Number(v));
-  }
-
-  return v
+  return raw
+    .replace(/,/g, "")
+    .replace(/\.0+$/g, "")
+    .replace(/[.]+$/g, "")
     .replace(/\s+/g, "")
-    .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
 }
 
@@ -291,6 +284,17 @@ export default function WMInvoiceDiscrepancyView() {
         }
       }
 
+      console.log(
+        "[WM Discrepancy] wmByInvoice keys sample:",
+        Array.from(wmByInvoice.keys()).slice(0, 50)
+      );
+
+      console.log(
+        "[WM Discrepancy] has 1764 / 1762:",
+        wmByInvoice.has("1764"),
+        wmByInvoice.has("1762")
+      );
+
       const allInvoices = Array.from(
         new Set([...wmByInvoice.keys(), ...ksolveByInvoice.keys()])
       );
@@ -329,26 +333,56 @@ export default function WMInvoiceDiscrepancyView() {
           }))
       );
 
-      console.log("[WM Discrepancy] 1764 dataset matches:", wmRows
-        .filter((r) => normalizeInvoice(r.invoice) === "1764")
-        .map((r) => ({
-          rawInvoice: r.invoice,
-          normalizedInvoice: normalizeInvoice(r.invoice),
-          check_date: r.check_date,
-          amt: r.amt,
-          type: r.type,
-        }))
+      console.log(
+        "[WM Discrepancy] 1764 dataset matches:",
+        wmRows
+          .filter((r) => normalizeInvoice(r.invoice) === "1764")
+          .map((r) => ({
+            rawInvoice: r.invoice,
+            normalizedInvoice: normalizeInvoice(r.invoice),
+            check_date: r.check_date,
+            amt: r.amt,
+            type: r.type,
+          }))
       );
 
-      console.log("[WM Discrepancy] 1764 ksolve matches:", ksolveRows
-        .filter((r) => normalizeInvoice(r.invoice_number) === "1764")
-        .map((r) => ({
-          rawInvoice: r.invoice_number,
-          normalizedInvoice: normalizeInvoice(r.invoice_number),
-          check_date: r.check_date,
-          invoice_amt: r.invoice_amt,
-          check_number: r.check_number,
-        }))
+      console.log(
+        "[WM Discrepancy] 1764 ksolve matches:",
+        ksolveRows
+          .filter((r) => normalizeInvoice(r.invoice_number) === "1764")
+          .map((r) => ({
+            rawInvoice: r.invoice_number,
+            normalizedInvoice: normalizeInvoice(r.invoice_number),
+            check_date: r.check_date,
+            invoice_amt: r.invoice_amt,
+            check_number: r.check_number,
+          }))
+      );
+
+      console.log(
+        "[WM Discrepancy] 1762 dataset matches:",
+        wmRows
+          .filter((r) => normalizeInvoice(r.invoice) === "1762")
+          .map((r) => ({
+            rawInvoice: r.invoice,
+            normalizedInvoice: normalizeInvoice(r.invoice),
+            check_date: r.check_date,
+            amt: r.amt,
+            type: r.type,
+          }))
+      );
+
+      console.log(
+        "[WM Discrepancy] 1762 ksolve matches:",
+        ksolveRows
+          .filter((r) => normalizeInvoice(r.invoice_number) === "1762")
+          .map((r) => ({
+            rawInvoice: r.invoice_number,
+            normalizedInvoice: normalizeInvoice(r.invoice_number),
+            check_date: r.check_date,
+            invoice_amt: r.invoice_amt,
+            check_number: r.check_number,
+          }))
       );
 
       merged.sort((a, b) => {
@@ -481,8 +515,8 @@ export default function WMInvoiceDiscrepancyView() {
               totals.discrepancy === 0
                 ? "text-slate-900"
                 : totals.discrepancy > 0
-                ? "text-emerald-700"
-                : "text-red-600"
+                  ? "text-emerald-700"
+                  : "text-red-600"
             }`}
           >
             {formatMoney(totals.discrepancy)}
@@ -536,8 +570,8 @@ export default function WMInvoiceDiscrepancyView() {
                         row.discrepancy === 0
                           ? "text-slate-900"
                           : row.discrepancy > 0
-                          ? "text-emerald-700"
-                          : "text-red-600"
+                            ? "text-emerald-700"
+                            : "text-red-600"
                       }`}
                     >
                       {formatMoney(row.discrepancy)}
@@ -547,8 +581,8 @@ export default function WMInvoiceDiscrepancyView() {
                         row.discrepancy === 0
                           ? "text-slate-900"
                           : row.discrepancy > 0
-                          ? "text-emerald-700"
-                          : "text-red-600"
+                            ? "text-emerald-700"
+                            : "text-red-600"
                       }`}
                     >
                       {formatPercent(row.percentage)}
