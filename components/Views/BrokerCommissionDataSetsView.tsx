@@ -564,11 +564,18 @@ export default function BrokerCommissionDataSetsView() {
   const data = useMemo(() => {
     const keyword = search.trim().toLowerCase();
 
-    // FIX 2: Compare types case-insensitively using cleanType on both sides.
-    // This ensures "WM Invoice" selected in the dropdown matches rows whose
-    // type field has any casing/whitespace variant stored in the DB.
-    const selectedTypeUpper =
-      selectedType === "All Types" ? "" : cleanType(selectedType).toUpperCase();
+    // Normalize the selected type independently of cleanType so that any
+    // invisible character variant (non-breaking space, zero-width space, etc.)
+    // in the stored dropdown value is stripped before comparison.
+    const isFilteringByType = selectedType !== "All Types";
+    const selectedTypeKey = isFilteringByType
+      ? selectedType
+          .replace(/\u00a0/g, " ")
+          .replace(/[\u200b\u200c\u200d\ufeff]/g, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toUpperCase()
+      : "";
 
     const selectedRetailerNorm =
       selectedRetailer === "All Retailers"
@@ -580,16 +587,22 @@ export default function BrokerCommissionDataSetsView() {
     const selectedMonthNorm =
       selectedMonth === "All Months" ? "All Months" : selectedMonth.trim();
 
-    const filtered = rows.filter((row) => {
-      // FIX 3: Always derive rowTypeUpper fresh from the stored row.type so
-      // hidden characters or casing differences never cause a false match.
-      const rowTypeUpper = cleanType(row.type).toUpperCase();
+    return rows.filter((row) => {
+      // Derive a clean uppercase key from the raw row type, stripping every
+      // known invisible character variant before comparing.
+      const rowTypeKey = String(row.type ?? "")
+        .replace(/\u00a0/g, " ")
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toUpperCase();
+
       const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
       const rowRetailerNorm = rowRetailer.toUpperCase();
       const rowMonth = String(row.month || "").trim();
 
-      const matchesType =
-        selectedType === "All Types" || rowTypeUpper === selectedTypeUpper;
+      // Strict equality after independent normalization on both sides.
+      const matchesType = !isFilteringByType || rowTypeKey === selectedTypeKey;
 
       const matchesRetailer =
         selectedRetailerNorm === "All Retailers" ||
@@ -603,7 +616,7 @@ export default function BrokerCommissionDataSetsView() {
 
       const matchesSearch =
         !keyword ||
-        rowTypeUpper.toLowerCase().includes(keyword) ||
+        rowTypeKey.toLowerCase().includes(keyword) ||
         formatMonthShort(row.month).toLowerCase().includes(keyword) ||
         formatCheckDate(row.checkDate).toLowerCase().includes(keyword) ||
         row.invoice.toLowerCase().includes(keyword) ||
@@ -615,8 +628,6 @@ export default function BrokerCommissionDataSetsView() {
 
       return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
-
-    return filtered;
   }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
 
   const handleExportToExcel = () => {
@@ -809,14 +820,14 @@ export default function BrokerCommissionDataSetsView() {
             <input
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setSearch(e.target.value); setSelectedRowIds([]); }}
               placeholder="Search type, invoice, UPC, item, customer, retailer..."
               className="w-full rounded-2xl border border-slate-200 bg-white py-2 pl-10 pr-10 text-sm outline-none transition focus:border-slate-300"
             />
             {search && (
               <button
                 type="button"
-                onClick={() => setSearch("")}
+                onClick={() => { setSearch(""); setSelectedRowIds([]); }}
                 className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
                 title="Clear search"
               >
@@ -849,6 +860,7 @@ export default function BrokerCommissionDataSetsView() {
                     onClick={() => {
                       setSelectedType(type);
                       setTypeFilterOpen(false);
+                      setSelectedRowIds([]);
                     }}
                     className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
                   >
@@ -882,6 +894,7 @@ export default function BrokerCommissionDataSetsView() {
                     onClick={() => {
                       setSelectedRetailer(retailer);
                       setRetailerFilterOpen(false);
+                      setSelectedRowIds([]);
                     }}
                     className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
                   >
@@ -915,6 +928,7 @@ export default function BrokerCommissionDataSetsView() {
                     onClick={() => {
                       setSelectedMonth(month);
                       setMonthFilterOpen(false);
+                      setSelectedRowIds([]);
                     }}
                     className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100"
                   >
