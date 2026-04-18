@@ -122,7 +122,12 @@ function formatMonthFromDate(value: string): string {
 }
 
 function normalizeMonthLabel(value: string) {
-  const trimmed = String(value || "").trim();
+  const trimmed = String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[’`]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+
   if (!trimmed) return "";
 
   const match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
@@ -391,6 +396,115 @@ async function fetchAllDatasetRows(): Promise<DatasetDbRow[]> {
   return allRows;
 }
 
+async function fetchAllRetailerOverrides(): Promise<RetailerOverrideRow[]> {
+  let allRows: RetailerOverrideRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("retailer_overrides")
+      .select("dataset_id, retailer")
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as RetailerOverrideRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
+async function fetchAllLocations(): Promise<LocationRow[]> {
+  let allRows: LocationRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("locations")
+      .select("customer, retailer")
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = ((data ?? []) as any[]).map((r) => ({
+      customer: r.customer ?? "",
+      retailer: r.retailer ?? "",
+    }));
+
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
+async function fetchAllInvoiceRows(): Promise<InvoiceRow[]> {
+  let allRows: InvoiceRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("invoices")
+      .select("invoice_number, invoice_amt, type")
+      .eq("type", "WM Invoice")
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as InvoiceRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
+async function fetchAllVelocityRows(): Promise<VelocityRow[]> {
+  let allRows: VelocityRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("kehe_velocity")
+      .select("month, description, cases, retailer")
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as VelocityRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
 export default function BrokerCommissionSummaryView() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -414,28 +528,75 @@ export default function BrokerCommissionSummaryView() {
     let datasetData: DatasetDbRow[] = [];
     let datasetError: any = null;
 
+    let overrideData: RetailerOverrideRow[] = [];
+    let overrideError: any = null;
+
+    let locationData: LocationRow[] = [];
+    let locationError: any = null;
+
+    let invoiceData: InvoiceRow[] = [];
+    let invoiceError: any = null;
+
+    let velocityData: VelocityRow[] = [];
+    let velocityError: any = null;
+
     try {
-      datasetData = await fetchAllDatasetRows();
+      [
+        datasetData,
+        overrideData,
+        locationData,
+        invoiceData,
+        velocityData,
+      ] = await Promise.all([
+        fetchAllDatasetRows(),
+        fetchAllRetailerOverrides(),
+        fetchAllLocations(),
+        fetchAllInvoiceRows(),
+        fetchAllVelocityRows(),
+      ]);
+    } catch (error: any) {
+      console.error("Load error:", error);
+    }
+
+    try {
+      if (!datasetData.length) {
+        datasetData = await fetchAllDatasetRows();
+      }
     } catch (error) {
       datasetError = error;
     }
 
-    const [
-      { data: overrideData, error: overrideError },
-      { data: locationData, error: locationError },
-      { data: invoiceData, error: invoiceError },
-      { data: velocityData, error: velocityError },
-    ] = await Promise.all([
-      supabase.from("retailer_overrides").select("dataset_id, retailer"),
-      supabase.from("locations").select("customer, retailer"),
-      supabase
-        .from("invoices")
-        .select("invoice_number, invoice_amt, type")
-        .eq("type", "WM Invoice"),
-      supabase
-        .from("kehe_velocity")
-        .select("month, description, cases, retailer"),
-    ]);
+    try {
+      if (!overrideData.length) {
+        overrideData = await fetchAllRetailerOverrides();
+      }
+    } catch (error) {
+      overrideError = error;
+    }
+
+    try {
+      if (!locationData.length) {
+        locationData = await fetchAllLocations();
+      }
+    } catch (error) {
+      locationError = error;
+    }
+
+    try {
+      if (!invoiceData.length) {
+        invoiceData = await fetchAllInvoiceRows();
+      }
+    } catch (error) {
+      invoiceError = error;
+    }
+
+    try {
+      if (!velocityData.length) {
+        velocityData = await fetchAllVelocityRows();
+      }
+    } catch (error) {
+      velocityError = error;
+    }
 
     if (datasetError) console.error("Failed to load datasets:", datasetError);
     if (overrideError) console.error("Failed to load overrides:", overrideError);
@@ -444,19 +605,12 @@ export default function BrokerCommissionSummaryView() {
     if (velocityError) console.error("Failed to load kehe velocity:", velocityError);
 
     const overrides = new Map<string, string>(
-      ((overrideData ?? []) as RetailerOverrideRow[]).map((r) => [
-        r.dataset_id,
-        r.retailer,
-      ])
+      overrideData.map((r) => [r.dataset_id, r.retailer])
     );
 
-    const locations: LocationRow[] = (locationData ?? []).map((r: any) => ({
-      customer: r.customer ?? "",
-      retailer: r.retailer ?? "",
-    }));
-
-    const datasetRowsRaw = (datasetData ?? []) as DatasetDbRow[];
-    const invoiceRows = (invoiceData ?? []) as InvoiceRow[];
+    const locations = locationData;
+    const datasetRowsRaw = datasetData;
+    const invoiceRows = invoiceData;
 
     const ksolveByInvoice = new Map<string, number>();
     for (const row of invoiceRows) {
@@ -519,7 +673,7 @@ export default function BrokerCommissionSummaryView() {
 
     const hydratedRows = applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice);
 
-    const normalizedVelocityRows = ((velocityData ?? []) as VelocityRow[]).map((row) => ({
+    const normalizedVelocityRows = velocityData.map((row) => ({
       ...row,
       month: normalizeMonthLabel(row.month ?? ""),
     }));
