@@ -561,54 +561,66 @@ export default function BrokerCommissionDataSetsView() {
   }, [retailerOptions, selectedRetailer]);
 
   const data = useMemo(() => {
-    console.log("selectedType:", selectedType);
-    console.log(
-      "sample row types:",
-      JSON.stringify(rows.slice(0, 5).map((r) => ({ raw: r.type, clean: cleanType(r.type) })))
-    );
-
     const keyword = search.trim().toLowerCase();
+  
+    const selectedTypeNorm =
+      selectedType === "All Types" ? "All Types" : cleanType(selectedType).toUpperCase();
+  
+    const selectedRetailerNorm =
+      selectedRetailer === "All Retailers"
+        ? "All Retailers"
+        : selectedRetailer === "Blank"
+          ? "Blank"
+          : selectedRetailer.trim().toUpperCase();
+  
+    const selectedMonthNorm =
+      selectedMonth === "All Months" ? "All Months" : selectedMonth.trim();
+  
     const filtered = rows.filter((row) => {
+      const rowType = cleanType(row.type).toUpperCase();
+      const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
+      const rowRetailerNorm = rowRetailer.toUpperCase();
+      const rowMonth = String(row.month || "").trim();
+  
       const matchesType =
-        selectedType === "All Types" || cleanType(row.type) === selectedType;
-
-      if (selectedType === "WM Invoice" && !matchesType) {
-        console.log(
-          "EXCLUDED row type:",
-          JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType })
-        );
-      }
-      if (selectedType === "WM Invoice" && matchesType && row.type !== "WM Invoice") {
-        console.log(
-          "WRONGLY INCLUDED row type:",
-          JSON.stringify({ raw: row.type, clean: cleanType(row.type), selectedType })
-        );
-      }
-
+        selectedTypeNorm === "All Types" || rowType === selectedTypeNorm;
+  
       const matchesRetailer =
-        selectedRetailer === "All Retailers" ||
-        (selectedRetailer === "Blank" && !row.retailer) ||
-        row.retailer === selectedRetailer;
-
+        selectedRetailerNorm === "All Retailers" ||
+        (selectedRetailerNorm === "Blank" && rowRetailer === "") ||
+        rowRetailerNorm === selectedRetailerNorm;
+  
       const matchesMonth =
-        selectedMonth === "All Months" || row.month === selectedMonth;
-
+        selectedMonthNorm === "All Months" || rowMonth === selectedMonthNorm;
+  
+      const displayAmount = isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt;
+  
       const matchesSearch =
         !keyword ||
-        row.type.toLowerCase().includes(keyword) ||
+        rowType.toLowerCase().includes(keyword) ||
         formatMonthShort(row.month).toLowerCase().includes(keyword) ||
         formatCheckDate(row.checkDate).toLowerCase().includes(keyword) ||
         row.invoice.toLowerCase().includes(keyword) ||
         row.upc.toLowerCase().includes(keyword) ||
         row.item.toLowerCase().includes(keyword) ||
         row.custName.toLowerCase().includes(keyword) ||
-        row.retailer.toLowerCase().includes(keyword) ||
-        (isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt).toFixed(2).includes(keyword);
-
+        rowRetailer.toLowerCase().includes(keyword) ||
+        displayAmount.toFixed(2).includes(keyword);
+  
       return matchesType && matchesRetailer && matchesMonth && matchesSearch;
     });
-
-    console.log("FILTERED COUNT:", filtered.length, "of", rows.length, "total rows");
+  
+    console.log("FILTER STATE", {
+      selectedType,
+      selectedTypeNorm,
+      selectedRetailer,
+      selectedRetailerNorm,
+      selectedMonth,
+      selectedMonthNorm,
+      filteredCount: filtered.length,
+      totalRows: rows.length,
+    });
+  
     return filtered;
   }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
 
