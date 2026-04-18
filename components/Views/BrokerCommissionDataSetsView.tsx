@@ -562,71 +562,50 @@ export default function BrokerCommissionDataSetsView() {
   }, [retailerOptions, selectedRetailer]);
 
   const data = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-
-    // Normalize the selected type independently of cleanType so that any
-    // invisible character variant (non-breaking space, zero-width space, etc.)
-    // in the stored dropdown value is stripped before comparison.
-    const isFilteringByType = selectedType !== "All Types";
-    const selectedTypeKey = isFilteringByType
-      ? selectedType
-          .replace(/\u00a0/g, " ")
-          .replace(/[\u200b\u200c\u200d\ufeff]/g, "")
-          .replace(/\s+/g, " ")
-          .trim()
-          .toUpperCase()
-      : "";
-
-    const selectedRetailerNorm =
-      selectedRetailer === "All Retailers"
-        ? "All Retailers"
-        : selectedRetailer === "Blank"
-          ? "Blank"
-          : selectedRetailer.trim().toUpperCase();
-
-    const selectedMonthNorm =
-      selectedMonth === "All Months" ? "All Months" : selectedMonth.trim();
-
     return rows.filter((row) => {
-      // Derive a clean uppercase key from the raw row type, stripping every
-      // known invisible character variant before comparing.
-      const rowTypeKey = String(row.type ?? "")
-        .replace(/\u00a0/g, " ")
-        .replace(/[\u200b\u200c\u200d\ufeff]/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toUpperCase();
+      // Type filter — simple case-insensitive string match, nothing fancy
+      if (selectedType !== "All Types") {
+        const rowType = (row.type ?? "").trim().toLowerCase();
+        const filterType = selectedType.trim().toLowerCase();
+        if (rowType !== filterType) return false;
+      }
 
-      const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
-      const rowRetailerNorm = rowRetailer.toUpperCase();
-      const rowMonth = String(row.month || "").trim();
+      // Retailer filter
+      if (selectedRetailer !== "All Retailers") {
+        const rowRetailer = (row.retailer ?? "").trim();
+        if (selectedRetailer === "Blank") {
+          if (rowRetailer !== "") return false;
+        } else {
+          if (rowRetailer.toLowerCase() !== selectedRetailer.toLowerCase()) return false;
+        }
+      }
 
-      // Strict equality after independent normalization on both sides.
-      const matchesType = !isFilteringByType || rowTypeKey === selectedTypeKey;
+      // Month filter
+      if (selectedMonth !== "All Months") {
+        if ((row.month ?? "").trim() !== selectedMonth.trim()) return false;
+      }
 
-      const matchesRetailer =
-        selectedRetailerNorm === "All Retailers" ||
-        (selectedRetailerNorm === "Blank" && rowRetailer === "") ||
-        rowRetailerNorm === selectedRetailerNorm;
+      // Search filter
+      const keyword = search.trim().toLowerCase();
+      if (keyword) {
+        const displayAmount = isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt;
+        const searchable = [
+          row.type,
+          row.month,
+          formatCheckDate(row.checkDate),
+          row.invoice,
+          row.upc,
+          row.item,
+          row.custName,
+          row.retailer,
+          displayAmount.toFixed(2),
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!searchable.includes(keyword)) return false;
+      }
 
-      const matchesMonth =
-        selectedMonthNorm === "All Months" || rowMonth === selectedMonthNorm;
-
-      const displayAmount = isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt;
-
-      const matchesSearch =
-        !keyword ||
-        rowTypeKey.toLowerCase().includes(keyword) ||
-        formatMonthShort(row.month).toLowerCase().includes(keyword) ||
-        formatCheckDate(row.checkDate).toLowerCase().includes(keyword) ||
-        row.invoice.toLowerCase().includes(keyword) ||
-        row.upc.toLowerCase().includes(keyword) ||
-        row.item.toLowerCase().includes(keyword) ||
-        row.custName.toLowerCase().includes(keyword) ||
-        rowRetailer.toLowerCase().includes(keyword) ||
-        displayAmount.toFixed(2).includes(keyword);
-
-      return matchesType && matchesRetailer && matchesMonth && matchesSearch;
+      return true;
     });
   }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
 
@@ -812,7 +791,7 @@ export default function BrokerCommissionDataSetsView() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xl font-bold">Data Sets</h2>
+        <h2 className="text-xl font-bold">Data Sets <span className="text-xs font-normal text-slate-400">v4</span></h2>
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative min-w-[320px]">
