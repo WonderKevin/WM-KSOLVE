@@ -500,8 +500,8 @@ export default function WMKsolveApp() {
         </aside>
       )}
 
-      <main className="flex-1 px-6 py-5">
-        <div className="mb-6 rounded-3xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
+      <main className="flex-1 h-screen overflow-y-auto px-6 py-5">
+        <div className="sticky top-0 z-30 mb-6 rounded-3xl border border-slate-200 bg-white/95 px-6 py-5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-4">
               <Button
