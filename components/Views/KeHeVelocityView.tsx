@@ -56,6 +56,32 @@ function compactText(value: string) {
   return normalizeText(value).replace(/\s+/g, "");
 }
 
+function normalizeMonthLabel(value: string) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[’`]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getMonthSortValue(value: string) {
+  const normalized = normalizeMonthLabel(value);
+  const match = normalized.match(/^([A-Za-z]+)\s+'(\d{2})$/);
+  if (!match) return -Infinity;
+
+  const monthName = match[1];
+  const year2 = Number(match[2]);
+  const monthIndex = new Date(`${monthName} 1, 2000`).getMonth();
+  if (Number.isNaN(monthIndex)) return -Infinity;
+
+  const fullYear = 2000 + year2;
+  return fullYear * 100 + (monthIndex + 1);
+}
+
+function compareMonthLabelsDesc(a: string, b: string) {
+  return getMonthSortValue(b) - getMonthSortValue(a);
+}
+
 function textLooksLikeMatch(a: string, b: string) {
   const na = normalizeText(a);
   const nb = normalizeText(b);
@@ -122,7 +148,6 @@ async function fetchAllVelocityRows(): Promise<VelocityRow[]> {
     const { data, error } = await supabase
       .from("kehe_velocity")
       .select("*")
-      .order("month", { ascending: false })
       .range(from, from + pageSize - 1);
 
     if (error) throw error;
@@ -330,7 +355,15 @@ export default function KeHeVelocityView() {
       setLoading(true);
 
       const data = await fetchAllVelocityRows();
-      setRows(data || []);
+
+      const sortedData = [...(data || [])].sort((a, b) => {
+        const monthCompare = compareMonthLabelsDesc(a.month, b.month);
+        if (monthCompare !== 0) return monthCompare;
+
+        return String(a.customer || "").localeCompare(String(b.customer || ""));
+      });
+
+      setRows(sortedData);
     } catch (error) {
       console.error("Failed to load kehe_velocity:", error);
       setRows([]);
@@ -346,27 +379,41 @@ export default function KeHeVelocityView() {
   const retailerOptions = useMemo(() => {
     return [
       "All Retailers",
-      ...Array.from(new Set(rows.map((r) => String(r.retailer || "").trim()).filter(Boolean))).sort((a, b) =>
-        a.localeCompare(b)
-      ),
+      ...Array.from(
+        new Set(
+          rows
+            .map((r) => String(r.retailer || "").replace(/\u00a0/g, " ").trim())
+            .filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b)),
     ];
   }, [rows]);
 
   const monthOptions = useMemo(() => {
     return [
       "All Months",
-      ...Array.from(new Set(rows.map((r) => String(r.month || "").replace(/\u00a0/g, " ").trim()).filter(Boolean))).sort((a, b) =>
-        a.localeCompare(b)
-      ),
+      ...Array.from(
+        new Set(
+          rows
+            .map((r) => normalizeMonthLabel(r.month))
+            .filter(Boolean)
+        )
+      ).sort(compareMonthLabelsDesc),
     ];
   }, [rows]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const selectedMonthNorm = normalizeMonthLabel(monthFilter);
+    const selectedRetailerNorm = String(retailerFilter || "")
+      .replace(/\u00a0/g, " ")
+      .trim();
 
     return rows.filter((row) => {
-      const rowMonth = String(row.month || "").replace(/\u00a0/g, " ").trim();
-      const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
+      const rowMonth = normalizeMonthLabel(row.month);
+      const rowRetailer = String(row.retailer || "")
+        .replace(/\u00a0/g, " ")
+        .trim();
 
       const matchesSearch =
         !q ||
@@ -383,14 +430,49 @@ export default function KeHeVelocityView() {
           .includes(q);
 
       const matchesRetailer =
-        retailerFilter === "All Retailers" || rowRetailer === retailerFilter;
+        selectedRetailerNorm === "All Retailers" || rowRetailer === selectedRetailerNorm;
 
       const matchesMonth =
-        monthFilter === "All Months" || rowMonth === monthFilter;
+        selectedMonthNorm === "All Months" || rowMonth === selectedMonthNorm;
 
       return matchesSearch && matchesRetailer && matchesMonth;
     });
   }, [rows, search, retailerFilter, monthFilter]);
+
+  const handleExportToExcel = () => {
+    if (!filteredRows.length) {
+      alert("No rows to export.");
+      return;
+    }
+
+    const exportRows = filteredRows.map((row) => ({
+      Month: normalizeMonthLabel(row.month),
+      "Retailer Area": row.retailer_area,
+      Customer: row.customer,
+      UPC: row.upc,
+      Description: row.description,
+      Cases: row.cases,
+      Eaches: row.eaches,
+      Retailer: row.retailer || "",
+      "Source File Name": row.source_file_name || "",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "KeHe Velocity");
+
+    const fileNameParts = ["kehe_velocity"];
+
+    if (retailerFilter !== "All Retailers") {
+      fileNameParts.push(retailerFilter.replace(/\s+/g, "_"));
+    }
+
+    if (monthFilter !== "All Months") {
+      fileNameParts.push(normalizeMonthLabel(monthFilter).replace(/\s+/g, "_").replace(/'/g, ""));
+    }
+
+    XLSX.writeFile(workbook, `${fileNameParts.join("_")}.xlsx`);
+  };
 
   const finishInsert = async (parsedRows: VelocityRow[], locations: LocationRow[]) => {
     const finalRows = parsedRows.map((row) => ({
@@ -562,6 +644,16 @@ export default function KeHeVelocityView() {
                   </option>
                 ))}
               </select>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-2xl"
+                onClick={handleExportToExcel}
+                disabled={!filteredRows.length}
+              >
+                Export to Excel
+              </Button>
 
               <Button
                 type="button"
@@ -744,7 +836,7 @@ export default function KeHeVelocityView() {
                 <tbody>
                   {filteredRows.map((row, index) => (
                     <tr key={row.id || `${row.upc}-${index}`} className="border-t border-slate-200">
-                      <td className="px-4 py-3 text-slate-700">{row.month}</td>
+                      <td className="px-4 py-3 text-slate-700">{normalizeMonthLabel(row.month)}</td>
                       <td className="px-4 py-3 text-slate-700">{row.retailer_area}</td>
                       <td className="px-4 py-3 text-slate-700">{row.customer}</td>
                       <td className="px-4 py-3 text-slate-700">{row.upc}</td>
