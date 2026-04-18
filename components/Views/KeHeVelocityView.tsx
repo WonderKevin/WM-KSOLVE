@@ -113,6 +113,30 @@ async function fetchAllLocations(): Promise<LocationRow[]> {
   return allRows;
 }
 
+async function fetchAllVelocityRows(): Promise<VelocityRow[]> {
+  const pageSize = 1000;
+  let from = 0;
+  let allRows: VelocityRow[] = [];
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("kehe_velocity")
+      .select("*")
+      .order("month", { ascending: false })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as VelocityRow[];
+    allRows = [...allRows, ...batch];
+
+    if (batch.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return allRows;
+}
+
 function findRetailerFromLocations(
   customer: string,
   retailerArea: string,
@@ -305,13 +329,7 @@ export default function KeHeVelocityView() {
     try {
       setLoading(true);
 
-      const { data, error } = await supabase
-        .from("kehe_velocity")
-        .select("*")
-        .order("month", { ascending: false });
-
-      if (error) throw error;
-
+      const data = await fetchAllVelocityRows();
       setRows(data || []);
     } catch (error) {
       console.error("Failed to load kehe_velocity:", error);
@@ -328,7 +346,7 @@ export default function KeHeVelocityView() {
   const retailerOptions = useMemo(() => {
     return [
       "All Retailers",
-      ...Array.from(new Set(rows.map((r) => r.retailer).filter(Boolean))).sort((a, b) =>
+      ...Array.from(new Set(rows.map((r) => String(r.retailer || "").trim()).filter(Boolean))).sort((a, b) =>
         a.localeCompare(b)
       ),
     ];
@@ -337,7 +355,7 @@ export default function KeHeVelocityView() {
   const monthOptions = useMemo(() => {
     return [
       "All Months",
-      ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean))).sort((a, b) =>
+      ...Array.from(new Set(rows.map((r) => String(r.month || "").replace(/\u00a0/g, " ").trim()).filter(Boolean))).sort((a, b) =>
         a.localeCompare(b)
       ),
     ];
@@ -347,25 +365,28 @@ export default function KeHeVelocityView() {
     const q = search.trim().toLowerCase();
 
     return rows.filter((row) => {
+      const rowMonth = String(row.month || "").replace(/\u00a0/g, " ").trim();
+      const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
+
       const matchesSearch =
         !q ||
         [
-          row.month,
+          rowMonth,
           row.retailer_area,
           row.customer,
           row.upc,
           row.description,
-          row.retailer,
+          rowRetailer,
         ]
           .join(" ")
           .toLowerCase()
           .includes(q);
 
       const matchesRetailer =
-        retailerFilter === "All Retailers" || row.retailer === retailerFilter;
+        retailerFilter === "All Retailers" || rowRetailer === retailerFilter;
 
       const matchesMonth =
-        monthFilter === "All Months" || row.month === monthFilter;
+        monthFilter === "All Months" || rowMonth === monthFilter;
 
       return matchesSearch && matchesRetailer && matchesMonth;
     });
