@@ -321,6 +321,7 @@ async function fetchAllDatasetRows(): Promise<DatasetDbRow[]> {
       .select("id, month, check_date, invoice, type, upc, item, cust_name, amt")
       .order("check_date", { ascending: false, nullsFirst: false })
       .order("invoice", { ascending: false })
+      .order("id", { ascending: true }) // stable tiebreaker to prevent rows shifting across page boundaries
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
@@ -335,7 +336,13 @@ async function fetchAllDatasetRows(): Promise<DatasetDbRow[]> {
     }
   }
 
-  return allRows;
+  // Deduplicate by id in case any rows were returned in multiple pages
+  const seen = new Set<string>();
+  return allRows.filter((row) => {
+    if (seen.has(row.id)) return false;
+    seen.add(row.id);
+    return true;
+  });
 }
 
 export default function BrokerCommissionDataSetsView() {
@@ -561,17 +568,13 @@ export default function BrokerCommissionDataSetsView() {
     if (!retailerOptions.includes(selectedRetailer)) setSelectedRetailer("All Retailers");
   }, [retailerOptions, selectedRetailer]);
 
-  const data = useMemo(() => {
-    console.log("[DataSets] data useMemo running — selectedType:", JSON.stringify(selectedType), "rows:", rows.length);
+  // Computed fresh every render — no useMemo so there's no stale cache
+  const data = (() => {
+    const keyword = search.trim().toLowerCase();
     return rows.filter((row) => {
-      // Type filter — simple case-insensitive string match, nothing fancy
       if (selectedType !== "All Types") {
-        const rowType = (row.type ?? "").trim().toLowerCase();
-        const filterType = selectedType.trim().toLowerCase();
-        if (rowType !== filterType) return false;
+        if ((row.type ?? "").trim().toLowerCase() !== selectedType.trim().toLowerCase()) return false;
       }
-
-      // Retailer filter
       if (selectedRetailer !== "All Retailers") {
         const rowRetailer = (row.retailer ?? "").trim();
         if (selectedRetailer === "Blank") {
@@ -580,35 +583,17 @@ export default function BrokerCommissionDataSetsView() {
           if (rowRetailer.toLowerCase() !== selectedRetailer.toLowerCase()) return false;
         }
       }
-
-      // Month filter
       if (selectedMonth !== "All Months") {
         if ((row.month ?? "").trim() !== selectedMonth.trim()) return false;
       }
-
-      // Search filter
-      const keyword = search.trim().toLowerCase();
       if (keyword) {
         const displayAmount = isWmInvoiceType(row.type) ? row.adjustedAmt : row.amt;
-        const searchable = [
-          row.type,
-          row.month,
-          formatCheckDate(row.checkDate),
-          row.invoice,
-          row.upc,
-          row.item,
-          row.custName,
-          row.retailer,
-          displayAmount.toFixed(2),
-        ]
-          .join(" ")
-          .toLowerCase();
+        const searchable = [row.type, row.month, formatCheckDate(row.checkDate), row.invoice, row.upc, row.item, row.custName, row.retailer, displayAmount.toFixed(2)].join(" ").toLowerCase();
         if (!searchable.includes(keyword)) return false;
       }
-
       return true;
     });
-  }, [rows, selectedType, selectedRetailer, selectedMonth, search]);
+  })();
 
   const handleExportToExcel = () => {
     if (!data.length) {
@@ -640,10 +625,7 @@ export default function BrokerCommissionDataSetsView() {
     XLSX.writeFile(workbook, `${fileNameParts.join("_")}.xlsx`);
   };
 
-  // FIX 4: visibleRowIds is derived from the filtered `data` array, so
-  // select-all and indeterminate state automatically reflect only rows
-  // that pass the current filter — no extra logic needed.
-  const visibleRowIds = useMemo(() => data.map((row) => row.id), [data]);
+  const visibleRowIds = data.map((row) => row.id);
 
   const allVisibleSelected =
     visibleRowIds.length > 0 && visibleRowIds.every((id) => selectedRowIds.includes(id));
