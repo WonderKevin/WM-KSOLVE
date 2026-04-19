@@ -390,15 +390,7 @@ export default function WMInvoiceDiscrepancyView() {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="text-lg font-semibold text-slate-900">
-          WM Invoice Discrepancy
-        </div>
-        <p className="mt-1 text-sm text-slate-500">
-          WM Amount comes from Data Sets. Ksolve Amount comes from Ksolve Invoices.
-          Discrepancy = Ksolve Amount - WM Amount.
-        </p>
-      </div>
+      
 
       <div className="sticky top-[116px] z-20 rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr_1fr_1.8fr_220px]">
