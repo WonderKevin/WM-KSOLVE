@@ -14,7 +14,18 @@ type InvoiceSummaryRow = {
   type: string | null;
 };
 
-type GenericRow = Record<string, any>;
+// Matches the actual broker_commission_datasets schema
+type BrokerCommissionDbRow = {
+  id: string;
+  month: string | null;
+  check_date: string | null;
+  invoice: string | null;
+  type: string | null;
+  upc: string | null;
+  item: string | null;
+  cust_name: string | null;
+  amt: number | null;
+};
 
 type MonthOption = {
   key: string;
@@ -94,93 +105,112 @@ function normalizeType(value: string | null | undefined) {
     .toLowerCase();
 }
 
-function getFirstString(row: GenericRow, keys: string[]) {
-  for (const key of keys) {
-    const value = row[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+// ─── Helpers that match broker_commission_datasets actual schema ──────────────
+
+function normalizeMonthLabel(value: string) {
+  const trimmed = String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/['`]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!trimmed) return "";
+
+  const match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
+  if (!match) return trimmed;
+
+  const monthName = match[1];
+  const yearRaw = match[2];
+  const year = yearRaw.length === 2 ? `20${yearRaw}` : yearRaw;
+
+  return `${monthName} ${year}`;
+}
+
+function formatMonthFromDate(value: string): string {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+
+/**
+ * Derives the month string from a broker_commission_datasets row,
+ * using the same logic as BrokerCommissionSummaryView.
+ */
+function getBrokerRowMonthLabel(row: BrokerCommissionDbRow): string {
+  const rawMonth = String(row.month ?? "").trim();
+  const rawCheckDate = String(row.check_date ?? "").trim();
+  return normalizeMonthLabel(rawMonth || formatMonthFromDate(rawCheckDate) || "");
+}
+
+/**
+ * Converts a month label like "March 2026" → "2026-03" for use as a map key.
+ */
+function monthLabelToKey(label: string): string | null {
+  const monthMap: Record<string, string> = {
+    january: "01", february: "02", march: "03", april: "04",
+    may: "05", june: "06", july: "07", august: "08",
+    september: "09", october: "10", november: "11", december: "12",
+  };
+
+  const match = label.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (!match) return null;
+
+  const mm = monthMap[match[1].toLowerCase()];
+  if (!mm) return null;
+
+  return `${match[2]}-${mm}`;
+}
+
+/**
+ * Returns the actual type label from a broker_commission_datasets row.
+ * The field is simply `type` (e.g. "WM Invoice", "$1 Promotion", etc.)
+ */
+function getBrokerRowType(row: BrokerCommissionDbRow): string {
+  return String(row.type ?? "").trim() || "Unknown";
+}
+
+/**
+ * Returns the amount from a broker_commission_datasets row.
+ * The field is `amt`.
+ */
+function getBrokerRowAmount(row: BrokerCommissionDbRow): number {
+  return Number(row.amt ?? 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PAGE_SIZE = 1000;
+
+async function fetchAllBrokerCommissionRows(): Promise<BrokerCommissionDbRow[]> {
+  let allRows: BrokerCommissionDbRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("broker_commission_datasets")
+      .select("id, month, check_date, invoice, type, upc, item, cust_name, amt")
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as BrokerCommissionDbRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
   }
-  return "";
-}
 
-function getFirstNumber(row: GenericRow, keys: string[]) {
-  for (const key of keys) {
-    const value = row[key];
-    if (value === null || value === undefined || value === "") continue;
-
-    const numeric = Number(value);
-    if (!Number.isNaN(numeric)) return numeric;
-  }
-  return 0;
-}
-
-function getBrokerCommissionType(row: GenericRow) {
-  return (
-    getFirstString(row, [
-      "line_item",
-      "lineItem",
-      "type",
-      "invoice_type",
-      "category",
-      "description",
-      "item_type",
-      "item",
-      "name",
-    ]) || "Unknown"
-  );
-}
-
-function getBrokerCommissionMonthDate(row: GenericRow) {
-  const direct =
-    getFirstString(row, [
-      "month",
-      "summary_month",
-      "invoice_month",
-      "month_year",
-      "period",
-      "statement_month",
-    ]) || null;
-
-  if (direct) {
-    const parsed = parseMonthValue(direct);
-    if (parsed) return parsed;
-  }
-
-  const dateValue =
-    getFirstString(row, [
-      "check_date",
-      "invoice_date",
-      "statement_date",
-      "created_at",
-      "date",
-    ]) || null;
-
-  if (dateValue) {
-    const parsed = parseUsDate(dateValue) || parseMonthValue(dateValue);
-    if (parsed) return parsed;
-  }
-
-  return null;
-}
-
-function getBrokerCommissionMonthKey(row: GenericRow) {
-  const date = getBrokerCommissionMonthDate(row);
-  return date ? monthKeyFromDate(date) : null;
-}
-
-function getBrokerCommissionAmount(row: GenericRow) {
-  return getFirstNumber(row, [
-    "amount",
-    "total",
-    "line_total",
-    "invoice_total",
-    "net_total",
-    "value",
-  ]);
+  return allRows;
 }
 
 export default function AccountingSummaryView() {
   const [rows, setRows] = useState<InvoiceSummaryRow[]>([]);
-  const [brokerCommissionRows, setBrokerCommissionRows] = useState<GenericRow[]>([]);
+  const [brokerCommissionRows, setBrokerCommissionRows] = useState<BrokerCommissionDbRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [viewMode, setViewMode] = useState<ViewMode>("accounting");
@@ -212,18 +242,8 @@ export default function AccountingSummaryView() {
           console.error("Invoice query error:", invoiceRes.error);
         }
 
-        const BROKER_COMMISSION_TABLE = "broker_commission_datasets";
-
-        const commissionRes = await supabase
-          .from(BROKER_COMMISSION_TABLE)
-          .select("*");
-        
-        if (commissionRes.error) {
-          console.error("Broker commission query error:", commissionRes.error);
-          setBrokerCommissionRows([]);
-        } else {
-          setBrokerCommissionRows(commissionRes.data || []);
-        }
+        const commissionRows = await fetchAllBrokerCommissionRows();
+        setBrokerCommissionRows(commissionRows);
       } catch (error) {
         console.error("Summary load error:", error);
       } finally {
@@ -254,9 +274,11 @@ export default function AccountingSummaryView() {
     return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
   }, [rows]);
 
+  // Build month options for discrepancy from broker_commission_datasets rows
   const discrepancyMonthOptions = useMemo<MonthOption[]>(() => {
     const map = new Map<string, MonthOption>();
 
+    // From invoices (ksolve side)
     for (const row of rows) {
       const date = parseUsDate(row.check_date);
       if (!date) continue;
@@ -271,16 +293,23 @@ export default function AccountingSummaryView() {
       }
     }
 
+    // From broker_commission_datasets (invoice side)
     for (const row of brokerCommissionRows) {
-      const date = getBrokerCommissionMonthDate(row);
-      if (!date) continue;
+      const label = getBrokerRowMonthLabel(row);
+      if (!label) continue;
 
-      const key = monthKeyFromDate(date);
+      const key = monthLabelToKey(label);
+      if (!key) continue;
+
       if (!map.has(key)) {
+        // Parse sortValue from the key
+        const [yyyy, mm] = key.split("-");
+        const sortValue = Number(yyyy) * 100 + Number(mm);
+        const date = new Date(Number(yyyy), Number(mm) - 1, 1);
         map.set(key, {
           key,
           label: monthLabelFromDate(date),
-          sortValue: date.getFullYear() * 100 + (date.getMonth() + 1),
+          sortValue,
         });
       }
     }
@@ -379,6 +408,14 @@ export default function AccountingSummaryView() {
     };
   }, [rows, filteredMonthOptions]);
 
+  /**
+   * Discrepancy summary:
+   *
+   * - Ksolve Total  → from `invoices` table, grouped by type, filtered by month
+   * - Invoice Total → from `broker_commission_datasets`, grouped by type, filtered by month
+   *                   Combines ALL retailer rows (Kroger + Fresh Thyme + INFRA & Others)
+   *                   and sums `amt` per `type`.
+   */
   const discrepancySummary = useMemo(() => {
     if (!appliedDiscrepancyMonth) {
       return {
@@ -395,13 +432,13 @@ export default function AccountingSummaryView() {
       };
     }
 
-    const selectedMonth = discrepancyMonthOptions.find(
+    const selectedMonthOption = discrepancyMonthOptions.find(
       (m) => m.key === appliedDiscrepancyMonth
     );
 
+    // ── Ksolve totals from `invoices` table ────────────────────────────────
     const ksolveTypeTotals = new Map<string, number>();
-    const brokerTypeTotals = new Map<string, number>();
-    const displayTypeMap = new Map<string, string>();
+    const displayTypeMap = new Map<string, string>(); // normalizedType → display label
 
     for (const row of rows) {
       const date = parseUsDate(row.check_date);
@@ -424,13 +461,21 @@ export default function AccountingSummaryView() {
       );
     }
 
-    for (const row of brokerCommissionRows) {
-      const monthKey = getBrokerCommissionMonthKey(row);
-      if (monthKey !== appliedDiscrepancyMonth) continue;
+    // ── Invoice totals from `broker_commission_datasets` ───────────────────
+    // Sum `amt` per `type` for the selected month, across ALL retailers.
+    const brokerTypeTotals = new Map<string, number>();
 
-      const rawType = getBrokerCommissionType(row);
+    for (const row of brokerCommissionRows) {
+      // Derive the month key for this row using the same logic as BrokerCommissionSummaryView
+      const monthLabel = getBrokerRowMonthLabel(row);
+      if (!monthLabel) continue;
+
+      const rowMonthKey = monthLabelToKey(monthLabel);
+      if (rowMonthKey !== appliedDiscrepancyMonth) continue;
+
+      const rawType = getBrokerRowType(row);
       const normalizedType = normalizeType(rawType);
-      const amount = getBrokerCommissionAmount(row);
+      const amount = getBrokerRowAmount(row);
 
       if (!displayTypeMap.has(normalizedType)) {
         displayTypeMap.set(normalizedType, rawType);
@@ -442,6 +487,7 @@ export default function AccountingSummaryView() {
       );
     }
 
+    // ── Merge all types ────────────────────────────────────────────────────
     const allNormalizedTypes = Array.from(
       new Set([...ksolveTypeTotals.keys(), ...brokerTypeTotals.keys()])
     );
@@ -469,7 +515,7 @@ export default function AccountingSummaryView() {
     const discrepancyGrandTotal = typeRows.reduce((sum, row) => sum + row.discrepancy, 0);
 
     return {
-      selectedMonthLabel: selectedMonth?.label || "",
+      selectedMonthLabel: selectedMonthOption?.label || "",
       typeRows,
       ksolveGrandTotal,
       invoiceGrandTotal,
@@ -692,7 +738,15 @@ export default function AccountingSummaryView() {
                     <td className="px-4 py-3 text-right text-slate-700">
                       {formatCurrency(row.invoiceTotal)}
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                    <td
+                      className={`px-4 py-3 text-right font-semibold ${
+                        Math.abs(row.discrepancy) < 0.01
+                          ? "text-slate-900"
+                          : row.discrepancy > 0
+                          ? "text-amber-600"
+                          : "text-red-600"
+                      }`}
+                    >
                       {formatCurrency(row.discrepancy)}
                     </td>
                   </tr>
