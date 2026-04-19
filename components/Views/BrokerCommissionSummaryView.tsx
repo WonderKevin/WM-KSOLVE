@@ -957,8 +957,7 @@ export default function BrokerCommissionSummaryView() {
             Broker Commission Summary
           </h2>
           <p className="text-sm text-slate-500">
-            Data Sets drives retailer totals. WM Invoice rows are positive and all
-            non-WM rows are deductions. Month grouping uses check date.
+          Broker Commission provides a detailed summary of transactions used to calculate Kroger commission.
           </p>
         </div>
 
