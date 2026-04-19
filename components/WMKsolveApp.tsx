@@ -523,7 +523,7 @@ export default function WMKsolveApp() {
                   {titleMap[activeKey] || "WM-KSOLVE"}
                 </h1>
                 <p className="mt-1 text-sm font-medium text-slate-400">
-                  Wednesday, March 25, 2026
+                  
                 </p>
               </div>
             </div>
