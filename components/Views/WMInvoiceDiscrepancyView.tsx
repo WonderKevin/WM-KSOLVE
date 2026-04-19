@@ -144,6 +144,7 @@ async function fetchAllWmDatasetRows(): Promise<WMRow[]> {
       .from("broker_commission_datasets")
       .select("month, check_date, invoice, type, amt")
       .order("check_date", { ascending: false, nullsFirst: false })
+      .order("invoice", { ascending: false, nullsFirst: false })
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
@@ -172,6 +173,7 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveRow[]> {
       .select("month, check_date, check_number, invoice_number, invoice_amt, type")
       .eq("type", "WM Invoice")
       .order("check_date", { ascending: false, nullsFirst: false })
+      .order("invoice_number", { ascending: false, nullsFirst: false })
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
@@ -297,12 +299,6 @@ export default function WMInvoiceDiscrepancyView() {
         }
       }
 
-      console.log(
-        "[WM Discrepancy] has 1764 / 1762:",
-        wmByInvoice.has("1764"),
-        wmByInvoice.has("1762")
-      );
-
       const allInvoices = Array.from(
         new Set([...wmByInvoice.keys(), ...ksolveByInvoice.keys()])
       );
@@ -404,66 +400,70 @@ export default function WMInvoiceDiscrepancyView() {
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="relative min-w-[320px] flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search month, check date, check #, invoice, type..."
-            className="w-full rounded-2xl border border-slate-200 bg-white py-2 pl-10 pr-10 text-sm outline-none transition focus:border-slate-300"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch("")}
-              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-              title="Clear search"
+      <div className="sticky top-[116px] z-20 rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr_1fr_1.8fr_220px]">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-sm text-slate-500">Ksolve Amount</div>
+            <div className="mt-1 text-xl font-semibold text-slate-900">
+              {formatMoney(totals.ksolveAmount)}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-sm text-slate-500">WM Amount</div>
+            <div className="mt-1 text-xl font-semibold text-slate-900">
+              {formatMoney(totals.wmAmount)}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-sm text-slate-500">Total Discrepancy</div>
+            <div
+              className={`mt-1 text-xl font-semibold ${
+                totals.discrepancy === 0
+                  ? "text-slate-900"
+                  : totals.discrepancy > 0
+                    ? "text-emerald-700"
+                    : "text-red-600"
+              }`}
             >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-
-        <select
-          value={selectedMonth}
-          onChange={(e) => setSelectedMonth(e.target.value)}
-          className="min-w-[220px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
-        >
-          {monthOptions.map((month) => (
-            <option key={month} value={month}>
-              {month === "All Months" ? month : formatMonthShort(month)}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="text-sm text-slate-500">Ksolve Amount</div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {formatMoney(totals.ksolveAmount)}
+              {formatMoney(totals.discrepancy)}
+            </div>
           </div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="text-sm text-slate-500">WM Amount</div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {formatMoney(totals.wmAmount)}
+
+          <div className="relative self-stretch">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search month, check date, check #, invoice, type..."
+              className="h-full min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white py-2 pl-10 pr-10 text-sm outline-none transition focus:border-slate-300"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                title="Clear search"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="text-sm text-slate-500">Total Discrepancy</div>
-          <div
-            className={`mt-1 text-xl font-semibold ${
-              totals.discrepancy === 0
-                ? "text-slate-900"
-                : totals.discrepancy > 0
-                  ? "text-emerald-700"
-                  : "text-red-600"
-            }`}
-          >
-            {formatMoney(totals.discrepancy)}
+
+          <div className="flex items-stretch">
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+            >
+              {monthOptions.map((month) => (
+                <option key={month} value={month}>
+                  {month === "All Months" ? month : formatMonthShort(month)}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
