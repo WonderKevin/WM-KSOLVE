@@ -130,11 +130,7 @@ export default function CheckDetailsView() {
   return (
     <div className="space-y-4">
       <div className="sticky top-[116px] z-20 space-y-4">
-        <div className="rounded-3xl border border-slate-200 bg-white/95 p-5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
-          <div className="text-xl font-semibold text-slate-900">
-            Check Details
-          </div>
-        </div>
+        
 
         <Card className="rounded-3xl border border-slate-200 bg-white/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
           <CardContent className="pt-6">
