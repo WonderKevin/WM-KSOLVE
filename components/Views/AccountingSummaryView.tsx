@@ -14,22 +14,7 @@ type InvoiceSummaryRow = {
   type: string | null;
 };
 
-type DatasetRow = {
-  id?: number;
-  type?: string | null;
-  check_date?: string | null;
-  month?: string | null;
-  total?: number | null;
-  invoice_total?: number | null;
-  amount?: number | null;
-  invoice_amt?: number | null;
-  dataset_total?: number | null;
-  summary_total?: number | null;
-  total_amount?: number | null;
-  invoice_month?: string | null;
-  summary_month?: string | null;
-  month_year?: string | null;
-};
+type GenericRow = Record<string, any>;
 
 type MonthOption = {
   key: string;
@@ -109,42 +94,93 @@ function normalizeType(value: string | null | undefined) {
     .toLowerCase();
 }
 
-function getDatasetType(row: DatasetRow) {
-  return row.type?.trim() || "Unknown";
+function getFirstString(row: GenericRow, keys: string[]) {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
 }
 
-function getDatasetMonthDate(row: DatasetRow) {
+function getFirstNumber(row: GenericRow, keys: string[]) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value === null || value === undefined || value === "") continue;
+
+    const numeric = Number(value);
+    if (!Number.isNaN(numeric)) return numeric;
+  }
+  return 0;
+}
+
+function getBrokerCommissionType(row: GenericRow) {
   return (
-    parseMonthValue(row.month) ||
-    parseUsDate(row.check_date) ||
-    parseMonthValue(row.invoice_month) ||
-    parseMonthValue(row.summary_month) ||
-    parseMonthValue(row.month_year) ||
-    null
+    getFirstString(row, [
+      "line_item",
+      "lineItem",
+      "type",
+      "invoice_type",
+      "category",
+      "description",
+      "item_type",
+      "item",
+      "name",
+    ]) || "Unknown"
   );
 }
 
-function getDatasetMonthKey(row: DatasetRow) {
-  const date = getDatasetMonthDate(row);
+function getBrokerCommissionMonthDate(row: GenericRow) {
+  const direct =
+    getFirstString(row, [
+      "month",
+      "summary_month",
+      "invoice_month",
+      "month_year",
+      "period",
+      "statement_month",
+    ]) || null;
+
+  if (direct) {
+    const parsed = parseMonthValue(direct);
+    if (parsed) return parsed;
+  }
+
+  const dateValue =
+    getFirstString(row, [
+      "check_date",
+      "invoice_date",
+      "statement_date",
+      "created_at",
+      "date",
+    ]) || null;
+
+  if (dateValue) {
+    const parsed = parseUsDate(dateValue) || parseMonthValue(dateValue);
+    if (parsed) return parsed;
+  }
+
+  return null;
+}
+
+function getBrokerCommissionMonthKey(row: GenericRow) {
+  const date = getBrokerCommissionMonthDate(row);
   return date ? monthKeyFromDate(date) : null;
 }
 
-function getDatasetAmount(row: DatasetRow) {
-  return Number(
-    row.total ??
-      row.invoice_total ??
-      row.amount ??
-      row.invoice_amt ??
-      row.dataset_total ??
-      row.summary_total ??
-      row.total_amount ??
-      0
-  );
+function getBrokerCommissionAmount(row: GenericRow) {
+  return getFirstNumber(row, [
+    "amount",
+    "total",
+    "line_total",
+    "invoice_total",
+    "net_total",
+    "value",
+  ]);
 }
 
 export default function AccountingSummaryView() {
   const [rows, setRows] = useState<InvoiceSummaryRow[]>([]);
-  const [datasetRows, setDatasetRows] = useState<DatasetRow[]>([]);
+  const [brokerCommissionRows, setBrokerCommissionRows] = useState<GenericRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [viewMode, setViewMode] = useState<ViewMode>("accounting");
@@ -167,40 +203,36 @@ export default function AccountingSummaryView() {
           .select("id, check_date, invoice_amt, type")
           .order("check_date", { ascending: false });
 
-        if (invoiceRes.error) {
-          console.error("Invoice query error:", invoiceRes.error);
-        } else {
+        if (!invoiceRes.error) {
           const safeInvoiceRows = (invoiceRes.data || []).filter((row) =>
             parseUsDate(row.check_date)
           );
           setRows(safeInvoiceRows);
+        } else {
+          console.error("Invoice query error:", invoiceRes.error);
         }
 
-        let datasetsData: DatasetRow[] = [];
+        let commissionData: GenericRow[] = [];
 
-        const datasetsRes = await supabase.from("datasets").select("*");
+        const tableCandidates = [
+          "brokerage_commission",
+          "brokerage_commissions",
+          "broker_commission",
+          "broker_commission_summary",
+        ];
 
-        if (!datasetsRes.error) {
-          datasetsData = datasetsRes.data || [];
-        } else {
-          console.warn("datasets table fetch failed, trying data_sets:", datasetsRes.error);
+        for (const tableName of tableCandidates) {
+          const res = await supabase.from(tableName).select("*");
 
-          const fallbackRes = await supabase.from("data_sets").select("*");
-
-          if (!fallbackRes.error) {
-            datasetsData = fallbackRes.data || [];
-          } else {
-            console.warn("data_sets table fetch also failed:", fallbackRes.error);
+          if (!res.error && res.data) {
+            commissionData = res.data;
+            break;
           }
         }
 
-        const safeDatasetRows = datasetsData.filter(
-          (row) => getDatasetMonthDate(row) && getDatasetType(row)
-        );
-
-        setDatasetRows(safeDatasetRows);
+        setBrokerCommissionRows(commissionData);
       } catch (error) {
-        console.error("Accounting summary load error:", error);
+        console.error("Summary load error:", error);
       } finally {
         setLoading(false);
       }
@@ -246,8 +278,8 @@ export default function AccountingSummaryView() {
       }
     }
 
-    for (const row of datasetRows) {
-      const date = getDatasetMonthDate(row);
+    for (const row of brokerCommissionRows) {
+      const date = getBrokerCommissionMonthDate(row);
       if (!date) continue;
 
       const key = monthKeyFromDate(date);
@@ -261,7 +293,7 @@ export default function AccountingSummaryView() {
     }
 
     return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
-  }, [rows, datasetRows]);
+  }, [rows, brokerCommissionRows]);
 
   useEffect(() => {
     if (accountingMonthOptions.length > 0 && !appliedFromMonth && !appliedToMonth) {
@@ -375,7 +407,7 @@ export default function AccountingSummaryView() {
     );
 
     const ksolveTypeTotals = new Map<string, number>();
-    const datasetTypeTotals = new Map<string, number>();
+    const brokerTypeTotals = new Map<string, number>();
     const displayTypeMap = new Map<string, string>();
 
     for (const row of rows) {
@@ -399,26 +431,26 @@ export default function AccountingSummaryView() {
       );
     }
 
-    for (const row of datasetRows) {
-      const monthKey = getDatasetMonthKey(row);
+    for (const row of brokerCommissionRows) {
+      const monthKey = getBrokerCommissionMonthKey(row);
       if (monthKey !== appliedDiscrepancyMonth) continue;
 
-      const rawType = getDatasetType(row);
+      const rawType = getBrokerCommissionType(row);
       const normalizedType = normalizeType(rawType);
-      const amount = getDatasetAmount(row);
+      const amount = getBrokerCommissionAmount(row);
 
       if (!displayTypeMap.has(normalizedType)) {
         displayTypeMap.set(normalizedType, rawType);
       }
 
-      datasetTypeTotals.set(
+      brokerTypeTotals.set(
         normalizedType,
-        (datasetTypeTotals.get(normalizedType) || 0) + amount
+        (brokerTypeTotals.get(normalizedType) || 0) + amount
       );
     }
 
     const allNormalizedTypes = Array.from(
-      new Set([...ksolveTypeTotals.keys(), ...datasetTypeTotals.keys()])
+      new Set([...ksolveTypeTotals.keys(), ...brokerTypeTotals.keys()])
     );
 
     const orderedTypes = sortTypesWithWMFirst(
@@ -429,7 +461,7 @@ export default function AccountingSummaryView() {
       const normalizedType = normalizeType(displayTypeName);
       const typeName = displayTypeMap.get(normalizedType) || displayTypeName;
       const ksolveTotal = ksolveTypeTotals.get(normalizedType) || 0;
-      const invoiceTotal = datasetTypeTotals.get(normalizedType) || 0;
+      const invoiceTotal = brokerTypeTotals.get(normalizedType) || 0;
 
       return {
         typeName,
@@ -450,7 +482,7 @@ export default function AccountingSummaryView() {
       invoiceGrandTotal,
       discrepancyGrandTotal,
     };
-  }, [rows, datasetRows, appliedDiscrepancyMonth, discrepancyMonthOptions]);
+  }, [rows, brokerCommissionRows, appliedDiscrepancyMonth, discrepancyMonthOptions]);
 
   const handleApply = () => {
     if (!fromMonth && !toMonth) return;
