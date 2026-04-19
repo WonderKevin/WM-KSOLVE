@@ -212,25 +212,18 @@ export default function AccountingSummaryView() {
           console.error("Invoice query error:", invoiceRes.error);
         }
 
-        let commissionData: GenericRow[] = [];
+        const BROKER_COMMISSION_TABLE = "REPLACE_WITH_YOUR_REAL_TABLE_NAME";
 
-        const tableCandidates = [
-          "brokerage_commission",
-          "brokerage_commissions",
-          "broker_commission",
-          "broker_commission_summary",
-        ];
+const commissionRes = await supabase
+  .from(BROKER_COMMISSION_TABLE)
+  .select("*");
 
-        for (const tableName of tableCandidates) {
-          const res = await supabase.from(tableName).select("*");
-
-          if (!res.error && res.data) {
-            commissionData = res.data;
-            break;
-          }
-        }
-
-        setBrokerCommissionRows(commissionData);
+if (commissionRes.error) {
+  console.error("Broker commission query error:", commissionRes.error);
+  setBrokerCommissionRows([]);
+} else {
+  setBrokerCommissionRows(commissionRes.data || []);
+}
       } catch (error) {
         console.error("Summary load error:", error);
       } finally {
