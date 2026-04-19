@@ -15,8 +15,8 @@ type InvoiceSummaryRow = {
 };
 
 type MonthOption = {
-  key: string; // YYYY-MM
-  label: string; // March 2026
+  key: string;
+  label: string;
   sortValue: number;
 };
 
@@ -221,7 +221,12 @@ export default function AccountingSummaryView() {
     if (!appliedDiscrepancyMonth) {
       return {
         selectedMonthLabel: "",
-        typeRows: [],
+        typeRows: [] as Array<{
+          typeName: string;
+          ksolveTotal: number;
+          invoiceTotal: number;
+          discrepancy: number;
+        }>,
         ksolveGrandTotal: 0,
         invoiceGrandTotal: 0,
         discrepancyGrandTotal: 0,
@@ -229,7 +234,6 @@ export default function AccountingSummaryView() {
     }
 
     const selectedMonth = allMonthOptions.find((m) => m.key === appliedDiscrepancyMonth);
-
     const typeTotals = new Map<string, number>();
 
     for (const row of rows) {
@@ -250,9 +254,7 @@ export default function AccountingSummaryView() {
     const typeRows = orderedTypes.map((typeName) => {
       const ksolveTotal = typeTotals.get(typeName) || 0;
 
-      // TODO:
-      // Replace this with the actual invoice-total source once you confirm
-      // which table/field should be used for "Invoice Total".
+      // Replace this once you have a real invoice-total source.
       const invoiceTotal = 0;
 
       return {
@@ -306,11 +308,13 @@ export default function AccountingSummaryView() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
             <div>
-              <h2 className="text-xl font-semibold text-slate-900">Summary</h2>
+              <h2 className="text-xl font-semibold text-slate-900">
+                {viewMode === "accounting" ? "Accounting Summary" : "Summary Discrepancy"}
+              </h2>
               <p className="text-sm text-slate-500">
                 {viewMode === "accounting"
                   ? "Summary by type from invoices."
-                  : "Monthly summary discrepancy by type."}
+                  : "Type summary for the selected month with discrepancy."}
               </p>
             </div>
 
