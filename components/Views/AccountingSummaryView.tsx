@@ -14,6 +14,18 @@ type InvoiceSummaryRow = {
   type: string | null;
 };
 
+type DatasetRow = {
+  id?: number;
+  type?: string | null;
+  check_date?: string | null;
+  month?: string | null;
+  total?: number | null;
+  invoice_total?: number | null;
+  amount?: number | null;
+  invoice_amt?: number | null;
+  dataset_total?: number | null;
+};
+
 type MonthOption = {
   key: string;
   label: string;
@@ -38,6 +50,23 @@ function parseUsDate(value: string | null | undefined) {
   if (!Number.isNaN(fallback.getTime())) return fallback;
 
   return null;
+}
+
+function parseMonthValue(value: string | null | undefined) {
+  if (!value) return null;
+
+  const trimmed = String(value).trim();
+
+  if (/^\d{4}-\d{2}$/.test(trimmed)) {
+    const [yyyy, mm] = trimmed.split("-");
+    const date = new Date(Number(yyyy), Number(mm) - 1, 1);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  const monthYear = new Date(`${trimmed} 1`);
+  if (!Number.isNaN(monthYear.getTime())) return monthYear;
+
+  return parseUsDate(trimmed);
 }
 
 function formatCurrency(value: number | null | undefined) {
@@ -68,8 +97,24 @@ function sortTypesWithWMFirst(types: string[]) {
   });
 }
 
+function getDatasetMonthDate(row: DatasetRow) {
+  return parseMonthValue(row.month) || parseUsDate(row.check_date) || null;
+}
+
+function getDatasetAmount(row: DatasetRow) {
+  return Number(
+    row.total ??
+      row.invoice_total ??
+      row.amount ??
+      row.invoice_amt ??
+      row.dataset_total ??
+      0
+  );
+}
+
 export default function AccountingSummaryView() {
   const [rows, setRows] = useState<InvoiceSummaryRow[]>([]);
+  const [datasetRows, setDatasetRows] = useState<DatasetRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [viewMode, setViewMode] = useState<ViewMode>("accounting");
@@ -87,15 +132,27 @@ export default function AccountingSummaryView() {
       try {
         setLoading(true);
 
-        const { data, error } = await supabase
-          .from("invoices")
-          .select("id, check_date, invoice_amt, type")
-          .order("check_date", { ascending: false });
+        const [invoiceRes, datasetRes] = await Promise.all([
+          supabase
+            .from("invoices")
+            .select("id, check_date, invoice_amt, type")
+            .order("check_date", { ascending: false }),
+          supabase.from("datasets").select("*"),
+        ]);
 
-        if (error) throw error;
+        if (invoiceRes.error) throw invoiceRes.error;
+        if (datasetRes.error) throw datasetRes.error;
 
-        const safeRows = (data || []).filter((row) => parseUsDate(row.check_date));
-        setRows(safeRows);
+        const safeInvoiceRows = (invoiceRes.data || []).filter((row) =>
+          parseUsDate(row.check_date)
+        );
+
+        const safeDatasetRows = (datasetRes.data || []).filter(
+          (row) => getDatasetMonthDate(row) && (row.type?.trim() || "Unknown")
+        );
+
+        setRows(safeInvoiceRows);
+        setDatasetRows(safeDatasetRows);
       } catch (error) {
         console.error("Accounting summary load error:", error);
       } finally {
@@ -123,8 +180,22 @@ export default function AccountingSummaryView() {
       }
     }
 
+    for (const row of datasetRows) {
+      const date = getDatasetMonthDate(row);
+      if (!date) continue;
+
+      const key = monthKeyFromDate(date);
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          label: monthLabelFromDate(date),
+          sortValue: date.getFullYear() * 100 + (date.getMonth() + 1),
+        });
+      }
+    }
+
     return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
-  }, [rows]);
+  }, [rows, datasetRows]);
 
   useEffect(() => {
     if (allMonthOptions.length === 0) return;
@@ -234,7 +305,9 @@ export default function AccountingSummaryView() {
     }
 
     const selectedMonth = allMonthOptions.find((m) => m.key === appliedDiscrepancyMonth);
-    const typeTotals = new Map<string, number>();
+
+    const ksolveTypeTotals = new Map<string, number>();
+    const datasetTypeTotals = new Map<string, number>();
 
     for (const row of rows) {
       const date = parseUsDate(row.check_date);
@@ -246,16 +319,29 @@ export default function AccountingSummaryView() {
       const typeName = row.type?.trim() || "Unknown";
       const amount = Number(row.invoice_amt || 0);
 
-      typeTotals.set(typeName, (typeTotals.get(typeName) || 0) + amount);
+      ksolveTypeTotals.set(typeName, (ksolveTypeTotals.get(typeName) || 0) + amount);
     }
 
-    const orderedTypes = sortTypesWithWMFirst(Array.from(typeTotals.keys()));
+    for (const row of datasetRows) {
+      const date = getDatasetMonthDate(row);
+      if (!date) continue;
+
+      const monthKey = monthKeyFromDate(date);
+      if (monthKey !== appliedDiscrepancyMonth) continue;
+
+      const typeName = row.type?.trim() || "Unknown";
+      const amount = getDatasetAmount(row);
+
+      datasetTypeTotals.set(typeName, (datasetTypeTotals.get(typeName) || 0) + amount);
+    }
+
+    const orderedTypes = sortTypesWithWMFirst(
+      Array.from(new Set([...ksolveTypeTotals.keys(), ...datasetTypeTotals.keys()]))
+    );
 
     const typeRows = orderedTypes.map((typeName) => {
-      const ksolveTotal = typeTotals.get(typeName) || 0;
-
-      // Replace this once you have a real invoice-total source.
-      const invoiceTotal = 0;
+      const ksolveTotal = ksolveTypeTotals.get(typeName) || 0;
+      const invoiceTotal = datasetTypeTotals.get(typeName) || 0;
 
       return {
         typeName,
@@ -276,7 +362,7 @@ export default function AccountingSummaryView() {
       invoiceGrandTotal,
       discrepancyGrandTotal,
     };
-  }, [rows, appliedDiscrepancyMonth, allMonthOptions]);
+  }, [rows, datasetRows, appliedDiscrepancyMonth, allMonthOptions]);
 
   const handleApply = () => {
     if (!fromMonth && !toMonth) return;
@@ -306,37 +392,24 @@ export default function AccountingSummaryView() {
     <Card className="rounded-3xl border border-slate-200 bg-white shadow-sm">
       <CardContent className="space-y-6 pt-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
-            <div>
-              <h2 className="text-xl font-semibold text-slate-900">
-                {viewMode === "accounting" ? "Accounting Summary" : "Summary Discrepancy"}
-              </h2>
-              <p className="text-sm text-slate-500">
-                {viewMode === "accounting"
-                  ? "Summary by type from invoices."
-                  : "Type summary for the selected month with discrepancy."}
-              </p>
-            </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={viewMode === "accounting" ? "default" : "outline"}
+              className="rounded-xl"
+              onClick={() => setViewMode("accounting")}
+            >
+              Accounting Summary
+            </Button>
 
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant={viewMode === "accounting" ? "default" : "outline"}
-                className="rounded-xl"
-                onClick={() => setViewMode("accounting")}
-              >
-                Accounting Summary
-              </Button>
-
-              <Button
-                type="button"
-                variant={viewMode === "discrepancy" ? "default" : "outline"}
-                className="rounded-xl"
-                onClick={() => setViewMode("discrepancy")}
-              >
-                Summary Discrepancy
-              </Button>
-            </div>
+            <Button
+              type="button"
+              variant={viewMode === "discrepancy" ? "default" : "outline"}
+              className="rounded-xl"
+              onClick={() => setViewMode("discrepancy")}
+            >
+              Summary Discrepancy
+            </Button>
           </div>
 
           {viewMode === "accounting" ? (
