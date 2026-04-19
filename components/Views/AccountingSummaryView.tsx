@@ -24,6 +24,11 @@ type DatasetRow = {
   amount?: number | null;
   invoice_amt?: number | null;
   dataset_total?: number | null;
+  summary_total?: number | null;
+  total_amount?: number | null;
+  invoice_month?: string | null;
+  summary_month?: string | null;
+  month_year?: string | null;
 };
 
 type MonthOption = {
@@ -63,8 +68,8 @@ function parseMonthValue(value: string | null | undefined) {
     if (!Number.isNaN(date.getTime())) return date;
   }
 
-  const monthYear = new Date(`${trimmed} 1`);
-  if (!Number.isNaN(monthYear.getTime())) return monthYear;
+  const monthYearDate = new Date(`${trimmed} 1`);
+  if (!Number.isNaN(monthYearDate.getTime())) return monthYearDate;
 
   return parseUsDate(trimmed);
 }
@@ -97,8 +102,31 @@ function sortTypesWithWMFirst(types: string[]) {
   });
 }
 
+function normalizeType(value: string | null | undefined) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function getDatasetType(row: DatasetRow) {
+  return row.type?.trim() || "Unknown";
+}
+
 function getDatasetMonthDate(row: DatasetRow) {
-  return parseMonthValue(row.month) || parseUsDate(row.check_date) || null;
+  return (
+    parseMonthValue(row.month) ||
+    parseUsDate(row.check_date) ||
+    parseMonthValue(row.invoice_month) ||
+    parseMonthValue(row.summary_month) ||
+    parseMonthValue(row.month_year) ||
+    null
+  );
+}
+
+function getDatasetMonthKey(row: DatasetRow) {
+  const date = getDatasetMonthDate(row);
+  return date ? monthKeyFromDate(date) : null;
 }
 
 function getDatasetAmount(row: DatasetRow) {
@@ -108,6 +136,8 @@ function getDatasetAmount(row: DatasetRow) {
       row.amount ??
       row.invoice_amt ??
       row.dataset_total ??
+      row.summary_total ??
+      row.total_amount ??
       0
   );
 }
@@ -165,7 +195,7 @@ export default function AccountingSummaryView() {
         }
 
         const safeDatasetRows = datasetsData.filter(
-          (row) => getDatasetMonthDate(row) && (row.type?.trim() || "Unknown")
+          (row) => getDatasetMonthDate(row) && getDatasetType(row)
         );
 
         setDatasetRows(safeDatasetRows);
@@ -346,6 +376,7 @@ export default function AccountingSummaryView() {
 
     const ksolveTypeTotals = new Map<string, number>();
     const datasetTypeTotals = new Map<string, number>();
+    const displayTypeMap = new Map<string, string>();
 
     for (const row of rows) {
       const date = parseUsDate(row.check_date);
@@ -354,32 +385,51 @@ export default function AccountingSummaryView() {
       const monthKey = monthKeyFromDate(date);
       if (monthKey !== appliedDiscrepancyMonth) continue;
 
-      const typeName = row.type?.trim() || "Unknown";
+      const rawType = row.type?.trim() || "Unknown";
+      const normalizedType = normalizeType(rawType);
       const amount = Number(row.invoice_amt || 0);
 
-      ksolveTypeTotals.set(typeName, (ksolveTypeTotals.get(typeName) || 0) + amount);
+      if (!displayTypeMap.has(normalizedType)) {
+        displayTypeMap.set(normalizedType, rawType);
+      }
+
+      ksolveTypeTotals.set(
+        normalizedType,
+        (ksolveTypeTotals.get(normalizedType) || 0) + amount
+      );
     }
 
     for (const row of datasetRows) {
-      const date = getDatasetMonthDate(row);
-      if (!date) continue;
-
-      const monthKey = monthKeyFromDate(date);
+      const monthKey = getDatasetMonthKey(row);
       if (monthKey !== appliedDiscrepancyMonth) continue;
 
-      const typeName = row.type?.trim() || "Unknown";
+      const rawType = getDatasetType(row);
+      const normalizedType = normalizeType(rawType);
       const amount = getDatasetAmount(row);
 
-      datasetTypeTotals.set(typeName, (datasetTypeTotals.get(typeName) || 0) + amount);
+      if (!displayTypeMap.has(normalizedType)) {
+        displayTypeMap.set(normalizedType, rawType);
+      }
+
+      datasetTypeTotals.set(
+        normalizedType,
+        (datasetTypeTotals.get(normalizedType) || 0) + amount
+      );
     }
 
-    const orderedTypes = sortTypesWithWMFirst(
-      Array.from(new Set([...ksolveTypeTotals.keys(), ...datasetTypeTotals.keys()]))
+    const allNormalizedTypes = Array.from(
+      new Set([...ksolveTypeTotals.keys(), ...datasetTypeTotals.keys()])
     );
 
-    const typeRows = orderedTypes.map((typeName) => {
-      const ksolveTotal = ksolveTypeTotals.get(typeName) || 0;
-      const invoiceTotal = datasetTypeTotals.get(typeName) || 0;
+    const orderedTypes = sortTypesWithWMFirst(
+      allNormalizedTypes.map((key) => displayTypeMap.get(key) || key)
+    );
+
+    const typeRows = orderedTypes.map((displayTypeName) => {
+      const normalizedType = normalizeType(displayTypeName);
+      const typeName = displayTypeMap.get(normalizedType) || displayTypeName;
+      const ksolveTotal = ksolveTypeTotals.get(normalizedType) || 0;
+      const invoiceTotal = datasetTypeTotals.get(normalizedType) || 0;
 
       return {
         typeName,
