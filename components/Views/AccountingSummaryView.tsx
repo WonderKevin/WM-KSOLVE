@@ -129,29 +129,45 @@ export default function AccountingSummaryView() {
 
   useEffect(() => {
     const loadData = async () => {
+      setLoading(true);
+
       try {
-        setLoading(true);
+        const invoiceRes = await supabase
+          .from("invoices")
+          .select("id, check_date, invoice_amt, type")
+          .order("check_date", { ascending: false });
 
-        const [invoiceRes, datasetRes] = await Promise.all([
-          supabase
-            .from("invoices")
-            .select("id, check_date, invoice_amt, type")
-            .order("check_date", { ascending: false }),
-          supabase.from("datasets").select("*"),
-        ]);
+        if (invoiceRes.error) {
+          console.error("Invoice query error:", invoiceRes.error);
+        } else {
+          const safeInvoiceRows = (invoiceRes.data || []).filter((row) =>
+            parseUsDate(row.check_date)
+          );
+          setRows(safeInvoiceRows);
+        }
 
-        if (invoiceRes.error) throw invoiceRes.error;
-        if (datasetRes.error) throw datasetRes.error;
+        let datasetsData: DatasetRow[] = [];
 
-        const safeInvoiceRows = (invoiceRes.data || []).filter((row) =>
-          parseUsDate(row.check_date)
-        );
+        const datasetsRes = await supabase.from("datasets").select("*");
 
-        const safeDatasetRows = (datasetRes.data || []).filter(
+        if (!datasetsRes.error) {
+          datasetsData = datasetsRes.data || [];
+        } else {
+          console.warn("datasets table fetch failed, trying data_sets:", datasetsRes.error);
+
+          const fallbackRes = await supabase.from("data_sets").select("*");
+
+          if (!fallbackRes.error) {
+            datasetsData = fallbackRes.data || [];
+          } else {
+            console.warn("data_sets table fetch also failed:", fallbackRes.error);
+          }
+        }
+
+        const safeDatasetRows = datasetsData.filter(
           (row) => getDatasetMonthDate(row) && (row.type?.trim() || "Unknown")
         );
 
-        setRows(safeInvoiceRows);
         setDatasetRows(safeDatasetRows);
       } catch (error) {
         console.error("Accounting summary load error:", error);
@@ -163,7 +179,27 @@ export default function AccountingSummaryView() {
     loadData();
   }, []);
 
-  const allMonthOptions = useMemo<MonthOption[]>(() => {
+  const accountingMonthOptions = useMemo<MonthOption[]>(() => {
+    const map = new Map<string, MonthOption>();
+
+    for (const row of rows) {
+      const date = parseUsDate(row.check_date);
+      if (!date) continue;
+
+      const key = monthKeyFromDate(date);
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          label: monthLabelFromDate(date),
+          sortValue: date.getFullYear() * 100 + (date.getMonth() + 1),
+        });
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
+  }, [rows]);
+
+  const discrepancyMonthOptions = useMemo<MonthOption[]>(() => {
     const map = new Map<string, MonthOption>();
 
     for (const row of rows) {
@@ -198,10 +234,8 @@ export default function AccountingSummaryView() {
   }, [rows, datasetRows]);
 
   useEffect(() => {
-    if (allMonthOptions.length === 0) return;
-
-    if (!appliedFromMonth && !appliedToMonth) {
-      const defaultMonths = allMonthOptions.slice(0, 6);
+    if (accountingMonthOptions.length > 0 && !appliedFromMonth && !appliedToMonth) {
+      const defaultMonths = accountingMonthOptions.slice(0, 6);
       const sortedAsc = [...defaultMonths].sort((a, b) => a.sortValue - b.sortValue);
 
       const defaultFrom = sortedAsc[0]?.key || "";
@@ -212,13 +246,15 @@ export default function AccountingSummaryView() {
       setAppliedFromMonth(defaultFrom);
       setAppliedToMonth(defaultTo);
     }
+  }, [accountingMonthOptions, appliedFromMonth, appliedToMonth]);
 
-    if (!appliedDiscrepancyMonth) {
-      const latestMonth = allMonthOptions[0]?.key || "";
+  useEffect(() => {
+    if (discrepancyMonthOptions.length > 0 && !appliedDiscrepancyMonth) {
+      const latestMonth = discrepancyMonthOptions[0]?.key || "";
       setDiscrepancyMonth(latestMonth);
       setAppliedDiscrepancyMonth(latestMonth);
     }
-  }, [allMonthOptions, appliedFromMonth, appliedToMonth, appliedDiscrepancyMonth]);
+  }, [discrepancyMonthOptions, appliedDiscrepancyMonth]);
 
   const filteredMonthOptions = useMemo(() => {
     if (!appliedFromMonth || !appliedToMonth) return [];
@@ -228,10 +264,10 @@ export default function AccountingSummaryView() {
     const minVal = Math.min(fromVal, toVal);
     const maxVal = Math.max(fromVal, toVal);
 
-    return [...allMonthOptions]
+    return [...accountingMonthOptions]
       .filter((m) => m.sortValue >= minVal && m.sortValue <= maxVal)
       .sort((a, b) => a.sortValue - b.sortValue);
-  }, [allMonthOptions, appliedFromMonth, appliedToMonth]);
+  }, [accountingMonthOptions, appliedFromMonth, appliedToMonth]);
 
   const summary = useMemo(() => {
     const monthKeys = filteredMonthOptions.map((m) => m.key);
@@ -304,7 +340,9 @@ export default function AccountingSummaryView() {
       };
     }
 
-    const selectedMonth = allMonthOptions.find((m) => m.key === appliedDiscrepancyMonth);
+    const selectedMonth = discrepancyMonthOptions.find(
+      (m) => m.key === appliedDiscrepancyMonth
+    );
 
     const ksolveTypeTotals = new Map<string, number>();
     const datasetTypeTotals = new Map<string, number>();
@@ -362,7 +400,7 @@ export default function AccountingSummaryView() {
       invoiceGrandTotal,
       discrepancyGrandTotal,
     };
-  }, [rows, datasetRows, appliedDiscrepancyMonth, allMonthOptions]);
+  }, [rows, datasetRows, appliedDiscrepancyMonth, discrepancyMonthOptions]);
 
   const handleApply = () => {
     if (!fromMonth && !toMonth) return;
@@ -422,7 +460,7 @@ export default function AccountingSummaryView() {
                   className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
                 >
                   <option value="">Select month</option>
-                  {[...allMonthOptions]
+                  {[...accountingMonthOptions]
                     .sort((a, b) => a.sortValue - b.sortValue)
                     .map((month) => (
                       <option key={month.key} value={month.key}>
@@ -440,7 +478,7 @@ export default function AccountingSummaryView() {
                   className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
                 >
                   <option value="">Select month</option>
-                  {[...allMonthOptions]
+                  {[...accountingMonthOptions]
                     .sort((a, b) => a.sortValue - b.sortValue)
                     .map((month) => (
                       <option key={month.key} value={month.key}>
@@ -465,7 +503,7 @@ export default function AccountingSummaryView() {
                   className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
                 >
                   <option value="">Select month</option>
-                  {[...allMonthOptions]
+                  {[...discrepancyMonthOptions]
                     .sort((a, b) => b.sortValue - a.sortValue)
                     .map((month) => (
                       <option key={month.key} value={month.key}>
