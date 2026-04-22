@@ -93,108 +93,100 @@ function getLastMonthInputValue() {
   )}`;
 }
 
-function SimpleBarChart({
+function truncateLabel(value: string, max = 42) {
+  const text = String(value || "");
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function HorizontalBarChart({
   data,
   title,
 }: {
   data: { label: string; value: number }[];
   title: string;
 }) {
-  const chartHeight = 340;
-  const chartWidth = 980;
-  const leftPad = 55;
-  const rightPad = 20;
+  const rowHeight = 42;
   const topPad = 20;
-  const bottomPad = 120;
-  const maxValue = Math.max(...data.map((d) => d.value), 1);
+  const bottomPad = 20;
+  const leftPad = 360;
+  const rightPad = 40;
+  const chartWidth = 1100;
   const innerWidth = chartWidth - leftPad - rightPad;
-  const innerHeight = chartHeight - topPad - bottomPad;
-  const barGap = 14;
-  const barWidth =
-    data.length > 0
-      ? Math.max(28, (innerWidth - barGap * (data.length - 1)) / data.length)
-      : 40;
+  const chartHeight = Math.max(320, topPad + bottomPad + data.length * rowHeight);
+  const maxValue = Math.max(...data.map((d) => d.value), 1);
 
-  const gridSteps = 4;
-  const ticks = Array.from({ length: gridSteps + 1 }, (_, i) => {
-    const value = Math.round((maxValue / gridSteps) * i);
-    const y = topPad + innerHeight - (innerHeight / gridSteps) * i;
-    return { value, y };
-  });
+  const ticks = 4;
+  const tickValues = Array.from({ length: ticks + 1 }, (_, i) =>
+    Math.round((maxValue / ticks) * i)
+  );
 
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="mb-4 text-2xl font-semibold text-slate-700">{title}</h3>
 
       <div className="overflow-x-auto">
-        <svg width={chartWidth} height={chartHeight} className="min-w-[980px]">
-          {ticks.map((tick, index) => (
-            <g key={index}>
-              <line
-                x1={leftPad}
-                y1={tick.y}
-                x2={chartWidth - rightPad}
-                y2={tick.y}
-                stroke="#e2e8f0"
-                strokeWidth="1"
-              />
-              <text
-                x={leftPad - 10}
-                y={tick.y + 4}
-                textAnchor="end"
-                fontSize="11"
-                fill="#64748b"
-              >
-                {tick.value}
-              </text>
-            </g>
-          ))}
+        <svg width={chartWidth} height={chartHeight} className="min-w-[1100px]">
+          {tickValues.map((tick, index) => {
+            const x = leftPad + (tick / maxValue) * innerWidth;
 
-          <line
-            x1={leftPad}
-            y1={topPad + innerHeight}
-            x2={chartWidth - rightPad}
-            y2={topPad + innerHeight}
-            stroke="#94a3b8"
-            strokeWidth="1.5"
-          />
+            return (
+              <g key={index}>
+                <line
+                  x1={x}
+                  y1={topPad}
+                  x2={x}
+                  y2={chartHeight - bottomPad}
+                  stroke="#e2e8f0"
+                  strokeWidth="1"
+                />
+                <text
+                  x={x}
+                  y={topPad - 6}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="#64748b"
+                >
+                  {tick}
+                </text>
+              </g>
+            );
+          })}
 
           {data.map((item, index) => {
-            const x = leftPad + index * (barWidth + barGap);
-            const barHeight = (item.value / maxValue) * innerHeight;
-            const y = topPad + innerHeight - barHeight;
-            const shortLabel =
-              item.label.length > 22 ? `${item.label.slice(0, 22)}...` : item.label;
+            const y = topPad + index * rowHeight;
+            const barHeight = 24;
+            const barWidth = (item.value / maxValue) * innerWidth;
 
             return (
               <g key={`${item.label}-${index}`}>
+                <text
+                  x={leftPad - 12}
+                  y={y + barHeight / 2 + 4}
+                  textAnchor="end"
+                  fontSize="12"
+                  fill="#334155"
+                >
+                  {truncateLabel(item.label, 44)}
+                  <title>{item.label}</title>
+                </text>
+
                 <rect
-                  x={x}
+                  x={leftPad}
                   y={y}
                   width={barWidth}
                   height={barHeight}
                   rx="4"
                   fill="#4a83e7"
                 />
+
                 <text
-                  x={x + barWidth / 2}
-                  y={y - 8}
-                  textAnchor="middle"
+                  x={leftPad + barWidth + 8}
+                  y={y + barHeight / 2 + 4}
                   fontSize="12"
                   fontWeight="700"
                   fill="#2563eb"
                 >
                   {item.value}
-                </text>
-                <text
-                  x={x + barWidth / 2}
-                  y={topPad + innerHeight + 16}
-                  textAnchor="middle"
-                  fontSize="10"
-                  fill="#334155"
-                >
-                  {shortLabel}
-                  <title>{item.label}</title>
                 </text>
               </g>
             );
@@ -497,13 +489,13 @@ export default function KeheDashboardView() {
                 </div>
               </div>
 
-              <SimpleBarChart
-                title="Top Selling Store"
-                data={topSellingStores.map((item) => ({
-                  label: item.customer,
-                  value: item.totalCases,
-                }))}
-              />
+              <HorizontalBarChart
+  title="Top Selling Store"
+  data={topSellingStores.map((item) => ({
+    label: item.customer,
+    value: item.totalCases,
+  }))}
+/>
             </div>
           )}
         </>
