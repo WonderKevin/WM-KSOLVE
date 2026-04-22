@@ -29,6 +29,7 @@ import DeductionTypesView from "@/components/Views/DeductionTypesView";
 import UserAccountView from "@/components/Views/UserAccountView";
 import KeHeVelocityView from "@/components/Views/KeHeVelocityView";
 import KeheDashboardView from "@/components/Views/KeheDashboardView";
+import HomeView from "@/components/Views/HomeView";
 
 type Permissions = {
   email: string;
@@ -296,8 +297,8 @@ export default function WMKsolveApp() {
       allowedKeys.push("admin-user-account");
     }
 
-    if (!allowedKeys.includes(activeKey)) {
-      setActiveKey(allowedKeys[0] || "dashboard-kehe");
+    if (activeKey && !allowedKeys.includes(activeKey)) {
+      setActiveKey("");
     }
 
     setOpenGroups((prev) => ({
@@ -456,6 +457,7 @@ export default function WMKsolveApp() {
   }, [permissions]);
 
   const titleMap: Record<string, string> = {
+    home: "WM-KSOLVE",
     "dashboard-kehe": "Kehe Dashboard",
     "dashboard-tony": "Tony's Dashboard",
     "broker-commission-summary": "Broker Commission Summary",
@@ -507,7 +509,7 @@ export default function WMKsolveApp() {
       case "admin-user-account":
         return <UserAccountView />;
       default:
-        return <KeheDashboardView />;
+        return <HomeView />;
     }
   };
 
@@ -566,7 +568,7 @@ export default function WMKsolveApp() {
 
               <div>
                 <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
-                {titleMap[activeKey || "home"] || "WM-KSOLVE"}
+                  {titleMap[activeKey || "home"] || "WM-KSOLVE"}
                 </h1>
               </div>
             </div>
