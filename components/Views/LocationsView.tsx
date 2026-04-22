@@ -156,7 +156,7 @@ export default function LocationsView() {
       Customer: loc.customer,
       "Retailer Area": loc.retailer_area,
       Retailer: loc.retailer,
-      "Created At": loc.created_at,
+      
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
