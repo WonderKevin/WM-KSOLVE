@@ -1238,7 +1238,7 @@ export default function KeheDashboardView() {
 
 {velocitySubTab === "total-cases-per-month" && (
   <GroupedMonthlyChart
-    title="Total Cases per Month"
+    title="Total Cases per Month per Retailer"
     months={monthlyCasesSeries.months}
     series={monthlyCasesSeries.series}
   />
