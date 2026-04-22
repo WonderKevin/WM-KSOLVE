@@ -12,7 +12,6 @@ import {
   BadgeDollarSign,
   Menu,
   LogOut,
-  BarChart3,
   Shield,
 } from "lucide-react";
 
@@ -35,13 +34,15 @@ type Permissions = {
   email: string;
   can_view_dashboard: boolean;
 
+  // optional new dashboard permissions
+  can_view_dashboard_kehe?: boolean;
+  can_view_dashboard_tony?: boolean;
+
   can_view_broker_commission_summary: boolean;
   can_view_broker_commission_data_sets: boolean;
 
   can_view_accounting_summary: boolean;
   can_view_accounting_check_details: boolean;
-
-  can_view_reporting_report_xxx: boolean;
 
   can_view_database_ksolve_invoices: boolean;
   can_view_database_kehe_velocity: boolean;
@@ -98,7 +99,7 @@ function SidebarItem({
           }))
         }
         className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
-          hasActiveChild
+          hasActiveChild || isOpen
             ? "bg-slate-100 text-slate-900"
             : "text-slate-700 hover:bg-slate-100"
         }`}
@@ -151,11 +152,11 @@ export default function WMKsolveApp() {
   const router = useRouter();
 
   const [checkingSession, setCheckingSession] = useState(true);
-  const [activeKey, setActiveKey] = useState("dashboard");
+  const [activeKey, setActiveKey] = useState("dashboard-kehe");
   const [openGroups, setOpenGroups] = useState({
+    dashboard: false,
     "broker-commission": false,
     accounting: false,
-    reporting: false,
     database: false,
     admin: false,
   });
@@ -196,14 +197,14 @@ export default function WMKsolveApp() {
         permissionRow || {
           email,
           can_view_dashboard: true,
+          can_view_dashboard_kehe: true,
+          can_view_dashboard_tony: true,
 
           can_view_broker_commission_summary: false,
           can_view_broker_commission_data_sets: false,
 
           can_view_accounting_summary: false,
           can_view_accounting_check_details: false,
-
-          can_view_reporting_report_xxx: false,
 
           can_view_database_ksolve_invoices: false,
           can_view_database_kehe_velocity: false,
@@ -240,47 +241,94 @@ export default function WMKsolveApp() {
   useEffect(() => {
     if (!permissions) return;
 
+    const canViewKeheDashboard =
+      permissions.can_view_dashboard_kehe ?? permissions.can_view_dashboard;
+
+    const canViewTonyDashboard =
+      permissions.can_view_dashboard_tony ?? permissions.can_view_dashboard;
+
     const allowedKeys: string[] = [];
 
-    if (permissions.can_view_dashboard) allowedKeys.push("dashboard");
+    if (canViewKeheDashboard) {
+      allowedKeys.push("dashboard-kehe");
+    }
+
+    if (canViewTonyDashboard) {
+      allowedKeys.push("dashboard-tony");
+    }
+
     if (permissions.can_view_broker_commission_summary) {
       allowedKeys.push("broker-commission-summary");
     }
+
     if (permissions.can_view_broker_commission_data_sets) {
       allowedKeys.push("broker-commission-data-sets");
     }
+
     if (permissions.can_view_accounting_summary) {
       allowedKeys.push("accounting-summary");
       allowedKeys.push("accounting-wm-invoice-discrepancy");
     }
+
     if (permissions.can_view_accounting_check_details) {
       allowedKeys.push("accounting-check-details");
     }
-    if (permissions.can_view_reporting_report_xxx) {
-      allowedKeys.push("reporting-report-xxx");
-    }
+
     if (permissions.can_view_database_ksolve_invoices) {
       allowedKeys.push("database-ksolve-invoices");
     }
+
     if (permissions.can_view_database_kehe_velocity) {
       allowedKeys.push("database-kehe-velocity");
     }
+
     if (permissions.can_view_database_product_list) {
       allowedKeys.push("database-product-list");
     }
+
     if (permissions.can_view_database_locations) {
       allowedKeys.push("database-locations");
     }
+
     if (permissions.can_view_database_deduction_type) {
       allowedKeys.push("database-deduction-type");
     }
+
     if (permissions.can_view_user_account) {
       allowedKeys.push("admin-user-account");
     }
 
     if (!allowedKeys.includes(activeKey)) {
-      setActiveKey(allowedKeys[0] || "dashboard");
+      setActiveKey(allowedKeys[0] || "dashboard-kehe");
     }
+
+    setOpenGroups((prev) => ({
+      ...prev,
+      dashboard:
+        activeKey === "dashboard-kehe" || activeKey === "dashboard-tony"
+          ? true
+          : prev.dashboard,
+      "broker-commission":
+        activeKey === "broker-commission-summary" ||
+        activeKey === "broker-commission-data-sets"
+          ? true
+          : prev["broker-commission"],
+      accounting:
+        activeKey === "accounting-summary" ||
+        activeKey === "accounting-check-details" ||
+        activeKey === "accounting-wm-invoice-discrepancy"
+          ? true
+          : prev.accounting,
+      database:
+        activeKey === "database-ksolve-invoices" ||
+        activeKey === "database-kehe-velocity" ||
+        activeKey === "database-product-list" ||
+        activeKey === "database-locations" ||
+        activeKey === "database-deduction-type"
+          ? true
+          : prev.database,
+      admin: activeKey === "admin-user-account" ? true : prev.admin,
+    }));
   }, [permissions, activeKey]);
 
   const handleLogout = async () => {
@@ -299,17 +347,36 @@ export default function WMKsolveApp() {
 
     const items: any[] = [];
 
-    if (permissions.can_view_dashboard) {
+    const canViewKeheDashboard =
+      permissions.can_view_dashboard_kehe ?? permissions.can_view_dashboard;
+
+    const canViewTonyDashboard =
+      permissions.can_view_dashboard_tony ?? permissions.can_view_dashboard;
+
+    const dashboardChildren = [
+      canViewKeheDashboard
+        ? { label: "Kehe Dashboard", key: "dashboard-kehe" }
+        : null,
+      canViewTonyDashboard
+        ? { label: "Tony's Dashboard", key: "dashboard-tony" }
+        : null,
+    ].filter(Boolean);
+
+    if (dashboardChildren.length) {
       items.push({
         label: "Dashboard",
         icon: LayoutDashboard,
         key: "dashboard",
+        children: dashboardChildren,
       });
     }
 
     const brokerChildren = [
       permissions.can_view_broker_commission_summary
-        ? { label: "Broker Commission Summary", key: "broker-commission-summary" }
+        ? {
+            label: "Broker Commission Summary",
+            key: "broker-commission-summary",
+          }
         : null,
       permissions.can_view_broker_commission_data_sets
         ? { label: "Data Sets", key: "broker-commission-data-sets" }
@@ -346,21 +413,6 @@ export default function WMKsolveApp() {
         icon: BadgeDollarSign,
         key: "accounting",
         children: accountingChildren,
-      });
-    }
-
-    const reportingChildren = [
-      permissions.can_view_reporting_report_xxx
-        ? { label: "Report XXX", key: "reporting-report-xxx" }
-        : null,
-    ].filter(Boolean);
-
-    if (reportingChildren.length) {
-      items.push({
-        label: "Reporting",
-        icon: BarChart3,
-        key: "reporting",
-        children: reportingChildren,
       });
     }
 
@@ -410,13 +462,13 @@ export default function WMKsolveApp() {
   }, [permissions]);
 
   const titleMap: Record<string, string> = {
-    dashboard: "Dashboard",
+    "dashboard-kehe": "Kehe Dashboard",
+    "dashboard-tony": "Tony's Dashboard",
     "broker-commission-summary": "Broker Commission Summary",
     "broker-commission-data-sets": "Data Sets",
     "accounting-summary": "Summary",
     "accounting-check-details": "Check Details",
     "accounting-wm-invoice-discrepancy": "WM Invoice Discrepancy",
-    "reporting-report-xxx": "Report XXX",
     "database-ksolve-invoices": "Ksolve Invoices",
     "database-kehe-velocity": "KeHe Velocity",
     "database-product-list": "Product List",
@@ -427,8 +479,10 @@ export default function WMKsolveApp() {
 
   const renderContent = () => {
     switch (activeKey) {
-      case "dashboard":
+      case "dashboard-kehe":
         return <DashboardView />;
+      case "dashboard-tony":
+        return <PlaceholderView title="Tony's Dashboard" />;
       case "broker-commission-summary":
         return <BrokerCommissionSummaryView />;
       case "broker-commission-data-sets":
@@ -439,8 +493,6 @@ export default function WMKsolveApp() {
         return <CheckDetailsView />;
       case "accounting-wm-invoice-discrepancy":
         return <WMInvoiceDiscrepancyView />;
-      case "reporting-report-xxx":
-        return <PlaceholderView title="Report XXX" />;
       case "database-ksolve-invoices":
         return (
           <InvoicesView
@@ -522,9 +574,7 @@ export default function WMKsolveApp() {
                 <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
                   {titleMap[activeKey] || "WM-KSOLVE"}
                 </h1>
-                <p className="mt-1 text-sm font-medium text-slate-400">
-                  
-                </p>
+                <p className="mt-1 text-sm font-medium text-slate-400"></p>
               </div>
             </div>
 
