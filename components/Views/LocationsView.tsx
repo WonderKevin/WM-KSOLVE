@@ -12,6 +12,7 @@ import {
   Search,
   Upload,
   FileSpreadsheet,
+  Download,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import * as XLSX from "xlsx";
@@ -145,6 +146,30 @@ export default function LocationsView() {
     setSaving(false);
   };
 
+  const handleExportToExcel = () => {
+    if (!filteredLocations.length) {
+      alert("No locations to export.");
+      return;
+    }
+
+    const exportRows = filteredLocations.map((loc) => ({
+      Customer: loc.customer,
+      "Retailer Area": loc.retailer_area,
+      Retailer: loc.retailer,
+      "Created At": loc.created_at,
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Locations");
+
+    const fileName = search.trim()
+      ? `locations_filtered_${search.trim().replace(/\s+/g, "_")}.xlsx`
+      : "locations.xlsx";
+
+    XLSX.writeFile(workbook, fileName);
+  };
+
   const normalizeHeader = (value: string) =>
     String(value || "")
       .trim()
@@ -181,9 +206,7 @@ export default function LocationsView() {
           retailer,
         };
       })
-      .filter(
-        (row) => row.customer && row.retailer_area && row.retailer
-      );
+      .filter((row) => row.customer && row.retailer_area && row.retailer);
   };
 
   const handleFileUpload = async (
@@ -228,7 +251,9 @@ export default function LocationsView() {
       setUploadPreview(parsedRows);
     } catch (err) {
       console.error("Error parsing file:", err);
-      setUploadError("Failed to read the file. Please upload a valid CSV or Excel file.");
+      setUploadError(
+        "Failed to read the file. Please upload a valid CSV or Excel file."
+      );
     } finally {
       e.target.value = "";
     }
@@ -275,13 +300,27 @@ export default function LocationsView() {
             </p>
           </div>
 
-          <Button
-            onClick={() => setOpen(true)}
-            className="flex items-center gap-2 rounded-xl"
-          >
-            <Plus className="h-4 w-4" />
-            Add Location
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="rounded-xl"
+              onClick={handleExportToExcel}
+              disabled={loading || filteredLocations.length === 0}
+              title="Download to Excel"
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+
+            <Button
+              onClick={() => setOpen(true)}
+              className="flex items-center gap-2 rounded-xl"
+            >
+              <Plus className="h-4 w-4" />
+              Add Location
+            </Button>
+          </div>
         </div>
 
         {loading ? (
