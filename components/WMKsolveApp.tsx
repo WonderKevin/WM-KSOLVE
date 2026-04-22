@@ -152,7 +152,7 @@ export default function WMKsolveApp() {
   const router = useRouter();
 
   const [checkingSession, setCheckingSession] = useState(true);
-  const [activeKey, setActiveKey] = useState("dashboard-kehe");
+  const [activeKey, setActiveKey] = useState("");
   const [openGroups, setOpenGroups] = useState({
     dashboard: false,
     "broker-commission": false,
