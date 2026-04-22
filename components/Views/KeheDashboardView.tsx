@@ -7,8 +7,8 @@ type TabKey = "analytics" | "velocity" | "pullout";
 type VelocitySubTabKey =
   | "best-selling-store"
   | "total-cases-per-month"
-  | "overall-average-cases-per-week";
-type PeriodMode = "lastMonth" | "custom";
+  | "overall-average-cakes-per-week";
+type PeriodMode = "lastMonth" | "custom" | "past12Months";
 type TopN = 5 | 10 | 15 | 20;
 
 type VelocityRow = {
@@ -102,9 +102,23 @@ function buildMonthRange(fromMonth: string, toMonth: string) {
   return result;
 }
 
+function buildPast12MonthsRange() {
+  const now = new Date();
+  const result: string[] = [];
+  for (let i = 11; i >= 0; i--) {
+    result.push(monthLabelFromDate(new Date(now.getFullYear(), now.getMonth() - i, 1)));
+  }
+  return result;
+}
+
 function truncateLabel(value: string, max = 42) {
   const text = String(value || "");
   return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function isCakeDescription(value: string) {
+  const text = String(value || "").toLowerCase();
+  return text.includes("cake") || text.includes("cheesecake");
 }
 
 function HorizontalBarChart({
@@ -210,14 +224,16 @@ function HorizontalBarChart({
   );
 }
 
-function GroupedMonthlyChart({
+function SingleSeriesMonthlyChart({
   title,
   months,
-  series,
+  values,
+  fill = "#123f73",
 }: {
   title: string;
   months: string[];
-  series: { name: string; values: number[]; fill: string }[];
+  values: number[];
+  fill?: string;
 }) {
   const chartHeight = 360;
   const chartWidth = Math.max(980, 140 + months.length * 120);
@@ -228,19 +244,9 @@ function GroupedMonthlyChart({
   const innerWidth = chartWidth - leftPad - rightPad;
   const innerHeight = chartHeight - topPad - bottomPad;
 
-  const maxValue = Math.max(
-    1,
-    ...series.flatMap((s) => s.values),
-  );
-
+  const maxValue = Math.max(1, ...values);
   const groupWidth = months.length > 0 ? innerWidth / months.length : innerWidth;
-  const barGap = 6;
-  const groupInnerPadding = 12;
-  const barWidth = Math.max(
-    14,
-    (groupWidth - groupInnerPadding * 2 - barGap * Math.max(series.length - 1, 0)) /
-      Math.max(series.length, 1)
-  );
+  const barWidth = Math.max(36, groupWidth * 0.55);
 
   const gridSteps = 4;
   const ticks = Array.from({ length: gridSteps + 1 }, (_, i) => {
@@ -286,43 +292,27 @@ function GroupedMonthlyChart({
             strokeWidth="1.5"
           />
 
-          {months.map((month, monthIndex) => {
-            const groupStartX = leftPad + monthIndex * groupWidth + groupInnerPadding;
+          {months.map((month, index) => {
+            const value = values[index] || 0;
+            const barHeight = (value / maxValue) * innerHeight;
+            const x = leftPad + index * groupWidth + (groupWidth - barWidth) / 2;
+            const y = topPad + innerHeight - barHeight;
 
             return (
               <g key={month}>
-                {series.map((item, seriesIndex) => {
-                  const value = item.values[monthIndex] || 0;
-                  const barHeight = (value / maxValue) * innerHeight;
-                  const x = groupStartX + seriesIndex * (barWidth + barGap);
-                  const y = topPad + innerHeight - barHeight;
-
-                  return (
-                    <g key={`${month}-${item.name}`}>
-                      <rect
-                        x={x}
-                        y={y}
-                        width={barWidth}
-                        height={barHeight}
-                        rx="3"
-                        fill={item.fill}
-                      />
-                      <text
-                        x={x + barWidth / 2}
-                        y={y - 6}
-                        textAnchor="middle"
-                        fontSize="11"
-                        fontWeight="700"
-                        fill={item.fill}
-                      >
-                        {value}
-                      </text>
-                    </g>
-                  );
-                })}
-
+                <rect x={x} y={y} width={barWidth} height={barHeight} rx="4" fill={fill} />
                 <text
-                  x={leftPad + monthIndex * groupWidth + groupWidth / 2}
+                  x={x + barWidth / 2}
+                  y={y - 8}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fontWeight="700"
+                  fill={fill}
+                >
+                  {value}
+                </text>
+                <text
+                  x={leftPad + index * groupWidth + groupWidth / 2}
                   y={topPad + innerHeight + 18}
                   textAnchor="middle"
                   fontSize="11"
@@ -330,38 +320,21 @@ function GroupedMonthlyChart({
                 >
                   {month.toUpperCase()}
                 </text>
+                <text
+                  x={leftPad + index * groupWidth + groupWidth / 2}
+                  y={topPad + innerHeight + 34}
+                  textAnchor="middle"
+                  fontSize="12"
+                  fontWeight="700"
+                  fill="#64748b"
+                >
+                  {value}
+                </text>
               </g>
             );
           })}
         </svg>
       </div>
-
-      <div className="mt-4 flex flex-wrap gap-4">
-        {series.map((item) => (
-          <div key={item.name} className="flex items-center gap-2 text-sm text-slate-600">
-            <span
-              className="inline-block h-3 w-3 rounded-sm"
-              style={{ backgroundColor: item.fill }}
-            />
-            <span>{item.name}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="text-sm font-medium text-slate-500">{label}</div>
-      <div className="mt-2 text-3xl font-bold text-slate-900">{value}</div>
     </div>
   );
 }
@@ -371,11 +344,25 @@ export default function KeheDashboardView() {
   const [velocitySubTab, setVelocitySubTab] =
     useState<VelocitySubTabKey>("best-selling-store");
 
-  const [velocityPeriodMode, setVelocityPeriodMode] = useState<PeriodMode>("lastMonth");
-  const [velocityFromMonth, setVelocityFromMonth] = useState(getLastMonthInputValue());
-  const [velocityToMonth, setVelocityToMonth] = useState(getCurrentMonthInputValue());
+  const [bestStorePeriodMode, setBestStorePeriodMode] = useState<PeriodMode>("lastMonth");
+  const [bestStoreFromMonth, setBestStoreFromMonth] = useState(getLastMonthInputValue());
+  const [bestStoreToMonth, setBestStoreToMonth] = useState(getCurrentMonthInputValue());
   const [topN, setTopN] = useState<TopN>(10);
   const [retailerFilter, setRetailerFilter] = useState("All Retailers");
+
+  const [monthlyCasesPeriodMode, setMonthlyCasesPeriodMode] =
+    useState<PeriodMode>("past12Months");
+  const [monthlyCasesFromMonth, setMonthlyCasesFromMonth] = useState(
+    getPastMonthsInputValue(11)
+  );
+  const [monthlyCasesToMonth, setMonthlyCasesToMonth] = useState(
+    getCurrentMonthInputValue()
+  );
+
+  const [avgCakesPeriodMode, setAvgCakesPeriodMode] =
+    useState<PeriodMode>("past12Months");
+  const [avgCakesFromMonth, setAvgCakesFromMonth] = useState(getPastMonthsInputValue(11));
+  const [avgCakesToMonth, setAvgCakesToMonth] = useState(getCurrentMonthInputValue());
 
   const [pulloutPeriodMode, setPulloutPeriodMode] = useState<PeriodMode>("custom");
   const [pulloutFromMonth, setPulloutFromMonth] = useState(getPastMonthsInputValue(5));
@@ -435,148 +422,124 @@ export default function KeheDashboardView() {
     ];
   }, [rows]);
 
-  const velocitySelectedMonths = useMemo(() => {
-    if (velocityPeriodMode === "lastMonth") {
+  const bestStoreSelectedMonths = useMemo(() => {
+    if (bestStorePeriodMode === "lastMonth") {
       return [normalizeMonthLabel(getLastMonthLabel())];
     }
+    if (bestStorePeriodMode === "past12Months") {
+      return buildPast12MonthsRange().map(normalizeMonthLabel);
+    }
+    return buildMonthRange(bestStoreFromMonth, bestStoreToMonth).map(normalizeMonthLabel);
+  }, [bestStorePeriodMode, bestStoreFromMonth, bestStoreToMonth]);
 
-    return buildMonthRange(velocityFromMonth, velocityToMonth).map(normalizeMonthLabel);
-  }, [velocityPeriodMode, velocityFromMonth, velocityToMonth]);
+  const monthlyCasesSelectedMonths = useMemo(() => {
+    if (monthlyCasesPeriodMode === "lastMonth") {
+      return [normalizeMonthLabel(getLastMonthLabel())];
+    }
+    if (monthlyCasesPeriodMode === "past12Months") {
+      return buildPast12MonthsRange().map(normalizeMonthLabel);
+    }
+    return buildMonthRange(monthlyCasesFromMonth, monthlyCasesToMonth).map(normalizeMonthLabel);
+  }, [monthlyCasesPeriodMode, monthlyCasesFromMonth, monthlyCasesToMonth]);
+
+  const avgCakesSelectedMonths = useMemo(() => {
+    if (avgCakesPeriodMode === "lastMonth") {
+      return [normalizeMonthLabel(getLastMonthLabel())];
+    }
+    if (avgCakesPeriodMode === "past12Months") {
+      return buildPast12MonthsRange().map(normalizeMonthLabel);
+    }
+    return buildMonthRange(avgCakesFromMonth, avgCakesToMonth).map(normalizeMonthLabel);
+  }, [avgCakesPeriodMode, avgCakesFromMonth, avgCakesToMonth]);
 
   const pulloutSelectedMonths = useMemo(() => {
     if (pulloutPeriodMode === "lastMonth") {
       return [normalizeMonthLabel(getLastMonthLabel())];
     }
-
+    if (pulloutPeriodMode === "past12Months") {
+      return buildPast12MonthsRange().map(normalizeMonthLabel);
+    }
     return buildMonthRange(pulloutFromMonth, pulloutToMonth).map(normalizeMonthLabel);
   }, [pulloutPeriodMode, pulloutFromMonth, pulloutToMonth]);
 
-  const velocityFilteredRows = useMemo(() => {
+  const bestStoreRows = useMemo(() => {
     return rows.filter((row) => {
       const rowMonth = normalizeMonthLabel(row.month);
       const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
-
-      const matchesMonth = velocitySelectedMonths.includes(rowMonth);
+      const matchesMonth = bestStoreSelectedMonths.includes(rowMonth);
       const matchesRetailer =
         retailerFilter === "All Retailers" || rowRetailer === retailerFilter;
-
       return matchesMonth && matchesRetailer;
     });
-  }, [rows, velocitySelectedMonths, retailerFilter]);
+  }, [rows, bestStoreSelectedMonths, retailerFilter]);
 
   const topSellingStores = useMemo(() => {
     const grouped = new Map<string, number>();
 
-    for (const row of velocityFilteredRows) {
+    for (const row of bestStoreRows) {
       if (!row.customer) continue;
       grouped.set(row.customer, (grouped.get(row.customer) || 0) + Number(row.cases || 0));
     }
 
     return Array.from(grouped.entries())
-      .map(([customer, totalCases]) => ({
-        customer,
-        totalCases,
-      }))
+      .map(([customer, totalCases]) => ({ customer, totalCases }))
       .sort((a, b) => b.totalCases - a.totalCases)
       .slice(0, topN);
-  }, [velocityFilteredRows, topN]);
+  }, [bestStoreRows, topN]);
 
-  const monthlyCasesByRetailerSeries = useMemo(() => {
-    const sortedMonths = [...velocitySelectedMonths].sort(compareMonthLabelsAsc);
+  const monthlyCasesRows = useMemo(() => {
+    return rows.filter((row) =>
+      monthlyCasesSelectedMonths.includes(normalizeMonthLabel(row.month))
+    );
+  }, [rows, monthlyCasesSelectedMonths]);
 
-    const retailerNames =
-      retailerFilter === "All Retailers"
-        ? ["Kroger", "Fresh Thyme", "INFRA & Others"]
-        : [retailerFilter];
-
-    const colors: Record<string, string> = {
-      Kroger: "#123f73",
-      "Fresh Thyme": "#f59e0b",
-      "INFRA & Others": "#60c7df",
-    };
-
-    const grouped: Record<string, Record<string, number>> = {};
+  const monthlyCasesSeries = useMemo(() => {
+    const sortedMonths = [...monthlyCasesSelectedMonths].sort(compareMonthLabelsAsc);
+    const grouped = new Map<string, number>();
 
     for (const month of sortedMonths) {
-      grouped[month] = {};
-      for (const retailer of retailerNames) {
-        grouped[month][retailer] = 0;
-      }
+      grouped.set(month, 0);
     }
 
-    for (const row of velocityFilteredRows) {
+    for (const row of monthlyCasesRows) {
       const month = normalizeMonthLabel(row.month);
-      const retailer = String(row.retailer || "").trim() || "Unknown";
-
-      if (!grouped[month]) grouped[month] = {};
-      grouped[month][retailer] = (grouped[month][retailer] || 0) + Number(row.cases || 0);
+      grouped.set(month, (grouped.get(month) || 0) + Number(row.cases || 0));
     }
-
-    const series = retailerNames.map((retailer) => ({
-      name: retailer,
-      fill: colors[retailer] || "#4a83e7",
-      values: sortedMonths.map((month) => grouped[month]?.[retailer] || 0),
-    }));
 
     return {
       months: sortedMonths,
-      series,
+      values: sortedMonths.map((month) => grouped.get(month) || 0),
     };
-  }, [velocityFilteredRows, velocitySelectedMonths, retailerFilter]);
+  }, [monthlyCasesRows, monthlyCasesSelectedMonths]);
 
-  const averageCasesPerWeekByRetailerSeries = useMemo(() => {
-    const sortedMonths = [...velocitySelectedMonths].sort(compareMonthLabelsAsc);
+  const avgCakesRows = useMemo(() => {
+    return rows.filter(
+      (row) =>
+        avgCakesSelectedMonths.includes(normalizeMonthLabel(row.month)) &&
+        isCakeDescription(row.description)
+    );
+  }, [rows, avgCakesSelectedMonths]);
 
-    const retailerNames =
-      retailerFilter === "All Retailers"
-        ? ["Kroger", "Fresh Thyme", "INFRA & Others"]
-        : [retailerFilter];
-
-    const colors: Record<string, string> = {
-      Kroger: "#123f73",
-      "Fresh Thyme": "#f59e0b",
-      "INFRA & Others": "#60c7df",
-    };
-
-    const grouped: Record<string, Record<string, number>> = {};
+  const averageCakesPerWeekSeries = useMemo(() => {
+    const sortedMonths = [...avgCakesSelectedMonths].sort(compareMonthLabelsAsc);
+    const groupedEaches = new Map<string, number>();
 
     for (const month of sortedMonths) {
-      grouped[month] = {};
-      for (const retailer of retailerNames) {
-        grouped[month][retailer] = 0;
-      }
+      groupedEaches.set(month, 0);
     }
 
-    for (const row of velocityFilteredRows) {
+    for (const row of avgCakesRows) {
       const month = normalizeMonthLabel(row.month);
-      const retailer = String(row.retailer || "").trim() || "Unknown";
-
-      if (!grouped[month]) grouped[month] = {};
-      grouped[month][retailer] = (grouped[month][retailer] || 0) + Number(row.cases || 0);
+      groupedEaches.set(month, (groupedEaches.get(month) || 0) + Number(row.eaches || 0));
     }
 
-    const series = retailerNames.map((retailer) => ({
-      name: retailer,
-      fill: colors[retailer] || "#4a83e7",
+    return {
+      months: sortedMonths,
       values: sortedMonths.map((month) =>
-        Number(((grouped[month]?.[retailer] || 0) / 4.33).toFixed(1))
+        Number(((groupedEaches.get(month) || 0) / 4).toFixed(1))
       ),
-    }));
-
-    return {
-      months: sortedMonths,
-      series,
     };
-  }, [velocityFilteredRows, velocitySelectedMonths, retailerFilter]);
-
-  const totalCasesForVelocity = useMemo(() => {
-    return velocityFilteredRows.reduce((sum, row) => sum + Number(row.cases || 0), 0);
-  }, [velocityFilteredRows]);
-
-  const avgCasesPerWeekOverall = useMemo(() => {
-    const totalWeeks = Math.max(velocitySelectedMonths.length * 4.33, 1);
-    return Number((totalCasesForVelocity / totalWeeks).toFixed(1));
-  }, [totalCasesForVelocity, velocitySelectedMonths.length]);
+  }, [avgCakesRows, avgCakesSelectedMonths]);
 
   const pulloutRows = useMemo(() => {
     return rows.filter((row) => {
@@ -701,17 +664,194 @@ export default function KeheDashboardView() {
 
       <button
         type="button"
-        onClick={() => setVelocitySubTab("overall-average-cases-per-week")}
+        onClick={() => setVelocitySubTab("overall-average-cakes-per-week")}
         className={`rounded-2xl px-4 py-2 text-sm font-medium transition ${
-          velocitySubTab === "overall-average-cases-per-week"
+          velocitySubTab === "overall-average-cakes-per-week"
             ? "bg-slate-900 text-white"
             : "bg-slate-100 text-slate-700 hover:bg-slate-200"
         }`}
       >
-        Overall: Average Cases Per Week
+        Overall: Average Cakes Per Week
       </button>
     </div>
   );
+
+  const renderVelocityFilters = () => {
+    if (velocitySubTab === "best-selling-store") {
+      return (
+        <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
+          <div className="min-w-[160px]">
+            <label className="mb-1 block text-sm font-medium text-slate-700">
+              Retailer
+            </label>
+            <select
+              value={retailerFilter}
+              onChange={(e) => setRetailerFilter(e.target.value)}
+              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+            >
+              {retailerOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="min-w-[140px]">
+            <label className="mb-1 block text-sm font-medium text-slate-700">
+              Show Top
+            </label>
+            <select
+              value={topN}
+              onChange={(e) => setTopN(Number(e.target.value) as TopN)}
+              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={15}>15</option>
+              <option value={20}>20</option>
+            </select>
+          </div>
+
+          <div className="min-w-[180px]">
+            <label className="mb-1 block text-sm font-medium text-slate-700">
+              Date Filter
+            </label>
+            <select
+              value={bestStorePeriodMode}
+              onChange={(e) => setBestStorePeriodMode(e.target.value as PeriodMode)}
+              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+            >
+              <option value="lastMonth">Last Month</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+
+          {bestStorePeriodMode === "custom" && (
+            <>
+              <div className="min-w-[180px]">
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  From
+                </label>
+                <input
+                  type="month"
+                  value={bestStoreFromMonth}
+                  onChange={(e) => setBestStoreFromMonth(e.target.value)}
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                />
+              </div>
+
+              <div className="min-w-[180px]">
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  To
+                </label>
+                <input
+                  type="month"
+                  value={bestStoreToMonth}
+                  onChange={(e) => setBestStoreToMonth(e.target.value)}
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                />
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    if (velocitySubTab === "total-cases-per-month") {
+      return (
+        <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
+          <div className="min-w-[180px]">
+            <label className="mb-1 block text-sm font-medium text-slate-700">
+              Date Filter
+            </label>
+            <select
+              value={monthlyCasesPeriodMode}
+              onChange={(e) => setMonthlyCasesPeriodMode(e.target.value as PeriodMode)}
+              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+            >
+              <option value="past12Months">Past 12 Months</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+
+          {monthlyCasesPeriodMode === "custom" && (
+            <>
+              <div className="min-w-[180px]">
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  From
+                </label>
+                <input
+                  type="month"
+                  value={monthlyCasesFromMonth}
+                  onChange={(e) => setMonthlyCasesFromMonth(e.target.value)}
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                />
+              </div>
+
+              <div className="min-w-[180px]">
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  To
+                </label>
+                <input
+                  type="month"
+                  value={monthlyCasesToMonth}
+                  onChange={(e) => setMonthlyCasesToMonth(e.target.value)}
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                />
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
+        <div className="min-w-[180px]">
+          <label className="mb-1 block text-sm font-medium text-slate-700">
+            Date Filter
+          </label>
+          <select
+            value={avgCakesPeriodMode}
+            onChange={(e) => setAvgCakesPeriodMode(e.target.value as PeriodMode)}
+            className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+          >
+            <option value="past12Months">Past 12 Months</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+
+        {avgCakesPeriodMode === "custom" && (
+          <>
+            <div className="min-w-[180px]">
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                From
+              </label>
+              <input
+                type="month"
+                value={avgCakesFromMonth}
+                onChange={(e) => setAvgCakesFromMonth(e.target.value)}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+              />
+            </div>
+
+            <div className="min-w-[180px]">
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                To
+              </label>
+              <input
+                type="month"
+                value={avgCakesToMonth}
+                onChange={(e) => setAvgCakesToMonth(e.target.value)}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+              />
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
 
   const velocityStickyFilters = (
     <div className="sticky top-0 z-20 space-y-4 bg-slate-100 pb-4">
@@ -724,84 +864,7 @@ export default function KeheDashboardView() {
             {renderVelocitySubTabs()}
           </div>
 
-          <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
-            <div className="min-w-[160px]">
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Retailer
-              </label>
-              <select
-                value={retailerFilter}
-                onChange={(e) => setRetailerFilter(e.target.value)}
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-              >
-                {retailerOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {velocitySubTab === "best-selling-store" && (
-              <div className="min-w-[140px]">
-                <label className="mb-1 block text-sm font-medium text-slate-700">
-                  Show Top
-                </label>
-                <select
-                  value={topN}
-                  onChange={(e) => setTopN(Number(e.target.value) as TopN)}
-                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-                >
-                  <option value={5}>5</option>
-                  <option value={10}>10</option>
-                  <option value={15}>15</option>
-                  <option value={20}>20</option>
-                </select>
-              </div>
-            )}
-
-            <div className="min-w-[180px]">
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Date Filter
-              </label>
-              <select
-                value={velocityPeriodMode}
-                onChange={(e) => setVelocityPeriodMode(e.target.value as PeriodMode)}
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-              >
-                <option value="lastMonth">Last Month</option>
-                <option value="custom">Custom</option>
-              </select>
-            </div>
-
-            {velocityPeriodMode === "custom" && (
-              <>
-                <div className="min-w-[180px]">
-                  <label className="mb-1 block text-sm font-medium text-slate-700">
-                    From
-                  </label>
-                  <input
-                    type="month"
-                    value={velocityFromMonth}
-                    onChange={(e) => setVelocityFromMonth(e.target.value)}
-                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-                  />
-                </div>
-
-                <div className="min-w-[180px]">
-                  <label className="mb-1 block text-sm font-medium text-slate-700">
-                    To
-                  </label>
-                  <input
-                    type="month"
-                    value={velocityToMonth}
-                    onChange={(e) => setVelocityToMonth(e.target.value)}
-                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-                  />
-                </div>
-              </>
-            )}
-          </div>
+          {renderVelocityFilters()}
         </div>
       </div>
     </div>
@@ -916,15 +979,6 @@ export default function KeheDashboardView() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-                <StatCard label="Total Cases" value={totalCasesForVelocity.toLocaleString()} />
-                <StatCard
-                  label="Average Cases / Week"
-                  value={avgCasesPerWeekOverall.toLocaleString()}
-                />
-                <StatCard label="Selected Months" value={velocitySelectedMonths.length} />
-              </div>
-
               {velocitySubTab === "best-selling-store" && (
                 <div className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
                   <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -971,30 +1025,19 @@ export default function KeheDashboardView() {
               )}
 
               {velocitySubTab === "total-cases-per-month" && (
-                <>
-                  <GroupedMonthlyChart
-                    title="Total Cases per Month"
-                    months={monthlyCasesByRetailerSeries.months}
-                    series={monthlyCasesByRetailerSeries.series}
-                  />
-
-                  <HorizontalBarChart
-                    title="Retailer Distribution"
-                    data={monthlyCasesByRetailerSeries.series.map((item) => ({
-                      label: item.name,
-                      value: item.values.reduce((sum, value) => sum + value, 0),
-                    }))}
-                    minWidth={900}
-                    labelWidth={220}
-                  />
-                </>
+                <SingleSeriesMonthlyChart
+                  title="Total Cases per Month"
+                  months={monthlyCasesSeries.months}
+                  values={monthlyCasesSeries.values}
+                />
               )}
 
-              {velocitySubTab === "overall-average-cases-per-week" && (
-                <GroupedMonthlyChart
-                  title="Average Cases per Week"
-                  months={averageCasesPerWeekByRetailerSeries.months}
-                  series={averageCasesPerWeekByRetailerSeries.series}
+              {velocitySubTab === "overall-average-cakes-per-week" && (
+                <SingleSeriesMonthlyChart
+                  title="Overall: Average Cakes per Week"
+                  months={averageCakesPerWeekSeries.months}
+                  values={averageCakesPerWeekSeries.values}
+                  fill="#60c7df"
                 />
               )}
             </>
