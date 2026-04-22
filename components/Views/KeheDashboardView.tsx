@@ -42,41 +42,18 @@ function getMonthSortValue(value: string) {
   return fullYear * 100 + (monthIndex + 1);
 }
 
+function compareMonthLabelsAsc(a: string, b: string) {
+  return getMonthSortValue(a) - getMonthSortValue(b);
+}
+
 function compareMonthLabelsDesc(a: string, b: string) {
   return getMonthSortValue(b) - getMonthSortValue(a);
 }
 
-function getLastMonthLabel() {
-  const now = new Date();
-  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-
-  return `${lastMonthDate.toLocaleString("en-US", {
+function monthLabelFromDate(date: Date) {
+  return `${date.toLocaleString("en-US", {
     month: "long",
-  })} '${String(lastMonthDate.getFullYear()).slice(-2)}`;
-}
-
-function buildMonthRange(fromMonth: string, toMonth: string) {
-  const result: string[] = [];
-  if (!fromMonth || !toMonth) return result;
-
-  const [fromYear, fromMonthNum] = fromMonth.split("-").map(Number);
-  const [toYear, toMonthNum] = toMonth.split("-").map(Number);
-
-  if (!fromYear || !fromMonthNum || !toYear || !toMonthNum) return result;
-
-  let cursor = new Date(fromYear, fromMonthNum - 1, 1);
-  const end = new Date(toYear, toMonthNum - 1, 1);
-
-  while (cursor <= end) {
-    result.push(
-      `${cursor.toLocaleString("en-US", { month: "long" })} '${String(
-        cursor.getFullYear()
-      ).slice(-2)}`
-    );
-    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-  }
-
-  return result;
+  })} '${String(date.getFullYear()).slice(-2)}`;
 }
 
 function getCurrentMonthInputValue() {
@@ -93,6 +70,38 @@ function getLastMonthInputValue() {
   )}`;
 }
 
+function getPastMonthsInputValue(monthsBack: number) {
+  const now = new Date();
+  const date = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getLastMonthLabel() {
+  const now = new Date();
+  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  return monthLabelFromDate(lastMonthDate);
+}
+
+function buildMonthRange(fromMonth: string, toMonth: string) {
+  const result: string[] = [];
+  if (!fromMonth || !toMonth) return result;
+
+  const [fromYear, fromMonthNum] = fromMonth.split("-").map(Number);
+  const [toYear, toMonthNum] = toMonth.split("-").map(Number);
+
+  if (!fromYear || !fromMonthNum || !toYear || !toMonthNum) return result;
+
+  let cursor = new Date(fromYear, fromMonthNum - 1, 1);
+  const end = new Date(toYear, toMonthNum - 1, 1);
+
+  while (cursor <= end) {
+    result.push(monthLabelFromDate(cursor));
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+
+  return result;
+}
+
 function truncateLabel(value: string, max = 42) {
   const text = String(value || "");
   return text.length > max ? `${text.slice(0, max)}...` : text;
@@ -101,16 +110,20 @@ function truncateLabel(value: string, max = 42) {
 function HorizontalBarChart({
   data,
   title,
+  minWidth = 1100,
+  labelWidth = 360,
 }: {
   data: { label: string; value: number }[];
   title: string;
+  minWidth?: number;
+  labelWidth?: number;
 }) {
   const rowHeight = 42;
   const topPad = 20;
   const bottomPad = 20;
-  const leftPad = 360;
+  const leftPad = labelWidth;
   const rightPad = 40;
-  const chartWidth = 1100;
+  const chartWidth = minWidth;
   const innerWidth = chartWidth - leftPad - rightPad;
   const chartHeight = Math.max(320, topPad + bottomPad + data.length * rowHeight);
   const maxValue = Math.max(...data.map((d) => d.value), 1);
@@ -125,7 +138,7 @@ function HorizontalBarChart({
       <h3 className="mb-4 text-2xl font-semibold text-slate-700">{title}</h3>
 
       <div className="overflow-x-auto">
-        <svg width={chartWidth} height={chartHeight} className="min-w-[1100px]">
+        <svg width={chartWidth} height={chartHeight} className={`min-w-[${minWidth}px]`}>
           {tickValues.map((tick, index) => {
             const x = leftPad + (tick / maxValue) * innerWidth;
 
@@ -197,13 +210,145 @@ function HorizontalBarChart({
   );
 }
 
+function VerticalBarChart({
+  data,
+  title,
+  minWidth = 760,
+}: {
+  data: { label: string; value: number }[];
+  title: string;
+  minWidth?: number;
+}) {
+  const chartHeight = 340;
+  const chartWidth = Math.max(minWidth, 120 + data.length * 90);
+  const leftPad = 55;
+  const rightPad = 20;
+  const topPad = 20;
+  const bottomPad = 95;
+  const maxValue = Math.max(...data.map((d) => d.value), 1);
+  const innerWidth = chartWidth - leftPad - rightPad;
+  const innerHeight = chartHeight - topPad - bottomPad;
+  const barGap = 18;
+  const barWidth =
+    data.length > 0
+      ? Math.max(40, (innerWidth - barGap * (data.length - 1)) / data.length)
+      : 40;
+
+  const gridSteps = 4;
+  const ticks = Array.from({ length: gridSteps + 1 }, (_, i) => {
+    const value = Math.round((maxValue / gridSteps) * i);
+    const y = topPad + innerHeight - (innerHeight / gridSteps) * i;
+    return { value, y };
+  });
+
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 className="mb-4 text-2xl font-semibold text-slate-700">{title}</h3>
+
+      <div className="overflow-x-auto">
+        <svg width={chartWidth} height={chartHeight} className={`min-w-[${minWidth}px]`}>
+          {ticks.map((tick, index) => (
+            <g key={index}>
+              <line
+                x1={leftPad}
+                y1={tick.y}
+                x2={chartWidth - rightPad}
+                y2={tick.y}
+                stroke="#e2e8f0"
+                strokeWidth="1"
+              />
+              <text
+                x={leftPad - 10}
+                y={tick.y + 4}
+                textAnchor="end"
+                fontSize="11"
+                fill="#64748b"
+              >
+                {tick.value}
+              </text>
+            </g>
+          ))}
+
+          <line
+            x1={leftPad}
+            y1={topPad + innerHeight}
+            x2={chartWidth - rightPad}
+            y2={topPad + innerHeight}
+            stroke="#94a3b8"
+            strokeWidth="1.5"
+          />
+
+          {data.map((item, index) => {
+            const x = leftPad + index * (barWidth + barGap);
+            const barHeight = (item.value / maxValue) * innerHeight;
+            const y = topPad + innerHeight - barHeight;
+
+            return (
+              <g key={`${item.label}-${index}`}>
+                <rect
+                  x={x}
+                  y={y}
+                  width={barWidth}
+                  height={barHeight}
+                  rx="4"
+                  fill="#4a83e7"
+                />
+                <text
+                  x={x + barWidth / 2}
+                  y={y - 8}
+                  textAnchor="middle"
+                  fontSize="12"
+                  fontWeight="700"
+                  fill="#2563eb"
+                >
+                  {item.value}
+                </text>
+                <text
+                  x={x + barWidth / 2}
+                  y={topPad + innerHeight + 18}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="#334155"
+                >
+                  {item.label}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="text-sm font-medium text-slate-500">{label}</div>
+      <div className="mt-2 text-3xl font-bold text-slate-900">{value}</div>
+    </div>
+  );
+}
+
 export default function KeheDashboardView() {
   const [activeTab, setActiveTab] = useState<TabKey>("analytics");
-  const [periodMode, setPeriodMode] = useState<PeriodMode>("lastMonth");
-  const [fromMonth, setFromMonth] = useState(getLastMonthInputValue());
-  const [toMonth, setToMonth] = useState(getCurrentMonthInputValue());
+
+  const [velocityPeriodMode, setVelocityPeriodMode] = useState<PeriodMode>("lastMonth");
+  const [velocityFromMonth, setVelocityFromMonth] = useState(getLastMonthInputValue());
+  const [velocityToMonth, setVelocityToMonth] = useState(getCurrentMonthInputValue());
   const [topN, setTopN] = useState<TopN>(10);
   const [retailerFilter, setRetailerFilter] = useState("All Retailers");
+
+  const [pulloutPeriodMode, setPulloutPeriodMode] = useState<PeriodMode>("custom");
+  const [pulloutFromMonth, setPulloutFromMonth] = useState(getPastMonthsInputValue(5));
+  const [pulloutToMonth, setPulloutToMonth] = useState(getCurrentMonthInputValue());
+  const [pulloutRetailerFilter, setPulloutRetailerFilter] = useState("All Retailers");
 
   const [rows, setRows] = useState<VelocityRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -258,30 +403,40 @@ export default function KeheDashboardView() {
     ];
   }, [rows]);
 
-  const selectedMonths = useMemo(() => {
-    if (periodMode === "lastMonth") {
+  const velocitySelectedMonths = useMemo(() => {
+    if (velocityPeriodMode === "lastMonth") {
       return [normalizeMonthLabel(getLastMonthLabel())];
     }
 
-    return buildMonthRange(fromMonth, toMonth).map(normalizeMonthLabel);
-  }, [periodMode, fromMonth, toMonth]);
+    return buildMonthRange(velocityFromMonth, velocityToMonth).map(normalizeMonthLabel);
+  }, [velocityPeriodMode, velocityFromMonth, velocityToMonth]);
+
+  const pulloutSelectedMonths = useMemo(() => {
+    if (pulloutPeriodMode === "lastMonth") {
+      return [normalizeMonthLabel(getLastMonthLabel())];
+    }
+
+    return buildMonthRange(pulloutFromMonth, pulloutToMonth).map(normalizeMonthLabel);
+  }, [pulloutPeriodMode, pulloutFromMonth, pulloutToMonth]);
+
+  const velocityFilteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      const rowMonth = normalizeMonthLabel(row.month);
+      const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
+
+      const matchesMonth = velocitySelectedMonths.includes(rowMonth);
+      const matchesRetailer =
+        retailerFilter === "All Retailers" || rowRetailer === retailerFilter;
+
+      return matchesMonth && matchesRetailer;
+    });
+  }, [rows, velocitySelectedMonths, retailerFilter]);
 
   const topSellingStores = useMemo(() => {
     const grouped = new Map<string, number>();
 
-    for (const row of rows) {
-      const rowMonth = normalizeMonthLabel(row.month);
-      const rowRetailer = String(row.retailer || "")
-        .replace(/\u00a0/g, " ")
-        .trim();
-
-      const matchesMonth = selectedMonths.includes(rowMonth);
-      const matchesRetailer =
-        retailerFilter === "All Retailers" || rowRetailer === retailerFilter;
-
-      if (!matchesMonth || !matchesRetailer) continue;
+    for (const row of velocityFilteredRows) {
       if (!row.customer) continue;
-
       grouped.set(row.customer, (grouped.get(row.customer) || 0) + Number(row.cases || 0));
     }
 
@@ -292,10 +447,108 @@ export default function KeheDashboardView() {
       }))
       .sort((a, b) => b.totalCases - a.totalCases)
       .slice(0, topN);
-  }, [rows, selectedMonths, retailerFilter, topN]);
+  }, [velocityFilteredRows, topN]);
 
-  return (
-    <div className="space-y-6">
+  const monthlyCasesSeries = useMemo(() => {
+    const grouped = new Map<string, number>();
+
+    for (const row of velocityFilteredRows) {
+      const month = normalizeMonthLabel(row.month);
+      grouped.set(month, (grouped.get(month) || 0) + Number(row.cases || 0));
+    }
+
+    return Array.from(grouped.entries())
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => compareMonthLabelsAsc(a.label, b.label));
+  }, [velocityFilteredRows]);
+
+  const retailerDistributionSeries = useMemo(() => {
+    const grouped = new Map<string, number>();
+
+    for (const row of velocityFilteredRows) {
+      const retailer = String(row.retailer || "").trim() || "Unknown";
+      grouped.set(retailer, (grouped.get(retailer) || 0) + Number(row.cases || 0));
+    }
+
+    return Array.from(grouped.entries())
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [velocityFilteredRows]);
+
+  const averageCasesPerWeekSeries = useMemo(() => {
+    return monthlyCasesSeries.map((item) => ({
+      label: item.label,
+      value: Number((item.value / 4.33).toFixed(1)),
+    }));
+  }, [monthlyCasesSeries]);
+
+  const totalCasesForVelocity = useMemo(() => {
+    return velocityFilteredRows.reduce((sum, row) => sum + Number(row.cases || 0), 0);
+  }, [velocityFilteredRows]);
+
+  const avgCasesPerWeekOverall = useMemo(() => {
+    if (!monthlyCasesSeries.length) return 0;
+    const avg =
+      monthlyCasesSeries.reduce((sum, item) => sum + item.value / 4.33, 0) /
+      monthlyCasesSeries.length;
+    return Number(avg.toFixed(1));
+  }, [monthlyCasesSeries]);
+
+  const pulloutRows = useMemo(() => {
+    return rows.filter((row) => {
+      const rowMonth = normalizeMonthLabel(row.month);
+      const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
+
+      const matchesMonth = pulloutSelectedMonths.includes(rowMonth);
+      const matchesRetailer =
+        pulloutRetailerFilter === "All Retailers" || rowRetailer === pulloutRetailerFilter;
+
+      return matchesMonth && matchesRetailer;
+    });
+  }, [rows, pulloutSelectedMonths, pulloutRetailerFilter]);
+
+  const pulloutTable = useMemo(() => {
+    const monthColumns = [...pulloutSelectedMonths].sort(compareMonthLabelsAsc);
+    const grouped = new Map<
+      string,
+      {
+        retailer_area: string;
+        retailer: string;
+        months: Record<string, number>;
+        total: number;
+      }
+    >();
+
+    for (const row of pulloutRows) {
+      const month = normalizeMonthLabel(row.month);
+      const retailerArea = String(row.retailer_area || "").trim() || "Unknown";
+      const retailer = String(row.retailer || "").trim() || "Unknown";
+      const key = `${retailerArea}__${retailer}`;
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          retailer_area: retailerArea,
+          retailer,
+          months: {},
+          total: 0,
+        });
+      }
+
+      const item = grouped.get(key)!;
+      item.months[month] = (item.months[month] || 0) + Number(row.cases || 0);
+      item.total += Number(row.cases || 0);
+    }
+
+    const rowsOut = Array.from(grouped.values()).sort((a, b) => b.total - a.total);
+
+    return {
+      monthColumns,
+      rows: rowsOut,
+    };
+  }, [pulloutRows, pulloutSelectedMonths]);
+
+  const velocityStickyFilters = (
+    <div className="sticky top-0 z-20 space-y-4 bg-slate-100 pb-4">
       <div className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
         <div className="flex flex-wrap gap-2">
           <button
@@ -336,115 +589,270 @@ export default function KeheDashboardView() {
         </div>
       </div>
 
-      {activeTab === "analytics" && (
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="text-lg font-semibold text-slate-900">Analytics</div>
-          <p className="mt-2 text-sm text-slate-500">
-            Analytics will be added next.
-          </p>
-        </div>
-      )}
+      <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="flex flex-col gap-2">
+            <h2 className="text-2xl font-bold text-slate-900">Best Selling Store</h2>
+            <p className="text-sm text-slate-500">
+              Customer ranking by total cases for the selected month and retailer.
+            </p>
+          </div>
 
-      {activeTab === "pullout" && (
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="text-lg font-semibold text-slate-900">Pull out</div>
-          <p className="mt-2 text-sm text-slate-500">
-            Pull out dashboard will be added next.
-          </p>
-        </div>
-      )}
+          <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
+            <div className="min-w-[160px]">
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                Retailer
+              </label>
+              <select
+                value={retailerFilter}
+                onChange={(e) => setRetailerFilter(e.target.value)}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+              >
+                {retailerOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-      {activeTab === "velocity" && (
-        <>
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div className="flex flex-col gap-2">
-                <h2 className="text-2xl font-bold text-slate-900">
-                  Best Selling Store
-                </h2>
-                <p className="text-sm text-slate-500">
-                  Customer ranking by total cases for the selected month and retailer.
-                </p>
-              </div>
+            <div className="min-w-[140px]">
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                Show Top
+              </label>
+              <select
+                value={topN}
+                onChange={(e) => setTopN(Number(e.target.value) as TopN)}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+              >
+                <option value={5}>5</option>
+                <option value={10}>10</option>
+                <option value={15}>15</option>
+                <option value={20}>20</option>
+              </select>
+            </div>
 
-              <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
-                <div className="min-w-[160px]">
+            <div className="min-w-[180px]">
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                Date Filter
+              </label>
+              <select
+                value={velocityPeriodMode}
+                onChange={(e) => setVelocityPeriodMode(e.target.value as PeriodMode)}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+              >
+                <option value="lastMonth">Last Month</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+
+            {velocityPeriodMode === "custom" && (
+              <>
+                <div className="min-w-[180px]">
                   <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Retailer
+                    From
                   </label>
-                  <select
-                    value={retailerFilter}
-                    onChange={(e) => setRetailerFilter(e.target.value)}
+                  <input
+                    type="month"
+                    value={velocityFromMonth}
+                    onChange={(e) => setVelocityFromMonth(e.target.value)}
                     className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-                  >
-                    {retailerOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="min-w-[140px]">
-                  <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Show Top
-                  </label>
-                  <select
-                    value={topN}
-                    onChange={(e) => setTopN(Number(e.target.value) as TopN)}
-                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-                  >
-                    <option value={5}>5</option>
-                    <option value={10}>10</option>
-                    <option value={15}>15</option>
-                    <option value={20}>20</option>
-                  </select>
+                  />
                 </div>
 
                 <div className="min-w-[180px]">
                   <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Date Filter
+                    To
                   </label>
-                  <select
-                    value={periodMode}
-                    onChange={(e) => setPeriodMode(e.target.value as PeriodMode)}
+                  <input
+                    type="month"
+                    value={velocityToMonth}
+                    onChange={(e) => setVelocityToMonth(e.target.value)}
                     className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-                  >
-                    <option value="lastMonth">Last Month</option>
-                    <option value="custom">Custom</option>
-                  </select>
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const pulloutStickyFilters = (
+    <div className="sticky top-0 z-20 space-y-4 bg-slate-100 pb-4">
+      <div className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab("analytics")}
+            className={`rounded-2xl px-5 py-2.5 text-sm font-medium transition ${
+              activeTab === "analytics"
+                ? "bg-slate-900 text-white"
+                : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+            }`}
+          >
+            Analytics
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("velocity")}
+            className={`rounded-2xl px-5 py-2.5 text-sm font-medium transition ${
+              activeTab === "velocity"
+                ? "bg-slate-900 text-white"
+                : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+            }`}
+          >
+            Velocity
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("pullout")}
+            className={`rounded-2xl px-5 py-2.5 text-sm font-medium transition ${
+              activeTab === "pullout"
+                ? "bg-slate-900 text-white"
+                : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+            }`}
+          >
+            Pull out
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="flex flex-col gap-2">
+            <h2 className="text-2xl font-bold text-slate-900">Monthly Cases by Retailer Area</h2>
+            <p className="text-sm text-slate-500">
+              Past 6 months by default. Filter by retailer and date range.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
+            <div className="min-w-[180px]">
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                Retailer
+              </label>
+              <select
+                value={pulloutRetailerFilter}
+                onChange={(e) => setPulloutRetailerFilter(e.target.value)}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+              >
+                {retailerOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="min-w-[180px]">
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                Date Filter
+              </label>
+              <select
+                value={pulloutPeriodMode}
+                onChange={(e) => setPulloutPeriodMode(e.target.value as PeriodMode)}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+              >
+                <option value="custom">Past 6 Months / Custom</option>
+                <option value="lastMonth">Last Month</option>
+              </select>
+            </div>
+
+            {pulloutPeriodMode === "custom" && (
+              <>
+                <div className="min-w-[180px]">
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
+                    From
+                  </label>
+                  <input
+                    type="month"
+                    value={pulloutFromMonth}
+                    onChange={(e) => setPulloutFromMonth(e.target.value)}
+                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                  />
                 </div>
 
-                {periodMode === "custom" && (
-                  <>
-                    <div className="min-w-[180px]">
-                      <label className="mb-1 block text-sm font-medium text-slate-700">
-                        From
-                      </label>
-                      <input
-                        type="month"
-                        value={fromMonth}
-                        onChange={(e) => setFromMonth(e.target.value)}
-                        className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-                      />
-                    </div>
+                <div className="min-w-[180px]">
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
+                    To
+                  </label>
+                  <input
+                    type="month"
+                    value={pulloutToMonth}
+                    onChange={(e) => setPulloutToMonth(e.target.value)}
+                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
-                    <div className="min-w-[180px]">
-                      <label className="mb-1 block text-sm font-medium text-slate-700">
-                        To
-                      </label>
-                      <input
-                        type="month"
-                        value={toMonth}
-                        onChange={(e) => setToMonth(e.target.value)}
-                        className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-                      />
-                    </div>
-                  </>
-                )}
+  return (
+    <div className="space-y-6">
+      {activeTab === "analytics" && (
+        <>
+          <div className="sticky top-0 z-20 space-y-4 bg-slate-100 pb-4">
+            <div className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("analytics")}
+                  className={`rounded-2xl px-5 py-2.5 text-sm font-medium transition ${
+                    activeTab === "analytics"
+                      ? "bg-slate-900 text-white"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  Analytics
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("velocity")}
+                  className={`rounded-2xl px-5 py-2.5 text-sm font-medium transition ${
+                    activeTab === "velocity"
+                      ? "bg-slate-900 text-white"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  Velocity
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("pullout")}
+                  className={`rounded-2xl px-5 py-2.5 text-sm font-medium transition ${
+                    activeTab === "pullout"
+                      ? "bg-slate-900 text-white"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  Pull out
+                </button>
               </div>
             </div>
           </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="text-lg font-semibold text-slate-900">Analytics</div>
+            <p className="mt-2 text-sm text-slate-500">
+              Analytics will be added next.
+            </p>
+          </div>
+        </>
+      )}
+
+      {activeTab === "velocity" && (
+        <>
+          {velocityStickyFilters}
 
           {loading ? (
             <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
@@ -455,47 +863,167 @@ export default function KeheDashboardView() {
               {loadError}
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
-              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex items-center justify-between">
-                  <h3 className="text-xl font-semibold text-slate-900">
-                    Top Selling Store
-                  </h3>
-                  <div className="rounded-xl bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">
-                    Top {topN}
+            <>
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+                <StatCard label="Total Cases" value={totalCasesForVelocity.toLocaleString()} />
+                <StatCard
+                  label="Average Cases / Week"
+                  value={avgCasesPerWeekOverall.toLocaleString()}
+                />
+                <StatCard
+                  label="Selected Months"
+                  value={velocitySelectedMonths.length}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
+                <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="mb-4 flex items-center justify-between">
+                    <h3 className="text-xl font-semibold text-slate-900">
+                      Top Selling Store
+                    </h3>
+                    <div className="rounded-xl bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">
+                      Top {topN}
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {topSellingStores.length === 0 ? (
+                      <div className="text-sm text-slate-500">
+                        No KEHE velocity data found for the selected month range.
+                      </div>
+                    ) : (
+                      topSellingStores.map((item, index) => (
+                        <div
+                          key={`${item.customer}-${index}`}
+                          className="flex items-start justify-between gap-4 rounded-2xl border border-slate-100 px-4 py-3"
+                        >
+                          <div className="text-sm font-medium leading-5 text-slate-800">
+                            {item.customer}
+                          </div>
+                          <div className="min-w-[56px] text-right text-sm font-bold text-slate-900">
+                            {item.totalCases}
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
 
-                <div className="space-y-3">
-                  {topSellingStores.length === 0 ? (
-                    <div className="text-sm text-slate-500">
-                      No KEHE velocity data found for the selected month range.
-                    </div>
-                  ) : (
-                    topSellingStores.map((item, index) => (
-                      <div
-                        key={`${item.customer}-${index}`}
-                        className="flex items-start justify-between gap-4 rounded-2xl border border-slate-100 px-4 py-3"
-                      >
-                        <div className="text-sm font-medium leading-5 text-slate-800">
-                          {item.customer}
-                        </div>
-                        <div className="min-w-[56px] text-right text-sm font-bold text-slate-900">
-                          {item.totalCases}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
+                <HorizontalBarChart
+                  title="Top Selling Store"
+                  data={topSellingStores.map((item) => ({
+                    label: item.customer,
+                    value: item.totalCases,
+                  }))}
+                />
               </div>
 
-              <HorizontalBarChart
-  title="Top Selling Store"
-  data={topSellingStores.map((item) => ({
-    label: item.customer,
-    value: item.totalCases,
-  }))}
-/>
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <VerticalBarChart
+                  title="Total Cases per Month"
+                  data={monthlyCasesSeries}
+                />
+
+                <HorizontalBarChart
+                  title="Retailer Distribution"
+                  data={retailerDistributionSeries}
+                  minWidth={900}
+                  labelWidth={240}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-6">
+                <VerticalBarChart
+                  title="Average Cases per Week"
+                  data={averageCasesPerWeekSeries}
+                />
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {activeTab === "pullout" && (
+        <>
+          {pulloutStickyFilters}
+
+          {loading ? (
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
+              Loading KEHE velocity data...
+            </div>
+          ) : loadError ? (
+            <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">
+              {loadError}
+            </div>
+          ) : (
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="mb-4">
+                <h3 className="text-xl font-semibold text-slate-900">
+                  Monthly Cases by Retailer Area
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Table view works best here because you want retailer area, retailer,
+                  and month columns side by side.
+                </p>
+              </div>
+
+              {pulloutTable.rows.length === 0 ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                  No pullout rows found for the selected filters.
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-2xl border border-slate-200">
+                  <div className="max-h-[70vh] overflow-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                            Retailer Area
+                          </th>
+                          <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                            Retailer
+                          </th>
+                          {pulloutTable.monthColumns.map((month) => (
+                            <th
+                              key={month}
+                              className="px-4 py-3 text-left font-semibold text-slate-700"
+                            >
+                              {month}
+                            </th>
+                          ))}
+                          <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                            Total
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pulloutTable.rows.map((row, index) => (
+                          <tr
+                            key={`${row.retailer_area}-${row.retailer}-${index}`}
+                            className="border-t border-slate-200"
+                          >
+                            <td className="px-4 py-3 text-slate-700">
+                              {row.retailer_area}
+                            </td>
+                            <td className="px-4 py-3 text-slate-700">
+                              {row.retailer}
+                            </td>
+                            {pulloutTable.monthColumns.map((month) => (
+                              <td key={month} className="px-4 py-3 text-slate-700">
+                                {row.months[month] || 0}
+                              </td>
+                            ))}
+                            <td className="px-4 py-3 font-semibold text-slate-900">
+                              {row.total}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </>
