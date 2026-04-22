@@ -116,9 +116,141 @@ function truncateLabel(value: string, max = 42) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
-function isCakeDescription(value: string) {
-  const text = String(value || "").toLowerCase();
-  return text.includes("cake") || text.includes("cheesecake");
+function GroupedMonthlyChart({
+  title,
+  months,
+  series,
+}: {
+  title: string;
+  months: string[];
+  series: { name: string; values: number[]; fill: string }[];
+}) {
+  const chartHeight = 360;
+  const chartWidth = Math.max(980, 140 + months.length * 120);
+  const leftPad = 55;
+  const rightPad = 20;
+  const topPad = 20;
+  const bottomPad = 95;
+  const innerWidth = chartWidth - leftPad - rightPad;
+  const innerHeight = chartHeight - topPad - bottomPad;
+
+  const maxValue = Math.max(1, ...series.flatMap((s) => s.values));
+  const groupWidth = months.length > 0 ? innerWidth / months.length : innerWidth;
+  const barGap = 6;
+  const groupInnerPadding = 12;
+  const barWidth = Math.max(
+    14,
+    (groupWidth - groupInnerPadding * 2 - barGap * Math.max(series.length - 1, 0)) /
+      Math.max(series.length, 1)
+  );
+
+  const gridSteps = 4;
+  const ticks = Array.from({ length: gridSteps + 1 }, (_, i) => {
+    const value = Math.round((maxValue / gridSteps) * i);
+    const y = topPad + innerHeight - (innerHeight / gridSteps) * i;
+    return { value, y };
+  });
+
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 className="mb-4 text-2xl font-semibold text-slate-700">{title}</h3>
+
+      <div className="overflow-x-auto">
+        <svg width={chartWidth} height={chartHeight} style={{ minWidth: "980px" }}>
+          {ticks.map((tick, index) => (
+            <g key={index}>
+              <line
+                x1={leftPad}
+                y1={tick.y}
+                x2={chartWidth - rightPad}
+                y2={tick.y}
+                stroke="#e2e8f0"
+                strokeWidth="1"
+              />
+              <text
+                x={leftPad - 10}
+                y={tick.y + 4}
+                textAnchor="end"
+                fontSize="11"
+                fill="#64748b"
+              >
+                {tick.value}
+              </text>
+            </g>
+          ))}
+
+          <line
+            x1={leftPad}
+            y1={topPad + innerHeight}
+            x2={chartWidth - rightPad}
+            y2={topPad + innerHeight}
+            stroke="#94a3b8"
+            strokeWidth="1.5"
+          />
+
+          {months.map((month, monthIndex) => {
+            const groupStartX = leftPad + monthIndex * groupWidth + groupInnerPadding;
+
+            return (
+              <g key={month}>
+                {series.map((item, seriesIndex) => {
+                  const value = item.values[monthIndex] || 0;
+                  const barHeight = (value / maxValue) * innerHeight;
+                  const x = groupStartX + seriesIndex * (barWidth + barGap);
+                  const y = topPad + innerHeight - barHeight;
+
+                  return (
+                    <g key={`${month}-${item.name}`}>
+                      <rect
+                        x={x}
+                        y={y}
+                        width={barWidth}
+                        height={barHeight}
+                        rx="3"
+                        fill={item.fill}
+                      />
+                      <text
+                        x={x + barWidth / 2}
+                        y={y - 6}
+                        textAnchor="middle"
+                        fontSize="11"
+                        fontWeight="700"
+                        fill={item.fill}
+                      >
+                        {value}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                <text
+                  x={leftPad + monthIndex * groupWidth + groupWidth / 2}
+                  y={topPad + innerHeight + 18}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="#334155"
+                >
+                  {month.toUpperCase()}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-4">
+        {series.map((item) => (
+          <div key={item.name} className="flex items-center gap-2 text-sm text-slate-600">
+            <span
+              className="inline-block h-3 w-3 rounded-sm"
+              style={{ backgroundColor: item.fill }}
+            />
+            <span>{item.name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function HorizontalBarChart({
@@ -495,49 +627,84 @@ export default function KeheDashboardView() {
 
   const monthlyCasesSeries = useMemo(() => {
     const sortedMonths = [...monthlyCasesSelectedMonths].sort(compareMonthLabelsAsc);
-    const grouped = new Map<string, number>();
-
+  
+    const retailerNames = ["Kroger", "Fresh Thyme", "INFRA & Others"];
+    const colors: Record<string, string> = {
+      Kroger: "#123f73",
+      "Fresh Thyme": "#f59e0b",
+      "INFRA & Others": "#60c7df",
+    };
+  
+    const grouped: Record<string, Record<string, number>> = {};
+  
     for (const month of sortedMonths) {
-      grouped.set(month, 0);
+      grouped[month] = {};
+      for (const retailer of retailerNames) {
+        grouped[month][retailer] = 0;
+      }
     }
-
+  
     for (const row of monthlyCasesRows) {
       const month = normalizeMonthLabel(row.month);
-      grouped.set(month, (grouped.get(month) || 0) + Number(row.cases || 0));
+      const retailer = String(row.retailer || "").trim() || "Unknown";
+  
+      if (!grouped[month]) grouped[month] = {};
+      grouped[month][retailer] = (grouped[month][retailer] || 0) + Number(row.cases || 0);
     }
-
+  
     return {
       months: sortedMonths,
-      values: sortedMonths.map((month) => grouped.get(month) || 0),
+      series: retailerNames.map((retailer) => ({
+        name: retailer,
+        fill: colors[retailer] || "#4a83e7",
+        values: sortedMonths.map((month) => grouped[month]?.[retailer] || 0),
+      })),
     };
   }, [monthlyCasesRows, monthlyCasesSelectedMonths]);
 
   const avgCakesRows = useMemo(() => {
-    return rows.filter(
-      (row) =>
-        avgCakesSelectedMonths.includes(normalizeMonthLabel(row.month)) &&
-        isCakeDescription(row.description)
+    return rows.filter((row) =>
+      avgCakesSelectedMonths.includes(normalizeMonthLabel(row.month))
     );
   }, [rows, avgCakesSelectedMonths]);
 
   const averageCakesPerWeekSeries = useMemo(() => {
     const sortedMonths = [...avgCakesSelectedMonths].sort(compareMonthLabelsAsc);
-    const groupedEaches = new Map<string, number>();
-
+  
+    const retailerNames = ["Kroger", "Fresh Thyme", "INFRA & Others"];
+    const colors: Record<string, string> = {
+      Kroger: "#123f73",
+      "Fresh Thyme": "#f59e0b",
+      "INFRA & Others": "#60c7df",
+    };
+  
+    const groupedEaches: Record<string, Record<string, number>> = {};
+  
     for (const month of sortedMonths) {
-      groupedEaches.set(month, 0);
+      groupedEaches[month] = {};
+      for (const retailer of retailerNames) {
+        groupedEaches[month][retailer] = 0;
+      }
     }
-
+  
     for (const row of avgCakesRows) {
       const month = normalizeMonthLabel(row.month);
-      groupedEaches.set(month, (groupedEaches.get(month) || 0) + Number(row.eaches || 0));
+      const retailer = String(row.retailer || "").trim() || "Unknown";
+  
+      if (!groupedEaches[month]) groupedEaches[month] = {};
+      groupedEaches[month][retailer] =
+        (groupedEaches[month][retailer] || 0) + Number(row.eaches || 0);
     }
-
+  
     return {
       months: sortedMonths,
-      values: sortedMonths.map((month) =>
-        Number(((groupedEaches.get(month) || 0) / 4).toFixed(1))
-      ),
+      series: retailerNames.map((retailer) => ({
+        name: retailer,
+        fill: colors[retailer] || "#4a83e7",
+        values: sortedMonths.map((month) =>
+          Number(((groupedEaches[month]?.[retailer] || 0) / 4).toFixed(1))
+        ),
+      })),
     };
   }, [avgCakesRows, avgCakesSelectedMonths]);
 
@@ -1024,22 +1191,20 @@ export default function KeheDashboardView() {
                 </div>
               )}
 
-              {velocitySubTab === "total-cases-per-month" && (
-                <SingleSeriesMonthlyChart
-                  title="Total Cases per Month"
-                  months={monthlyCasesSeries.months}
-                  values={monthlyCasesSeries.values}
-                />
-              )}
-
+{velocitySubTab === "total-cases-per-month" && (
+  <GroupedMonthlyChart
+    title="Total Cases per Month"
+    months={monthlyCasesSeries.months}
+    series={monthlyCasesSeries.series}
+  />
+)}
               {velocitySubTab === "overall-average-cakes-per-week" && (
-                <SingleSeriesMonthlyChart
-                  title="Overall: Average Cakes per Week"
-                  months={averageCakesPerWeekSeries.months}
-                  values={averageCakesPerWeekSeries.values}
-                  fill="#60c7df"
-                />
-              )}
+  <GroupedMonthlyChart
+    title="Overall: Average Cakes per Week"
+    months={averageCakesPerWeekSeries.months}
+    series={averageCakesPerWeekSeries.series}
+  />
+)}
             </>
           )}
         </>
