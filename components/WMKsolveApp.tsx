@@ -566,7 +566,7 @@ export default function WMKsolveApp() {
 
               <div>
                 <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
-                  {titleMap[activeKey] || "WM-KSOLVE"}
+                {titleMap[activeKey || "home"] || "WM-KSOLVE"}
                 </h1>
               </div>
             </div>
