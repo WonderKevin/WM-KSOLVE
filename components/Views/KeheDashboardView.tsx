@@ -641,9 +641,14 @@ export default function KeheDashboardView() {
   }, [rows, monthlyCasesSelectedMonths]);
 
   const monthlyCasesSeries = useMemo(() => {
-    const sortedMonths = [...monthlyCasesSelectedMonths].sort(compareMonthLabelsAsc);
+    const sortedMonths = [...monthlyCasesSelectedMonths]
+      .sort(compareMonthLabelsAsc)
+      .filter((month) =>
+        monthlyCasesRows.some((row) => normalizeMonthLabel(row.month) === month)
+      );
   
-    
+    const retailerNames = ["Kroger", "Fresh Thyme", "INFRA & Others"];
+  
     const colors: Record<string, string> = {
       Kroger: "#123f73",
       "Fresh Thyme": "#f59e0b",
@@ -661,7 +666,9 @@ export default function KeheDashboardView() {
   
     for (const row of monthlyCasesRows) {
       const month = normalizeMonthLabel(row.month);
-      const retailer = String(row.retailer || "").trim() || "Unknown";
+      const retailer = String(row.retailer || "")
+        .replace(/\u00a0/g, " ")
+        .trim() || "Unknown";
   
       if (!grouped[month]) grouped[month] = {};
       grouped[month][retailer] = (grouped[month][retailer] || 0) + Number(row.cases || 0);
