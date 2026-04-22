@@ -17,7 +17,6 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
-import DashboardView from "@/components/Views/DashboardView";
 import BrokerCommissionSummaryView from "@/components/Views/BrokerCommissionSummaryView";
 import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDataSetsView";
 import AccountingSummaryView from "@/components/Views/AccountingSummaryView";
@@ -29,12 +28,11 @@ import LocationsView from "@/components/Views/LocationsView";
 import DeductionTypesView from "@/components/Views/DeductionTypesView";
 import UserAccountView from "@/components/Views/UserAccountView";
 import KeHeVelocityView from "@/components/Views/KeHeVelocityView";
+import KeheDashboardView from "@/components/Views/KeheDashboardView";
 
 type Permissions = {
   email: string;
   can_view_dashboard: boolean;
-
-  // optional new dashboard permissions
   can_view_dashboard_kehe?: boolean;
   can_view_dashboard_tony?: boolean;
 
@@ -304,10 +302,6 @@ export default function WMKsolveApp() {
 
     setOpenGroups((prev) => ({
       ...prev,
-      dashboard:
-        activeKey === "dashboard-kehe" || activeKey === "dashboard-tony"
-          ? true
-          : prev.dashboard,
       "broker-commission":
         activeKey === "broker-commission-summary" ||
         activeKey === "broker-commission-data-sets"
@@ -480,7 +474,7 @@ export default function WMKsolveApp() {
   const renderContent = () => {
     switch (activeKey) {
       case "dashboard-kehe":
-        return <DashboardView />;
+        return <KeheDashboardView />;
       case "dashboard-tony":
         return <PlaceholderView title="Tony's Dashboard" />;
       case "broker-commission-summary":
@@ -513,7 +507,7 @@ export default function WMKsolveApp() {
       case "admin-user-account":
         return <UserAccountView />;
       default:
-        return <DashboardView />;
+        return <KeheDashboardView />;
     }
   };
 
@@ -574,7 +568,6 @@ export default function WMKsolveApp() {
                 <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
                   {titleMap[activeKey] || "WM-KSOLVE"}
                 </h1>
-                <p className="mt-1 text-sm font-medium text-slate-400"></p>
               </div>
             </div>
 
