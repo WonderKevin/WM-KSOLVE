@@ -32,6 +32,21 @@ function normalizeMonthLabel(value: string) {
     .trim();
 }
 
+function getCakeSeriesName(description: string) {
+  return String(description || "")
+    .replace(/\u00a0/g, " ")
+    .trim();
+}
+
+function getCakeSortWeight(description: string) {
+  const text = getCakeSeriesName(description).toUpperCase();
+
+  if (text.startsWith("NSA")) return 1;
+  if (text.startsWith("HP")) return 2;
+  return 99;
+}
+
+
 function getMonthSortValue(value: string) {
   const normalized = normalizeMonthLabel(value);
   const match = normalized.match(/^([A-Za-z]+)\s+'(\d{2})$/);
@@ -628,7 +643,7 @@ export default function KeheDashboardView() {
   const monthlyCasesSeries = useMemo(() => {
     const sortedMonths = [...monthlyCasesSelectedMonths].sort(compareMonthLabelsAsc);
   
-    const retailerNames = ["Kroger", "Fresh Thyme", "INFRA & Others"];
+    
     const colors: Record<string, string> = {
       Kroger: "#123f73",
       "Fresh Thyme": "#f59e0b",
@@ -669,40 +684,63 @@ export default function KeheDashboardView() {
   }, [rows, avgCakesSelectedMonths]);
 
   const averageCakesPerWeekSeries = useMemo(() => {
-    const sortedMonths = [...avgCakesSelectedMonths].sort(compareMonthLabelsAsc);
+    const sortedMonths = [...avgCakesSelectedMonths]
+      .sort(compareMonthLabelsAsc)
+      .filter((month) =>
+        avgCakesRows.some((row) => normalizeMonthLabel(row.month) === month)
+      );
   
-    const retailerNames = ["Kroger", "Fresh Thyme", "INFRA & Others"];
-    const colors: Record<string, string> = {
-      Kroger: "#123f73",
-      "Fresh Thyme": "#f59e0b",
-      "INFRA & Others": "#60c7df",
-    };
+    const cakeNames = Array.from(
+      new Set(
+        avgCakesRows
+          .map((row) => getCakeSeriesName(row.description))
+          .filter(Boolean)
+      )
+    ).sort((a, b) => {
+      const weightDiff = getCakeSortWeight(a) - getCakeSortWeight(b);
+      if (weightDiff !== 0) return weightDiff;
+      return a.localeCompare(b);
+    });
+  
+    const palette = [
+      "#123f73",
+      "#f59e0b",
+      "#60c7df",
+      "#7c3aed",
+      "#10b981",
+      "#ef4444",
+      "#8b5cf6",
+      "#14b8a6",
+      "#f97316",
+      "#3b82f6",
+    ];
   
     const groupedEaches: Record<string, Record<string, number>> = {};
   
     for (const month of sortedMonths) {
       groupedEaches[month] = {};
-      for (const retailer of retailerNames) {
-        groupedEaches[month][retailer] = 0;
+      for (const cake of cakeNames) {
+        groupedEaches[month][cake] = 0;
       }
     }
   
     for (const row of avgCakesRows) {
       const month = normalizeMonthLabel(row.month);
-      const retailer = String(row.retailer || "").trim() || "Unknown";
+      const cake = getCakeSeriesName(row.description);
   
+      if (!cake) continue;
       if (!groupedEaches[month]) groupedEaches[month] = {};
-      groupedEaches[month][retailer] =
-        (groupedEaches[month][retailer] || 0) + Number(row.eaches || 0);
+      groupedEaches[month][cake] =
+        (groupedEaches[month][cake] || 0) + Number(row.eaches || 0);
     }
   
     return {
       months: sortedMonths,
-      series: retailerNames.map((retailer) => ({
-        name: retailer,
-        fill: colors[retailer] || "#4a83e7",
+      series: cakeNames.map((cake, index) => ({
+        name: cake,
+        fill: palette[index % palette.length],
         values: sortedMonths.map((month) =>
-          Number(((groupedEaches[month]?.[retailer] || 0) / 4).toFixed(1))
+          Number(((groupedEaches[month]?.[cake] || 0) / 4).toFixed(1))
         ),
       })),
     };
