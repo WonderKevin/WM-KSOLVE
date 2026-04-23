@@ -214,16 +214,18 @@ function HorizontalBarChart({ data, title, minWidth = 1100, labelWidth = 360 }: 
 }
 
 // ── Analytics helpers ─────────────────────────────────────────────────────────
-function buildAnalyticsContext(rows: VelocityRow[]) {
+function buildAnalyticsContext(rows: VelocityRow[], analyticsLastMonth?: string) {
   if (!rows.length) return null;
 
-  // Sort all months available
   const allMonths = Array.from(new Set(rows.map((r) => normalizeMonthLabel(r.month)))).sort(compareMonthLabelsAsc);
-  const recentMonths = allMonths.slice(-6);
-  const lastMonth = allMonths[allMonths.length - 1] ?? "";
-  const prevMonth = allMonths[allMonths.length - 2] ?? "";
+  // if a specific last month is chosen, slice up to and including it
+  const effectiveMonths = analyticsLastMonth
+    ? allMonths.filter((m) => getMonthSortValue(m) <= getMonthSortValue(analyticsLastMonth))
+    : allMonths;
+  const recentMonths = effectiveMonths.slice(-6);
+  const lastMonth = effectiveMonths[effectiveMonths.length - 1] ?? "";
+  const prevMonth = effectiveMonths[effectiveMonths.length - 2] ?? "";
 
-  // Per store/customer: monthly cases
   const storeMap = new Map<string, { retailer: string; retailerArea: string; customer: string; monthCases: Record<string, number>; total: number }>();
   for (const row of rows) {
     const key = `${String(row.retailer || "").trim()}||${String(row.retailer_area || "").trim()}||${String(row.customer || "").trim()}`;
@@ -235,12 +237,21 @@ function buildAnalyticsContext(rows: VelocityRow[]) {
   }
   const stores = Array.from(storeMap.values());
 
-  // Per retailer area: total stores, active last month, inactive 3+ months
   const areaMap = new Map<string, { retailer: string; area: string; stores: typeof stores }>();
   for (const s of stores) {
     const key = `${s.retailer}||${s.retailerArea}`;
     if (!areaMap.has(key)) areaMap.set(key, { retailer: s.retailer, area: s.retailerArea, stores: [] });
     areaMap.get(key)!.stores.push(s);
+  }
+
+  // Compute how many consecutive months a store has been inactive (from lastMonth backwards)
+  function getInactiveMonthCount(s: (typeof stores)[0]) {
+    let count = 0;
+    for (let i = effectiveMonths.length - 1; i >= 0; i--) {
+      if ((s.monthCases[effectiveMonths[i]] || 0) === 0) count++;
+      else break;
+    }
+    return count;
   }
 
   const areaSummaries = Array.from(areaMap.values()).map(({ retailer, area, stores: aStores }) => {
@@ -250,14 +261,20 @@ function buildAnalyticsContext(rows: VelocityRow[]) {
     const inactive3Plus = aStores.filter((s) => {
       const last3 = recentMonths.slice(-3);
       return last3.every((m) => (s.monthCases[m] || 0) === 0) && s.total > 0;
-    }).length;
+    });
     const areaCases = aStores.reduce((sum, s) => sum + s.total, 0);
     const lastMonthCases = aStores.reduce((sum, s) => sum + (s.monthCases[lastMonth] || 0), 0);
     const prevMonthCases = aStores.reduce((sum, s) => sum + (s.monthCases[prevMonth] || 0), 0);
-    return { retailer, area, total, activeLastMonth, inactiveLastMonth, inactive3Plus, areaCases, lastMonthCases, prevMonthCases };
-  }).sort((a, b) => b.areaCases - a.areaCases);
+    // stores sorted: inactive first, then by cases desc
+    const sortedStores = [...aStores].sort((a, b) => {
+      const aActive = (a.monthCases[lastMonth] || 0) > 0 ? 1 : 0;
+      const bActive = (b.monthCases[lastMonth] || 0) > 0 ? 1 : 0;
+      if (aActive !== bActive) return aActive - bActive; // inactive first
+      return b.total - a.total;
+    });
+    return { retailer, area, total, activeLastMonth, inactiveLastMonth, inactive3Plus: inactive3Plus.length, areaCases, lastMonthCases, prevMonthCases, sortedStores };
+  }).sort((a, b) => b.lastMonthCases - a.lastMonthCases); // sort by last month cases
 
-  // Win-back candidates: had volume, zero last 3 months
   const winBackCandidates = stores.filter((s) => {
     const last3 = recentMonths.slice(-3);
     const hasOlderVolume = Object.entries(s.monthCases).some(([m, v]) => !last3.includes(m) && v > 0);
@@ -265,7 +282,6 @@ function buildAnalyticsContext(rows: VelocityRow[]) {
     return hasOlderVolume && zeroLast3;
   }).sort((a, b) => b.total - a.total);
 
-  // Declining: positive trend before, dropping last 2 months
   const decliningStores = stores.filter((s) => {
     const r = recentMonths;
     if (r.length < 4) return false;
@@ -274,12 +290,9 @@ function buildAnalyticsContext(rows: VelocityRow[]) {
     return prev2avg > 5 && last2avg < prev2avg * 0.5;
   }).sort((a, b) => b.total - a.total);
 
-  // High performers last month
   const topLastMonth = stores.filter((s) => (s.monthCases[lastMonth] || 0) > 0)
-    .sort((a, b) => (b.monthCases[lastMonth] || 0) - (a.monthCases[lastMonth] || 0))
-    .slice(0, 10);
+    .sort((a, b) => (b.monthCases[lastMonth] || 0) - (a.monthCases[lastMonth] || 0)).slice(0, 10);
 
-  // Retailer totals
   const retailerMap = new Map<string, number>();
   for (const row of rows) {
     const r = String(row.retailer || "").trim();
@@ -287,14 +300,13 @@ function buildAnalyticsContext(rows: VelocityRow[]) {
   }
   const retailerTotals = Array.from(retailerMap.entries()).sort((a, b) => b[1] - a[1]);
 
-  return { allMonths, recentMonths, lastMonth, prevMonth, areaSummaries, winBackCandidates, decliningStores, topLastMonth, retailerTotals, totalStores: stores.length, stores };
+  return { allMonths, effectiveMonths, recentMonths, lastMonth, prevMonth, areaSummaries, winBackCandidates, decliningStores, topLastMonth, retailerTotals, totalStores: stores.length, stores, getInactiveMonthCount };
 }
 
 function buildAIPrompt(ctx: NonNullable<ReturnType<typeof buildAnalyticsContext>>, distributor: string) {
   const top5areas = ctx.areaSummaries.slice(0, 5);
   const top5winback = ctx.winBackCandidates.slice(0, 5);
   const top5declining = ctx.decliningStores.slice(0, 5);
-
   return `You are a senior CPG sales analyst reviewing distributor velocity and pullout data for ${distributor}.
 
 DATA SUMMARY (last 6 months: ${ctx.recentMonths.join(", ")}):
@@ -302,8 +314,8 @@ DATA SUMMARY (last 6 months: ${ctx.recentMonths.join(", ")}):
 RETAILER TOTALS (cases):
 ${ctx.retailerTotals.map(([r, c]) => `- ${r}: ${c} cases`).join("\n")}
 
-TOP RETAILER AREAS (by total cases, showing store count & activity):
-${top5areas.map((a) => `- ${a.retailer} / ${a.area}: ${a.total} stores, ${a.activeLastMonth} pulled last month (${a.inactiveLastMonth} inactive), ${a.inactive3Plus} gone 3+ months, ${a.areaCases} total cases`).join("\n")}
+TOP RETAILER AREAS (by last month cases):
+${top5areas.map((a) => `- ${a.retailer} / ${a.area}: ${a.total} stores, ${a.activeLastMonth} pulled last month (${a.inactiveLastMonth} inactive), ${a.inactive3Plus} gone 3+ months, ${a.lastMonthCases} cases last month`).join("\n")}
 
 TOP ACTIVE STORES LAST MONTH (${ctx.lastMonth}):
 ${ctx.topLastMonth.slice(0, 5).map((s) => `- ${s.customer} (${s.retailerArea}): ${s.monthCases[ctx.lastMonth]} cases`).join("\n")}
@@ -311,18 +323,18 @@ ${ctx.topLastMonth.slice(0, 5).map((s) => `- ${s.customer} (${s.retailerArea}): 
 WIN-BACK CANDIDATES (had volume, zero last 3 months):
 ${top5winback.map((s) => `- ${s.customer} (${s.retailer} / ${s.retailerArea}): ${s.total} total cases historically, last 3 months = 0`).join("\n") || "None found"}
 
-DECLINING STORES (volume dropped 50%+ over last 2 months):
+DECLINING STORES:
 ${top5declining.map((s) => `- ${s.customer} (${s.retailerArea}): ${s.total} total cases`).join("\n") || "None found"}
 
 FULL AREA BREAKDOWN:
-${ctx.areaSummaries.map((a) => `${a.retailer} / ${a.area}: ${a.total} stores, ${a.activeLastMonth} active last month, ${a.inactive3Plus} gone 3+ months`).join("\n")}
+${ctx.areaSummaries.map((a) => `${a.retailer} / ${a.area}: ${a.total} stores, ${a.activeLastMonth} active last month, ${a.inactive3Plus} gone 3+ months, ${a.lastMonthCases} cases last month`).join("\n")}
 
 ---
 
-Based on this data, produce a structured sales analysis with these exact sections. Be specific with store names and numbers. Do NOT be generic.
+Based on this data, produce a structured sales analysis. Be specific — use actual store names and numbers. Do NOT be generic.
 
 ## What Are the Biggest Things I Need to Know?
-3-5 sharp bullets. Specific numbers and store/area names.
+3-5 sharp bullets with specific numbers and names.
 
 ## Main Takeaways
 **Biggest Opportunities:** (bullet list)
@@ -330,20 +342,110 @@ Based on this data, produce a structured sales analysis with these exact section
 **Major Patterns:** (bullet list)
 
 ## Priority Accounts
-A ranked list of the top accounts to follow up with. For each: name, area, why they matter, what signal makes them a priority. Label each as 🔴 High / 🟡 Medium / 🟢 Low priority.
+Ranked list. For each: name, area, why they matter, what signal. Label: 🔴 High / 🟡 Medium / 🟢 Low.
 
 ## Sales Strategy
-Specific guidance — store-level vs banner-level issue, distribution/reset problems, reactivation vs low-probability, who to contact (buyer/distributor/store). Be tactical.
+Tactical guidance — store vs banner issue, distribution/reset problems, reactivation vs low-probability, who to contact.
 
 ## Opportunity Segmentation
-Segment all notable accounts into:
 - 🔴 High-Priority Win-Backs
 - 🟡 Medium-Priority Watchlist
 - 🟢 New/Growth Opportunities
 - ⚫ Low-Priority / Low-Return
 
 ## Recommended Next Actions
-Top 5 very practical next actions for a salesperson this week. Who to call, what to ask, what hypothesis to test.`;
+Top 5 practical actions for a salesperson this week.`;
+}
+
+// ── Expandable Area Row ───────────────────────────────────────────────────────
+function AreaRow({ row, lastMonth, allMonths }: {
+  row: NonNullable<ReturnType<typeof buildAnalyticsContext>>["areaSummaries"][0];
+  lastMonth: string;
+  allMonths: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const pullRate = row.total > 0 ? Math.round((row.activeLastMonth / row.total) * 100) : 0;
+  const rateColor = pullRate >= 70 ? "text-emerald-600 font-bold" : pullRate >= 40 ? "text-amber-600 font-bold" : "text-red-600 font-bold";
+
+  // compute inactive months per store
+  function getInactiveMoCount(store: typeof row.sortedStores[0]) {
+    let count = 0;
+    for (let i = allMonths.length - 1; i >= 0; i--) {
+      if ((store.monthCases[allMonths[i]] || 0) === 0) count++;
+      else break;
+    }
+    return count;
+  }
+
+  return (
+    <>
+      <tr
+        className="border-t border-slate-200 hover:bg-slate-50 transition-colors cursor-pointer select-none"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <td className="px-4 py-3 text-slate-700">
+          <span className="inline-flex items-center gap-1.5">
+            <svg className={`h-3.5 w-3.5 text-slate-400 transition-transform shrink-0 ${open ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+            {row.retailer}
+          </span>
+        </td>
+        <td className="px-4 py-3 text-slate-700 font-medium">{row.area}</td>
+        <td className="px-4 py-3 text-right text-slate-700">{row.total}</td>
+        <td className="px-4 py-3 text-right text-emerald-700 font-semibold">{row.activeLastMonth}</td>
+        <td className="px-4 py-3 text-right text-red-600">{row.inactiveLastMonth}</td>
+        <td className="px-4 py-3 text-right">
+          {row.inactive3Plus > 0
+            ? <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">{row.inactive3Plus}</span>
+            : <span className="text-slate-400">0</span>}
+        </td>
+        <td className={`px-4 py-3 text-right ${rateColor}`}>{pullRate}%</td>
+        <td className="px-4 py-3 text-right font-semibold text-slate-900">{row.lastMonthCases.toLocaleString()}</td>
+      </tr>
+
+      {open && (
+        <tr>
+          <td colSpan={8} className="px-0 py-0 bg-slate-50 border-t border-slate-100">
+            <div className="px-6 py-4">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200">
+                    <th className="pb-2 text-left font-semibold text-slate-500 pr-4">Store</th>
+                    <th className="pb-2 text-center font-semibold text-slate-500 w-20">Status</th>
+                    <th className="pb-2 text-right font-semibold text-slate-500 w-32">Gone (months)</th>
+                    <th className="pb-2 text-right font-semibold text-slate-500 w-24">Cases ({lastMonth})</th>
+                    <th className="pb-2 text-right font-semibold text-slate-500 w-24">Total Cases</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {row.sortedStores.map((store, si) => {
+                    const isActive = (store.monthCases[lastMonth] || 0) > 0;
+                    const inactiveMo = isActive ? 0 : getInactiveMoCount(store);
+                    return (
+                      <tr key={si} className="border-b border-slate-100 last:border-0">
+                        <td className="py-2 pr-4 text-slate-700 font-medium">{store.customer}</td>
+                        <td className="py-2 text-center">
+                          {isActive
+                            ? <span title="Active last month" className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-emerald-100"><svg className="h-3 w-3 text-emerald-600" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" /></svg></span>
+                            : <span title="Inactive last month" className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-red-100"><svg className="h-3 w-3 text-red-500" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3 3l6 6M9 3L3 9" /></svg></span>}
+                        </td>
+                        <td className="py-2 text-right">
+                          {!isActive && inactiveMo > 0
+                            ? <span className={`font-semibold ${inactiveMo >= 3 ? "text-red-600" : "text-amber-600"}`}>No pull for {inactiveMo} month{inactiveMo !== 1 ? "s" : ""}</span>
+                            : <span className="text-slate-400">—</span>}
+                        </td>
+                        <td className="py-2 text-right text-slate-700">{store.monthCases[lastMonth] || 0}</td>
+                        <td className="py-2 text-right font-semibold text-slate-900">{store.total}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
 }
 
 // ── Analytics Tab Component ───────────────────────────────────────────────────
@@ -354,132 +456,82 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
   const [distributor, setDistributor] = useState("KEHE");
   const [generated, setGenerated] = useState(false);
   const outputRef = useRef<HTMLDivElement>(null);
+  const winBackRef = useRef<HTMLDivElement>(null);
+  const decliningRef = useRef<HTMLDivElement>(null);
 
-  const ctx = useMemo(() => buildAnalyticsContext(rows), [rows]);
+  // Date filter for analytics
+  const allAvailableMonths = useMemo(() => Array.from(new Set(rows.map((r) => normalizeMonthLabel(r.month)))).sort(compareMonthLabelsAsc), [rows]);
+  const defaultLastMonth = allAvailableMonths[allAvailableMonths.length - 1] ?? "";
+  const [analyticsDateMode, setAnalyticsDateMode] = useState<"lastMonth" | "custom">("lastMonth");
+  const [analyticsCustomMonth, setAnalyticsCustomMonth] = useState(getLastMonthInputValue());
+
+  const analyticsLastMonth = useMemo(() => {
+    if (analyticsDateMode === "lastMonth") return defaultLastMonth;
+    // convert "2025-03" to month label
+    const [y, m] = analyticsCustomMonth.split("-").map(Number);
+    if (!y || !m) return defaultLastMonth;
+    return normalizeMonthLabel(monthLabelFromDate(new Date(y, m - 1, 1)));
+  }, [analyticsDateMode, analyticsCustomMonth, defaultLastMonth]);
+
+  const ctx = useMemo(() => buildAnalyticsContext(rows, analyticsLastMonth), [rows, analyticsLastMonth]);
 
   const runAnalysis = useCallback(async () => {
     if (!ctx) return;
-    setAiLoading(true);
-    setAiOutput("");
-    setAiError("");
-    setGenerated(false);
-
+    setAiLoading(true); setAiOutput(""); setAiError(""); setGenerated(false);
     try {
       const prompt = buildAIPrompt(ctx, distributor);
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          stream: true,
-          messages: [{ role: "user", content: prompt }],
-        }),
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, stream: true, messages: [{ role: "user", content: prompt }] }),
       });
-
       if (!response.ok) throw new Error(`API error ${response.status}`);
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       if (!reader) throw new Error("No response stream");
-
       let buffer = "";
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+        const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
         for (const line of lines) {
           if (line.startsWith("data: ")) {
             const data = line.slice(6).trim();
             if (data === "[DONE]") continue;
-            try {
-              const parsed = JSON.parse(data);
-              const delta = parsed?.delta?.text ?? parsed?.content?.[0]?.text ?? "";
-              if (delta) setAiOutput((prev) => prev + delta);
-            } catch {}
+            try { const p = JSON.parse(data); const d = p?.delta?.text ?? p?.content?.[0]?.text ?? ""; if (d) setAiOutput((prev) => prev + d); } catch {}
           }
         }
       }
       setGenerated(true);
-    } catch (err: any) {
-      setAiError(err?.message || "Analysis failed.");
-    } finally {
-      setAiLoading(false);
-    }
+    } catch (err: any) { setAiError(err?.message || "Analysis failed."); }
+    finally { setAiLoading(false); }
   }, [ctx, distributor]);
 
-  // Render markdown-like output into styled sections
   const renderOutput = (text: string) => {
     if (!text) return null;
-    const lines = text.split("\n");
-    const elements: React.ReactNode[] = [];
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-      if (line.startsWith("## ")) {
-        elements.push(<h2 key={i} className="mt-8 mb-3 text-xl font-bold text-slate-900 border-b border-slate-200 pb-2">{line.slice(3)}</h2>);
-      } else if (line.startsWith("**") && line.endsWith("**")) {
-        elements.push(<p key={i} className="mt-4 mb-1 font-semibold text-slate-800">{line.replace(/\*\*/g, "")}</p>);
-      } else if (line.startsWith("**") && line.includes("**")) {
-        // inline bold e.g. "**Label:** content"
-        const parts = line.split("**");
-        elements.push(
-          <p key={i} className="mt-3 mb-1 text-slate-700">
-            {parts.map((p, pi) => pi % 2 === 1 ? <strong key={pi}>{p}</strong> : p)}
-          </p>
-        );
-      } else if (line.startsWith("- ") || line.startsWith("• ")) {
+    return text.split("\n").map((line, i) => {
+      if (line.startsWith("## ")) return <h2 key={i} className="mt-8 mb-3 text-xl font-bold text-slate-900 border-b border-slate-200 pb-2">{line.slice(3)}</h2>;
+      if (line.startsWith("**") && line.endsWith("**")) return <p key={i} className="mt-4 mb-1 font-semibold text-slate-800">{line.replace(/\*\*/g, "")}</p>;
+      if (line.startsWith("**") && line.includes("**")) { const parts = line.split("**"); return <p key={i} className="mt-3 mb-1 text-slate-700">{parts.map((p, pi) => pi % 2 === 1 ? <strong key={pi}>{p}</strong> : p)}</p>; }
+      if (line.startsWith("- ") || line.startsWith("• ")) {
         const content = line.slice(2);
-        // detect priority emoji prefix
-        const isHigh = content.startsWith("🔴");
-        const isMed = content.startsWith("🟡");
-        const isLow = content.startsWith("🟢");
-        const isNone = content.startsWith("⚫");
-        const bg = isHigh ? "bg-red-50 border-red-200" : isMed ? "bg-amber-50 border-amber-200" : isLow ? "bg-emerald-50 border-emerald-200" : isNone ? "bg-slate-50 border-slate-200" : "bg-white border-slate-100";
-        elements.push(
-          <div key={i} className={`flex gap-2 rounded-xl border px-4 py-2.5 mb-2 text-sm text-slate-700 ${bg}`}>
-            <span className="shrink-0 mt-0.5 text-slate-400">•</span>
-            <span>{content}</span>
-          </div>
-        );
-      } else if (line.trim() === "") {
-        // skip empty
-      } else {
-        elements.push(<p key={i} className="text-sm text-slate-700 leading-relaxed mb-2">{line}</p>);
+        const bg = content.startsWith("🔴") ? "bg-red-50 border-red-200" : content.startsWith("🟡") ? "bg-amber-50 border-amber-200" : content.startsWith("🟢") ? "bg-emerald-50 border-emerald-200" : content.startsWith("⚫") ? "bg-slate-50 border-slate-200" : "bg-white border-slate-100";
+        return <div key={i} className={`flex gap-2 rounded-xl border px-4 py-2.5 mb-2 text-sm text-slate-700 ${bg}`}><span className="shrink-0 mt-0.5 text-slate-400">•</span><span>{content}</span></div>;
       }
-      i++;
-    }
-    return elements;
+      if (line.trim() === "") return null;
+      return <p key={i} className="text-sm text-slate-700 leading-relaxed mb-2">{line}</p>;
+    });
   };
-
-  // Quick stat cards from ctx
-  const statCards = useMemo(() => {
-    if (!ctx) return [];
-    const winBackCount = ctx.winBackCandidates.length;
-    const decliningCount = ctx.decliningStores.length;
-    const top = ctx.areaSummaries[0];
-    const totalActive = ctx.areaSummaries.reduce((s, a) => s + a.activeLastMonth, 0);
-    const totalStores = ctx.areaSummaries.reduce((s, a) => s + a.total, 0);
-    const pct = totalStores > 0 ? Math.round((totalActive / totalStores) * 100) : 0;
-    return [
-      { label: "Total Stores", value: String(ctx.totalStores), sub: "across all areas", color: "bg-blue-50 text-blue-700 border-blue-200" },
-      { label: "Active Last Month", value: `${totalActive} / ${totalStores}`, sub: `${pct}% pull rate`, color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-      { label: "Win-Back Candidates", value: String(winBackCount), sub: "zero last 3 months, had prior volume", color: "bg-amber-50 text-amber-700 border-amber-200" },
-      { label: "Declining Stores", value: String(decliningCount), sub: "volume dropped 50%+", color: "bg-red-50 text-red-700 border-red-200" },
-      { label: "Top Area", value: top ? top.area : "—", sub: top ? `${top.areaCases} cases, ${top.activeLastMonth}/${top.total} active` : "", color: "bg-purple-50 text-purple-700 border-purple-200" },
-    ];
-  }, [ctx]);
-
-  // Area breakdown table
-  const areaTable = useMemo(() => {
-    if (!ctx) return null;
-    return ctx.areaSummaries.slice(0, 20);
-  }, [ctx]);
 
   if (loading) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">Loading data for analysis...</div>;
   if (loadError) return <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>;
   if (!ctx) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">No data available for analysis.</div>;
+
+  const totalActive = ctx.areaSummaries.reduce((s, a) => s + a.activeLastMonth, 0);
+  const totalStores = ctx.areaSummaries.reduce((s, a) => s + a.total, 0);
+  const pct = totalStores > 0 ? Math.round((totalActive / totalStores) * 100) : 0;
+  const topAreaByLastMonth = ctx.areaSummaries[0];
 
   return (
     <div className="space-y-6">
@@ -488,40 +540,104 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
             <h2 className="text-2xl font-bold text-slate-900">Sales Analytics</h2>
-            <p className="mt-1 text-sm text-slate-500">AI-powered account analysis across {ctx.allMonths.length} months of velocity data</p>
+            <p className="mt-1 text-sm text-slate-500">AI-powered account analysis · {ctx.allMonths.length} months of velocity data</p>
           </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end flex-wrap">
+            {/* Date filter */}
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">Reference Month</label>
+              <select value={analyticsDateMode} onChange={(e) => setAnalyticsDateMode(e.target.value as "lastMonth" | "custom")}
+                className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400">
+                <option value="lastMonth">Last Month ({defaultLastMonth})</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            {analyticsDateMode === "custom" && (
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Month</label>
+                <input type="month" value={analyticsCustomMonth} onChange={(e) => setAnalyticsCustomMonth(e.target.value)}
+                  className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400" />
+              </div>
+            )}
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Distributor</label>
               <input type="text" value={distributor} onChange={(e) => setDistributor(e.target.value)}
-                className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400 w-40" />
+                className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400 w-36" />
             </div>
             <button type="button" onClick={runAnalysis} disabled={aiLoading}
               className="h-11 flex items-center gap-2 rounded-2xl bg-slate-900 px-6 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed">
-              {aiLoading ? (
-                <><svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Analyzing...</>
-              ) : (
-                <><svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>{generated ? "Re-run Analysis" : "Run AI Analysis"}</>
-              )}
+              {aiLoading
+                ? <><svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Analyzing...</>
+                : <><svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>{generated ? "Re-run Analysis" : "Run AI Analysis"}</>}
             </button>
           </div>
         </div>
       </div>
 
-      {/* Stat cards */}
+      {/* Stat cards — clickable Win-Back and Declining scroll to section */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        {statCards.map((card) => (
-          <div key={card.label} className={`rounded-3xl border p-5 shadow-sm ${card.color}`}>
-            <div className="text-2xl font-bold">{card.value}</div>
-            <div className="mt-1 text-sm font-semibold">{card.label}</div>
-            <div className="mt-0.5 text-xs opacity-75">{card.sub}</div>
-          </div>
-        ))}
+        {/* Total Stores */}
+        <div className="rounded-3xl border bg-blue-50 text-blue-700 border-blue-200 p-5 shadow-sm">
+          <div className="text-2xl font-bold">{ctx.totalStores}</div>
+          <div className="mt-1 text-sm font-semibold">Total Stores</div>
+          <div className="mt-0.5 text-xs opacity-75">across all areas</div>
+        </div>
+        {/* Top Area - moved right after Total Stores */}
+        <div className="rounded-3xl border bg-purple-50 text-purple-700 border-purple-200 p-5 shadow-sm">
+          <div className="text-2xl font-bold truncate">{topAreaByLastMonth ? topAreaByLastMonth.area : "—"}</div>
+          <div className="mt-1 text-sm font-semibold">Top Area</div>
+          <div className="mt-0.5 text-xs opacity-75">{topAreaByLastMonth ? `${topAreaByLastMonth.lastMonthCases} cases last month` : ""}</div>
+        </div>
+        {/* Active Last Month */}
+        <div className="rounded-3xl border bg-emerald-50 text-emerald-700 border-emerald-200 p-5 shadow-sm">
+          <div className="text-2xl font-bold">{totalActive} / {totalStores}</div>
+          <div className="mt-1 text-sm font-semibold">Active Last Month</div>
+          <div className="mt-0.5 text-xs opacity-75">{pct}% pull rate</div>
+        </div>
+        {/* Win-Back Candidates — clickable */}
+        <button type="button" onClick={() => winBackRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          className="rounded-3xl border bg-amber-50 text-amber-700 border-amber-200 p-5 shadow-sm text-left hover:bg-amber-100 transition cursor-pointer">
+          <div className="text-2xl font-bold">{ctx.winBackCandidates.length}</div>
+          <div className="mt-1 text-sm font-semibold">Win-Back Candidates</div>
+          <div className="mt-0.5 text-xs opacity-75">zero last 3 months, had prior volume ↓</div>
+        </button>
+        {/* Declining Stores — clickable */}
+        <button type="button" onClick={() => decliningRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          className="rounded-3xl border bg-red-50 text-red-700 border-red-200 p-5 shadow-sm text-left hover:bg-red-100 transition cursor-pointer">
+          <div className="text-2xl font-bold">{ctx.decliningStores.length}</div>
+          <div className="mt-1 text-sm font-semibold">Declining Stores</div>
+          <div className="mt-0.5 text-xs opacity-75">volume dropped 50%+ ↓</div>
+        </button>
       </div>
 
-      {/* Area breakdown table */}
+      {/* Area summary bar — sorted by last month cases */}
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="mb-4 text-lg font-semibold text-slate-900">Retailer Area Breakdown <span className="text-sm font-normal text-slate-500 ml-2">(last month: {ctx.lastMonth})</span></h3>
+        <h3 className="mb-4 text-base font-semibold text-slate-900">Area Summary <span className="text-sm font-normal text-slate-500 ml-1">— sorted by cases pulled in {ctx.lastMonth}</span></h3>
+        <div className="space-y-2">
+          {ctx.areaSummaries.map((area, i) => {
+            const maxCases = ctx.areaSummaries[0]?.lastMonthCases || 1;
+            const barPct = Math.round((area.lastMonthCases / maxCases) * 100);
+            const pullRate = area.total > 0 ? Math.round((area.activeLastMonth / area.total) * 100) : 0;
+            const rateColor = pullRate >= 70 ? "text-emerald-600" : pullRate >= 40 ? "text-amber-600" : "text-red-500";
+            return (
+              <div key={i} className="flex items-center gap-3">
+                <div className="w-44 shrink-0 text-sm text-slate-700 truncate" title={area.area}>{area.area}</div>
+                <div className="flex-1 h-6 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-slate-700 rounded-full transition-all" style={{ width: `${barPct}%` }} />
+                </div>
+                <div className="w-16 text-right text-sm font-semibold text-slate-900">{area.lastMonthCases}</div>
+                <div className={`w-14 text-right text-xs font-semibold ${rateColor}`}>{pullRate}%</div>
+                <div className="w-28 text-right text-xs text-slate-500">{area.activeLastMonth}/{area.total} active</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Retailer Area Breakdown — expandable rows */}
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h3 className="mb-1 text-lg font-semibold text-slate-900">Retailer Area Breakdown</h3>
+        <p className="mb-4 text-sm text-slate-500">Click any row to expand and see all stores. Pull Rate = last month ({ctx.lastMonth}). Gone 3+ = stores with no pull for 3+ consecutive months.</p>
         <div className="overflow-auto rounded-2xl border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50">
@@ -529,67 +645,86 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
                 <th className="px-4 py-3 text-left font-semibold text-slate-700">Retailer</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-700">Area</th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-700">Total Stores</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-700">Active Last Month</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-700">Inactive Last Month</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-700">Active ({ctx.lastMonth})</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-700">Inactive ({ctx.lastMonth})</th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-700">Gone 3+ Months</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-700">Pull Rate</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-700">Total Cases</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-700">Pull Rate ({ctx.lastMonth})</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-700">Cases ({ctx.lastMonth})</th>
               </tr>
             </thead>
             <tbody>
-              {(areaTable ?? []).map((row, i) => {
-                const pullRate = row.total > 0 ? Math.round((row.activeLastMonth / row.total) * 100) : 0;
-                const rateColor = pullRate >= 70 ? "text-emerald-600 font-semibold" : pullRate >= 40 ? "text-amber-600 font-semibold" : "text-red-600 font-semibold";
-                return (
-                  <tr key={i} className="border-t border-slate-200 hover:bg-slate-50 transition-colors">
-                    <td className="px-4 py-3 text-slate-700">{row.retailer}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.area}</td>
-                    <td className="px-4 py-3 text-right text-slate-700">{row.total}</td>
-                    <td className="px-4 py-3 text-right text-emerald-700 font-medium">{row.activeLastMonth}</td>
-                    <td className="px-4 py-3 text-right text-red-600">{row.inactiveLastMonth}</td>
-                    <td className="px-4 py-3 text-right">
-                      {row.inactive3Plus > 0 ? <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">{row.inactive3Plus}</span> : <span className="text-slate-400">0</span>}
-                    </td>
-                    <td className={`px-4 py-3 text-right ${rateColor}`}>{pullRate}%</td>
-                    <td className="px-4 py-3 text-right font-semibold text-slate-900">{row.areaCases.toLocaleString()}</td>
-                  </tr>
-                );
-              })}
+              {ctx.areaSummaries.map((row, i) => (
+                <AreaRow key={i} row={row} lastMonth={ctx.lastMonth} allMonths={ctx.effectiveMonths} />
+              ))}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Win-back candidates */}
+      {/* Win-back candidates — list style */}
       {ctx.winBackCandidates.length > 0 && (
-        <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
+        <div ref={winBackRef} className="rounded-3xl border border-amber-200 bg-amber-50 p-6 shadow-sm scroll-mt-6">
           <h3 className="mb-1 text-lg font-semibold text-amber-900">🔁 Win-Back Candidates <span className="text-sm font-normal text-amber-700 ml-1">({ctx.winBackCandidates.length} stores)</span></h3>
-          <p className="mb-4 text-sm text-amber-700">These stores had meaningful historical volume but have not pulled in 3+ months.</p>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {ctx.winBackCandidates.slice(0, 9).map((s, i) => (
-              <div key={i} className="rounded-2xl border border-amber-200 bg-white p-4">
-                <div className="text-sm font-semibold text-slate-800 leading-snug">{s.customer}</div>
-                <div className="mt-1 text-xs text-slate-500">{s.retailer} · {s.retailerArea}</div>
-                <div className="mt-2 text-lg font-bold text-amber-700">{s.total} <span className="text-xs font-normal text-slate-500">historical cases</span></div>
-              </div>
-            ))}
+          <p className="mb-4 text-sm text-amber-700">Had meaningful historical volume · zero orders last 3 months</p>
+          <div className="overflow-auto rounded-2xl border border-amber-200 bg-white">
+            <table className="min-w-full text-sm">
+              <thead className="bg-amber-50">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-amber-900">Store</th>
+                  <th className="px-4 py-3 text-left font-semibold text-amber-900">Retailer</th>
+                  <th className="px-4 py-3 text-left font-semibold text-amber-900">Area</th>
+                  <th className="px-4 py-3 text-right font-semibold text-amber-900">Historical Cases</th>
+                  <th className="px-4 py-3 text-right font-semibold text-amber-900">Last Inactive</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ctx.winBackCandidates.map((s, i) => {
+                  // find last month they pulled
+                  const lastActiveMo = [...ctx.effectiveMonths].reverse().find((m) => (s.monthCases[m] || 0) > 0) ?? "—";
+                  return (
+                    <tr key={i} className="border-t border-amber-100 hover:bg-amber-50 transition-colors">
+                      <td className="px-4 py-2.5 font-medium text-slate-800">{s.customer}</td>
+                      <td className="px-4 py-2.5 text-slate-600">{s.retailer}</td>
+                      <td className="px-4 py-2.5 text-slate-600">{s.retailerArea}</td>
+                      <td className="px-4 py-2.5 text-right font-bold text-amber-700">{s.total}</td>
+                      <td className="px-4 py-2.5 text-right text-slate-500">{lastActiveMo}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
-      {/* Declining stores */}
+      {/* Declining stores — list style */}
       {ctx.decliningStores.length > 0 && (
-        <div className="rounded-3xl border border-red-200 bg-red-50 p-6 shadow-sm">
+        <div ref={decliningRef} className="rounded-3xl border border-red-200 bg-red-50 p-6 shadow-sm scroll-mt-6">
           <h3 className="mb-1 text-lg font-semibold text-red-900">📉 Declining Stores <span className="text-sm font-normal text-red-700 ml-1">({ctx.decliningStores.length} stores)</span></h3>
-          <p className="mb-4 text-sm text-red-700">Volume dropped 50%+ comparing last 2 months to prior 2 months.</p>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {ctx.decliningStores.slice(0, 6).map((s, i) => (
-              <div key={i} className="rounded-2xl border border-red-200 bg-white p-4">
-                <div className="text-sm font-semibold text-slate-800 leading-snug">{s.customer}</div>
-                <div className="mt-1 text-xs text-slate-500">{s.retailer} · {s.retailerArea}</div>
-                <div className="mt-2 text-lg font-bold text-red-600">{s.total} <span className="text-xs font-normal text-slate-500">total cases</span></div>
-              </div>
-            ))}
+          <p className="mb-4 text-sm text-red-700">Volume dropped 50%+ comparing last 2 months vs prior 2 months.</p>
+          <div className="overflow-auto rounded-2xl border border-red-200 bg-white">
+            <table className="min-w-full text-sm">
+              <thead className="bg-red-50">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-red-900">Store</th>
+                  <th className="px-4 py-3 text-left font-semibold text-red-900">Retailer</th>
+                  <th className="px-4 py-3 text-left font-semibold text-red-900">Area</th>
+                  <th className="px-4 py-3 text-right font-semibold text-red-900">Total Cases</th>
+                  <th className="px-4 py-3 text-right font-semibold text-red-900">Last Month Cases</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ctx.decliningStores.map((s, i) => (
+                  <tr key={i} className="border-t border-red-100 hover:bg-red-50 transition-colors">
+                    <td className="px-4 py-2.5 font-medium text-slate-800">{s.customer}</td>
+                    <td className="px-4 py-2.5 text-slate-600">{s.retailer}</td>
+                    <td className="px-4 py-2.5 text-slate-600">{s.retailerArea}</td>
+                    <td className="px-4 py-2.5 text-right font-bold text-red-700">{s.total}</td>
+                    <td className="px-4 py-2.5 text-right text-slate-700">{s.monthCases[ctx.lastMonth] || 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -599,13 +734,11 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
         <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm" ref={outputRef}>
           <div className="flex items-center gap-3 mb-6">
             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900">
-              <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-              </svg>
+              <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
             </div>
             <div>
               <div className="font-semibold text-slate-900">AI Sales Analysis — {distributor}</div>
-              <div className="text-xs text-slate-500">{ctx.recentMonths[0]} – {ctx.lastMonth}</div>
+              <div className="text-xs text-slate-500">Reference month: {ctx.lastMonth}</div>
             </div>
             {aiLoading && <div className="ml-auto flex items-center gap-2 text-sm text-slate-400"><svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Streaming...</div>}
           </div>
