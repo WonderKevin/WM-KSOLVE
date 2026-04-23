@@ -33,6 +33,9 @@ type UserPermissionRow = {
   // Admin
   can_view_user_account: boolean;
 
+  // Special
+  can_reprocess_invoices: boolean;
+
   created_at?: string;
   updated_at?: string;
 };
@@ -77,6 +80,10 @@ const PERMISSION_GROUPS: Array<{
     label: "Admin",
     children: ["can_view_user_account"],
   },
+  {
+    label: "Special",
+    children: ["can_reprocess_invoices"],
+  },
 ];
 
 const LABEL_MAP: Record<string, string> = {
@@ -102,6 +109,9 @@ const LABEL_MAP: Record<string, string> = {
 
   // Admin
   can_view_user_account: "User Account",
+
+  // Special
+  can_reprocess_invoices: "Reprocess Invoices",
 };
 
 export default function UserAccountView() {
@@ -124,7 +134,7 @@ export default function UserAccountView() {
 
       if (error) throw error;
 
-      setRows(data || []);
+      setRows((data || []) as UserPermissionRow[]);
     } catch (error) {
       console.error("Failed to load user permissions:", error);
       setRows([]);
@@ -210,7 +220,7 @@ export default function UserAccountView() {
         .from("user_permissions")
         .update({
           ...fields.reduce<Record<string, boolean>>((acc, field) => {
-            acc[field] = value;
+            acc[String(field)] = value;
             return acc;
           }, {}),
           updated_at: new Date().toISOString(),
@@ -261,6 +271,9 @@ export default function UserAccountView() {
 
         // Admin
         can_view_user_account: false,
+
+        // Special
+        can_reprocess_invoices: false,
       });
 
       if (error) throw error;
