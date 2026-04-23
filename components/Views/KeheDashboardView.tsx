@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 
 type TabKey = "analytics" | "velocity" | "pullout";
@@ -25,202 +25,120 @@ type VelocityRow = {
   source_file_name?: string;
 };
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function normalizeMonthLabel(value: string) {
-  return String(value || "")
-    .replace(/\u00a0/g, " ")
-    .replace(/['`]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
+  return String(value || "").replace(/\u00a0/g, " ").replace(/['`]/g, "'").replace(/\s+/g, " ").trim();
 }
-
-function getCakeSeriesName(description: string) {
-  return String(description || "").replace(/\u00a0/g, " ").trim();
-}
-
-function getCakeSortWeight(description: string) {
-  const text = getCakeSeriesName(description).toUpperCase();
-  if (text.startsWith("NSA")) return 1;
-  if (text.startsWith("HP")) return 2;
+function getCakeSeriesName(d: string) { return String(d || "").replace(/\u00a0/g, " ").trim(); }
+function getCakeSortWeight(d: string) {
+  const t = getCakeSeriesName(d).toUpperCase();
+  if (t.startsWith("NSA")) return 1;
+  if (t.startsWith("HP")) return 2;
   return 99;
 }
-
 function getMonthSortValue(value: string) {
-  const normalized = normalizeMonthLabel(value);
-  const match = normalized.match(/^([A-Za-z]+)\s+'(\d{2})$/);
-  if (!match) return -Infinity;
-  const monthIndex = new Date(`${match[1]} 1, 2000`).getMonth();
-  if (Number.isNaN(monthIndex)) return -Infinity;
-  return (2000 + Number(match[2])) * 100 + (monthIndex + 1);
+  const m = normalizeMonthLabel(value).match(/^([A-Za-z]+)\s+'(\d{2})$/);
+  if (!m) return -Infinity;
+  const idx = new Date(`${m[1]} 1, 2000`).getMonth();
+  if (Number.isNaN(idx)) return -Infinity;
+  return (2000 + Number(m[2])) * 100 + (idx + 1);
 }
-
-function compareMonthLabelsAsc(a: string, b: string) {
-  return getMonthSortValue(a) - getMonthSortValue(b);
-}
-
+function compareMonthLabelsAsc(a: string, b: string) { return getMonthSortValue(a) - getMonthSortValue(b); }
 function monthLabelFromDate(date: Date) {
   return `${date.toLocaleString("en-US", { month: "long" })} '${String(date.getFullYear()).slice(-2)}`;
 }
-
 function getCurrentMonthInputValue() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
 }
-
 function getLastMonthInputValue() {
-  const now = new Date();
-  const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const n = new Date(); const d = new Date(n.getFullYear(), n.getMonth() - 1, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
-
-function getPastMonthsInputValue(monthsBack: number) {
-  const now = new Date();
-  const d = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
+function getPastMonthsInputValue(back: number) {
+  const n = new Date(); const d = new Date(n.getFullYear(), n.getMonth() - back, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
-
 function getLastMonthLabel() {
-  const now = new Date();
-  return monthLabelFromDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+  const n = new Date(); return monthLabelFromDate(new Date(n.getFullYear(), n.getMonth() - 1, 1));
 }
-
-function buildMonthRange(fromMonth: string, toMonth: string) {
+function buildMonthRange(from: string, to: string) {
   const result: string[] = [];
-  if (!fromMonth || !toMonth) return result;
-  const [fromYear, fromMonthNum] = fromMonth.split("-").map(Number);
-  const [toYear, toMonthNum] = toMonth.split("-").map(Number);
-  if (!fromYear || !fromMonthNum || !toYear || !toMonthNum) return result;
-  let cursor = new Date(fromYear, fromMonthNum - 1, 1);
-  const end = new Date(toYear, toMonthNum - 1, 1);
-  while (cursor <= end) {
-    result.push(monthLabelFromDate(cursor));
-    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-  }
+  const [fy, fm] = from.split("-").map(Number);
+  const [ty, tm] = to.split("-").map(Number);
+  if (!fy || !fm || !ty || !tm) return result;
+  let c = new Date(fy, fm - 1, 1); const end = new Date(ty, tm - 1, 1);
+  while (c <= end) { result.push(monthLabelFromDate(c)); c = new Date(c.getFullYear(), c.getMonth() + 1, 1); }
   return result;
 }
-
 function buildPastNMonthsRange(n: number) {
   const now = new Date();
-  return Array.from({ length: n }, (_, i) =>
-    monthLabelFromDate(new Date(now.getFullYear(), now.getMonth() - (n - 1 - i), 1))
-  );
+  return Array.from({ length: n }, (_, i) => monthLabelFromDate(new Date(now.getFullYear(), now.getMonth() - (n - 1 - i), 1)));
 }
-
 function truncateLabel(value: string, max = 42) {
-  const text = String(value || "");
-  return text.length > max ? `${text.slice(0, max)}...` : text;
+  const t = String(value || ""); return t.length > max ? `${t.slice(0, max)}...` : t;
 }
 
-// ── Searchable dropdown (Excel-style with Select All) ─────────────────────────
-function SearchableSelect({
-  options,
-  value,
-  onChange,
-  placeholder = "Search...",
-  allLabel = "All Customers",
-}: {
-  options: string[];
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  allLabel?: string;
+// ── Excel export ──────────────────────────────────────────────────────────────
+function exportToExcel({ filename, headers, rows }: { filename: string; headers: string[]; rows: (string | number)[][]; }) {
+  const esc = (v: string | number) => { const s = String(v ?? ""); return s.search(/[",\n]/) >= 0 ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lines = [headers.map(esc).join(","), ...rows.map((r) => r.map(esc).join(","))];
+  const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = `${filename}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Searchable dropdown (Excel-style) ─────────────────────────────────────────
+function SearchableSelect({ options, value, onChange, placeholder = "Search...", allLabel = "All Customers" }: {
+  options: string[]; value: string; onChange: (v: string) => void; placeholder?: string; allLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
-
-  // options should already include the "All" entry as first item
-  const nonAllOptions = useMemo(() => options.filter((o) => o !== allLabel), [options, allLabel]);
-  const filtered = useMemo(
-    () => nonAllOptions.filter((o) => o.toLowerCase().includes(query.toLowerCase())),
-    [nonAllOptions, query]
-  );
-
+  const nonAll = useMemo(() => options.filter((o) => o !== allLabel), [options, allLabel]);
+  const filtered = useMemo(() => nonAll.filter((o) => o.toLowerCase().includes(query.toLowerCase())), [nonAll, query]);
   useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-        setQuery("");
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setQuery(""); } };
+    document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h);
   }, []);
-
   const isAll = value === allLabel;
-
   return (
     <div ref={ref} className="relative min-w-[200px]">
-      <button
-        type="button"
-        onClick={() => { setOpen((o) => !o); setQuery(""); }}
-        className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-left text-sm text-slate-700 outline-none flex items-center justify-between gap-2 hover:border-slate-300 transition"
-      >
+      <button type="button" onClick={() => { setOpen((o) => !o); setQuery(""); }}
+        className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-left text-sm text-slate-700 outline-none flex items-center justify-between gap-2 hover:border-slate-300 transition">
         <span className="truncate">{value}</span>
         <svg className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
           <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
         </svg>
       </button>
-
       {open && (
         <div className="absolute z-50 mt-1 w-full min-w-[260px] rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden">
-          {/* Search input */}
           <div className="p-2 border-b border-slate-100">
-            <input
-              autoFocus
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={placeholder}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
-            />
+            <input autoFocus type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={placeholder}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400" />
           </div>
-
-          {/* (Select All) — always pinned at top, hidden when actively searching */}
           {!query && (
             <div className="border-b border-slate-100">
-              <button
-                type="button"
-                onClick={() => { onChange(allLabel); setOpen(false); setQuery(""); }}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-semibold hover:bg-slate-50 transition text-slate-800"
-              >
+              <button type="button" onClick={() => { onChange(allLabel); setOpen(false); setQuery(""); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-semibold hover:bg-slate-50 transition text-slate-800">
                 <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${isAll ? "border-slate-800 bg-slate-800" : "border-slate-300"}`}>
-                  {isAll && (
-                    <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" />
-                    </svg>
-                  )}
-                </span>
-                (Select All)
+                  {isAll && <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" /></svg>}
+                </span>(Select All)
               </button>
             </div>
           )}
-
-          {/* Individual options */}
           <div className="max-h-56 overflow-y-auto">
-            {filtered.length === 0 ? (
-              <div className="px-4 py-3 text-sm text-slate-400">No results</div>
-            ) : (
-              filtered.map((option) => {
-                const selected = value === option;
-                return (
-                  <button
-                    key={option}
-                    type="button"
-                    onClick={() => { onChange(option); setOpen(false); setQuery(""); }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm transition hover:bg-slate-50 text-slate-700"
-                  >
-                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${selected ? "border-slate-800 bg-slate-800" : "border-slate-300"}`}>
-                      {selected && (
-                        <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" />
-                        </svg>
-                      )}
-                    </span>
-                    {option}
-                  </button>
-                );
-              })
-            )}
+            {filtered.length === 0 ? <div className="px-4 py-3 text-sm text-slate-400">No results</div> : filtered.map((opt) => {
+              const sel = value === opt;
+              return (
+                <button key={opt} type="button" onClick={() => { onChange(opt); setOpen(false); setQuery(""); }}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm transition hover:bg-slate-50 text-slate-700">
+                  <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${sel ? "border-slate-800 bg-slate-800" : "border-slate-300"}`}>
+                    {sel && <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" /></svg>}
+                  </span>{opt}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -229,33 +147,17 @@ function SearchableSelect({
 }
 
 // ── Search bar ────────────────────────────────────────────────────────────────
-function SearchBar({
-  value,
-  onChange,
-  placeholder = "Search...",
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
+function SearchBar({ value, onChange, placeholder = "Search..." }: { value: string; onChange: (v: string) => void; placeholder?: string; }) {
   return (
     <div className="relative min-w-[220px] flex-1 max-w-xs">
       <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
       </svg>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="h-11 w-full rounded-2xl border border-slate-200 bg-white pl-9 pr-9 text-sm outline-none focus:border-slate-400 transition"
-      />
+      <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+        className="h-11 w-full rounded-2xl border border-slate-200 bg-white pl-9 pr-9 text-sm outline-none focus:border-slate-400 transition" />
       {value && (
-        <button type="button" onClick={() => onChange("")}
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+        <button type="button" onClick={() => onChange("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       )}
     </div>
@@ -263,142 +165,459 @@ function SearchBar({
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────────
-function GroupedMonthlyChart({ title, months, series }: {
-  title: string;
-  months: string[];
-  series: { name: string; values: number[]; fill: string }[];
-}) {
-  const chartHeight = 360;
-  const chartWidth = Math.max(980, 140 + months.length * 120);
-  const leftPad = 55, rightPad = 20, topPad = 20, bottomPad = 95;
-  const innerWidth = chartWidth - leftPad - rightPad;
-  const innerHeight = chartHeight - topPad - bottomPad;
-  const maxValue = Math.max(1, ...series.flatMap((s) => s.values));
-  const groupWidth = months.length > 0 ? innerWidth / months.length : innerWidth;
-  const barGap = 6, groupInnerPadding = 12;
-  const barWidth = Math.max(14, (groupWidth - groupInnerPadding * 2 - barGap * Math.max(series.length - 1, 0)) / Math.max(series.length, 1));
-  const ticks = Array.from({ length: 5 }, (_, i) => ({
-    value: Math.round((maxValue / 4) * i),
-    y: topPad + innerHeight - (innerHeight / 4) * i,
-  }));
-
+function GroupedMonthlyChart({ title, months, series }: { title: string; months: string[]; series: { name: string; values: number[]; fill: string }[]; }) {
+  const cH = 360, cW = Math.max(980, 140 + months.length * 120);
+  const lP = 55, rP = 20, tP = 20, bP = 95;
+  const iW = cW - lP - rP, iH = cH - tP - bP;
+  const max = Math.max(1, ...series.flatMap((s) => s.values));
+  const gW = months.length > 0 ? iW / months.length : iW;
+  const bGap = 6, gPad = 12;
+  const bW = Math.max(14, (gW - gPad * 2 - bGap * Math.max(series.length - 1, 0)) / Math.max(series.length, 1));
+  const ticks = Array.from({ length: 5 }, (_, i) => ({ value: Math.round((max / 4) * i), y: tP + iH - (iH / 4) * i }));
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="mb-4 text-2xl font-semibold text-slate-700">{title}</h3>
       <div className="overflow-x-auto">
-        <svg width={chartWidth} height={chartHeight} style={{ minWidth: "980px" }}>
-          {ticks.map((tick, i) => (
-            <g key={i}>
-              <line x1={leftPad} y1={tick.y} x2={chartWidth - rightPad} y2={tick.y} stroke="#e2e8f0" strokeWidth="1" />
-              <text x={leftPad - 10} y={tick.y + 4} textAnchor="end" fontSize="11" fill="#64748b">{tick.value}</text>
-            </g>
-          ))}
-          <line x1={leftPad} y1={topPad + innerHeight} x2={chartWidth - rightPad} y2={topPad + innerHeight} stroke="#94a3b8" strokeWidth="1.5" />
+        <svg width={cW} height={cH} style={{ minWidth: "980px" }}>
+          {ticks.map((t, i) => (<g key={i}><line x1={lP} y1={t.y} x2={cW - rP} y2={t.y} stroke="#e2e8f0" strokeWidth="1" /><text x={lP - 10} y={t.y + 4} textAnchor="end" fontSize="11" fill="#64748b">{t.value}</text></g>))}
+          <line x1={lP} y1={tP + iH} x2={cW - rP} y2={tP + iH} stroke="#94a3b8" strokeWidth="1.5" />
           {months.map((month, mi) => {
-            const groupStartX = leftPad + mi * groupWidth + groupInnerPadding;
-            return (
-              <g key={month}>
-                {series.map((item, si) => {
-                  const value = item.values[mi] || 0;
-                  const barHeight = (value / maxValue) * innerHeight;
-                  const x = groupStartX + si * (barWidth + barGap);
-                  const y = topPad + innerHeight - barHeight;
-                  return (
-                    <g key={`${month}-${item.name}`}>
-                      <rect x={x} y={y} width={barWidth} height={barHeight} rx="3" fill={item.fill} />
-                      <text x={x + barWidth / 2} y={y - 6} textAnchor="middle" fontSize="11" fontWeight="700" fill={item.fill}>{value}</text>
-                    </g>
-                  );
-                })}
-                <text x={leftPad + mi * groupWidth + groupWidth / 2} y={topPad + innerHeight + 18} textAnchor="middle" fontSize="11" fill="#334155">{month.toUpperCase()}</text>
-              </g>
-            );
+            const gX = lP + mi * gW + gPad;
+            return (<g key={month}>{series.map((item, si) => { const v = item.values[mi] || 0; const bH = (v / max) * iH; const x = gX + si * (bW + bGap); const y = tP + iH - bH; return (<g key={`${month}-${item.name}`}><rect x={x} y={y} width={bW} height={bH} rx="3" fill={item.fill} /><text x={x + bW / 2} y={y - 6} textAnchor="middle" fontSize="11" fontWeight="700" fill={item.fill}>{v}</text></g>); })}<text x={lP + mi * gW + gW / 2} y={tP + iH + 18} textAnchor="middle" fontSize="11" fill="#334155">{month.toUpperCase()}</text></g>);
           })}
         </svg>
       </div>
       <div className="mt-4 flex flex-wrap gap-4">
-        {series.map((item) => (
-          <div key={item.name} className="flex items-center gap-2 text-sm text-slate-600">
-            <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: item.fill }} />
-            <span>{item.name}</span>
-          </div>
-        ))}
+        {series.map((item) => (<div key={item.name} className="flex items-center gap-2 text-sm text-slate-600"><span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: item.fill }} /><span>{item.name}</span></div>))}
       </div>
     </div>
   );
 }
 
-function HorizontalBarChart({ data, title, minWidth = 1100, labelWidth = 360 }: {
-  data: { label: string; value: number }[];
-  title: string;
-  minWidth?: number;
-  labelWidth?: number;
-}) {
-  const rowHeight = 42, topPad = 20, bottomPad = 20;
-  const chartWidth = minWidth;
-  const innerWidth = chartWidth - labelWidth - 40;
-  const chartHeight = Math.max(320, topPad + bottomPad + data.length * rowHeight);
-  const maxValue = Math.max(...data.map((d) => d.value), 1);
-  const tickValues = Array.from({ length: 5 }, (_, i) => Math.round((maxValue / 4) * i));
-
+function HorizontalBarChart({ data, title, minWidth = 1100, labelWidth = 360 }: { data: { label: string; value: number }[]; title: string; minWidth?: number; labelWidth?: number; }) {
+  const rH = 42, tP = 20, bP = 20, cW = minWidth;
+  const iW = cW - labelWidth - 40;
+  const cH = Math.max(320, tP + bP + data.length * rH);
+  const max = Math.max(...data.map((d) => d.value), 1);
+  const ticks = Array.from({ length: 5 }, (_, i) => Math.round((max / 4) * i));
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="mb-4 text-2xl font-semibold text-slate-700">{title}</h3>
       <div className="overflow-x-auto">
-        <svg width={chartWidth} height={chartHeight} style={{ minWidth: `${minWidth}px` }}>
-          {tickValues.map((tick, i) => {
-            const x = labelWidth + (tick / maxValue) * innerWidth;
-            return (
-              <g key={i}>
-                <line x1={x} y1={topPad} x2={x} y2={chartHeight - bottomPad} stroke="#e2e8f0" strokeWidth="1" />
-                <text x={x} y={topPad - 6} textAnchor="middle" fontSize="11" fill="#64748b">{tick}</text>
-              </g>
-            );
-          })}
-          {data.map((item, i) => {
-            const y = topPad + i * rowHeight;
-            const barWidth = (item.value / maxValue) * innerWidth;
-            return (
-              <g key={`${item.label}-${i}`}>
-                <text x={labelWidth - 12} y={y + 16} textAnchor="end" fontSize="12" fill="#334155">
-                  {truncateLabel(item.label, 44)}<title>{item.label}</title>
-                </text>
-                <rect x={labelWidth} y={y} width={barWidth} height={24} rx="4" fill="#4a83e7" />
-                <text x={labelWidth + barWidth + 8} y={y + 16} fontSize="12" fontWeight="700" fill="#2563eb">{item.value}</text>
-              </g>
-            );
-          })}
+        <svg width={cW} height={cH} style={{ minWidth: `${minWidth}px` }}>
+          {ticks.map((tick, i) => { const x = labelWidth + (tick / max) * iW; return (<g key={i}><line x1={x} y1={tP} x2={x} y2={cH - bP} stroke="#e2e8f0" strokeWidth="1" /><text x={x} y={tP - 6} textAnchor="middle" fontSize="11" fill="#64748b">{tick}</text></g>); })}
+          {data.map((item, i) => { const y = tP + i * rH; const bW = (item.value / max) * iW; return (<g key={`${item.label}-${i}`}><text x={labelWidth - 12} y={y + 16} textAnchor="end" fontSize="12" fill="#334155">{truncateLabel(item.label, 44)}<title>{item.label}</title></text><rect x={labelWidth} y={y} width={bW} height={24} rx="4" fill="#4a83e7" /><text x={labelWidth + bW + 8} y={y + 16} fontSize="12" fontWeight="700" fill="#2563eb">{item.value}</text></g>); })}
         </svg>
       </div>
     </div>
   );
 }
 
-// ── Excel / CSV export ────────────────────────────────────────────────────────
-function exportToExcel({
-  filename,
-  headers,
-  rows,
-}: {
-  filename: string;
-  headers: string[];
-  rows: (string | number)[][];
-}) {
-  const escape = (v: string | number) => {
-    const s = String(v ?? "");
-    return s.search(/[",\n]/) >= 0 ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [headers.map(escape).join(","), ...rows.map((r) => r.map(escape).join(","))];
-  const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${filename}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+// ── Analytics helpers ─────────────────────────────────────────────────────────
+function buildAnalyticsContext(rows: VelocityRow[]) {
+  if (!rows.length) return null;
+
+  // Sort all months available
+  const allMonths = Array.from(new Set(rows.map((r) => normalizeMonthLabel(r.month)))).sort(compareMonthLabelsAsc);
+  const recentMonths = allMonths.slice(-6);
+  const lastMonth = allMonths[allMonths.length - 1] ?? "";
+  const prevMonth = allMonths[allMonths.length - 2] ?? "";
+
+  // Per store/customer: monthly cases
+  const storeMap = new Map<string, { retailer: string; retailerArea: string; customer: string; monthCases: Record<string, number>; total: number }>();
+  for (const row of rows) {
+    const key = `${String(row.retailer || "").trim()}||${String(row.retailer_area || "").trim()}||${String(row.customer || "").trim()}`;
+    const month = normalizeMonthLabel(row.month);
+    if (!storeMap.has(key)) storeMap.set(key, { retailer: String(row.retailer || "").trim(), retailerArea: String(row.retailer_area || "").trim(), customer: String(row.customer || "").trim(), monthCases: {}, total: 0 });
+    const entry = storeMap.get(key)!;
+    entry.monthCases[month] = (entry.monthCases[month] || 0) + Number(row.cases || 0);
+    entry.total += Number(row.cases || 0);
+  }
+  const stores = Array.from(storeMap.values());
+
+  // Per retailer area: total stores, active last month, inactive 3+ months
+  const areaMap = new Map<string, { retailer: string; area: string; stores: typeof stores }>();
+  for (const s of stores) {
+    const key = `${s.retailer}||${s.retailerArea}`;
+    if (!areaMap.has(key)) areaMap.set(key, { retailer: s.retailer, area: s.retailerArea, stores: [] });
+    areaMap.get(key)!.stores.push(s);
+  }
+
+  const areaSummaries = Array.from(areaMap.values()).map(({ retailer, area, stores: aStores }) => {
+    const total = aStores.length;
+    const activeLastMonth = aStores.filter((s) => (s.monthCases[lastMonth] || 0) > 0).length;
+    const inactiveLastMonth = total - activeLastMonth;
+    const inactive3Plus = aStores.filter((s) => {
+      const last3 = recentMonths.slice(-3);
+      return last3.every((m) => (s.monthCases[m] || 0) === 0) && s.total > 0;
+    }).length;
+    const areaCases = aStores.reduce((sum, s) => sum + s.total, 0);
+    const lastMonthCases = aStores.reduce((sum, s) => sum + (s.monthCases[lastMonth] || 0), 0);
+    const prevMonthCases = aStores.reduce((sum, s) => sum + (s.monthCases[prevMonth] || 0), 0);
+    return { retailer, area, total, activeLastMonth, inactiveLastMonth, inactive3Plus, areaCases, lastMonthCases, prevMonthCases };
+  }).sort((a, b) => b.areaCases - a.areaCases);
+
+  // Win-back candidates: had volume, zero last 3 months
+  const winBackCandidates = stores.filter((s) => {
+    const last3 = recentMonths.slice(-3);
+    const hasOlderVolume = Object.entries(s.monthCases).some(([m, v]) => !last3.includes(m) && v > 0);
+    const zeroLast3 = last3.every((m) => (s.monthCases[m] || 0) === 0);
+    return hasOlderVolume && zeroLast3;
+  }).sort((a, b) => b.total - a.total);
+
+  // Declining: positive trend before, dropping last 2 months
+  const decliningStores = stores.filter((s) => {
+    const r = recentMonths;
+    if (r.length < 4) return false;
+    const prev2avg = ((s.monthCases[r[r.length - 4]] || 0) + (s.monthCases[r[r.length - 3]] || 0)) / 2;
+    const last2avg = ((s.monthCases[r[r.length - 2]] || 0) + (s.monthCases[r[r.length - 1]] || 0)) / 2;
+    return prev2avg > 5 && last2avg < prev2avg * 0.5;
+  }).sort((a, b) => b.total - a.total);
+
+  // High performers last month
+  const topLastMonth = stores.filter((s) => (s.monthCases[lastMonth] || 0) > 0)
+    .sort((a, b) => (b.monthCases[lastMonth] || 0) - (a.monthCases[lastMonth] || 0))
+    .slice(0, 10);
+
+  // Retailer totals
+  const retailerMap = new Map<string, number>();
+  for (const row of rows) {
+    const r = String(row.retailer || "").trim();
+    retailerMap.set(r, (retailerMap.get(r) || 0) + Number(row.cases || 0));
+  }
+  const retailerTotals = Array.from(retailerMap.entries()).sort((a, b) => b[1] - a[1]);
+
+  return { allMonths, recentMonths, lastMonth, prevMonth, areaSummaries, winBackCandidates, decliningStores, topLastMonth, retailerTotals, totalStores: stores.length, stores };
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+function buildAIPrompt(ctx: NonNullable<ReturnType<typeof buildAnalyticsContext>>, distributor: string) {
+  const top5areas = ctx.areaSummaries.slice(0, 5);
+  const top5winback = ctx.winBackCandidates.slice(0, 5);
+  const top5declining = ctx.decliningStores.slice(0, 5);
+
+  return `You are a senior CPG sales analyst reviewing distributor velocity and pullout data for ${distributor}.
+
+DATA SUMMARY (last 6 months: ${ctx.recentMonths.join(", ")}):
+
+RETAILER TOTALS (cases):
+${ctx.retailerTotals.map(([r, c]) => `- ${r}: ${c} cases`).join("\n")}
+
+TOP RETAILER AREAS (by total cases, showing store count & activity):
+${top5areas.map((a) => `- ${a.retailer} / ${a.area}: ${a.total} stores, ${a.activeLastMonth} pulled last month (${a.inactiveLastMonth} inactive), ${a.inactive3Plus} gone 3+ months, ${a.areaCases} total cases`).join("\n")}
+
+TOP ACTIVE STORES LAST MONTH (${ctx.lastMonth}):
+${ctx.topLastMonth.slice(0, 5).map((s) => `- ${s.customer} (${s.retailerArea}): ${s.monthCases[ctx.lastMonth]} cases`).join("\n")}
+
+WIN-BACK CANDIDATES (had volume, zero last 3 months):
+${top5winback.map((s) => `- ${s.customer} (${s.retailer} / ${s.retailerArea}): ${s.total} total cases historically, last 3 months = 0`).join("\n") || "None found"}
+
+DECLINING STORES (volume dropped 50%+ over last 2 months):
+${top5declining.map((s) => `- ${s.customer} (${s.retailerArea}): ${s.total} total cases`).join("\n") || "None found"}
+
+FULL AREA BREAKDOWN:
+${ctx.areaSummaries.map((a) => `${a.retailer} / ${a.area}: ${a.total} stores, ${a.activeLastMonth} active last month, ${a.inactive3Plus} gone 3+ months`).join("\n")}
+
+---
+
+Based on this data, produce a structured sales analysis with these exact sections. Be specific with store names and numbers. Do NOT be generic.
+
+## What Are the Biggest Things I Need to Know?
+3-5 sharp bullets. Specific numbers and store/area names.
+
+## Main Takeaways
+**Biggest Opportunities:** (bullet list)
+**Biggest Risks:** (bullet list)
+**Major Patterns:** (bullet list)
+
+## Priority Accounts
+A ranked list of the top accounts to follow up with. For each: name, area, why they matter, what signal makes them a priority. Label each as 🔴 High / 🟡 Medium / 🟢 Low priority.
+
+## Sales Strategy
+Specific guidance — store-level vs banner-level issue, distribution/reset problems, reactivation vs low-probability, who to contact (buyer/distributor/store). Be tactical.
+
+## Opportunity Segmentation
+Segment all notable accounts into:
+- 🔴 High-Priority Win-Backs
+- 🟡 Medium-Priority Watchlist
+- 🟢 New/Growth Opportunities
+- ⚫ Low-Priority / Low-Return
+
+## Recommended Next Actions
+Top 5 very practical next actions for a salesperson this week. Who to call, what to ask, what hypothesis to test.`;
+}
+
+// ── Analytics Tab Component ───────────────────────────────────────────────────
+function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loading: boolean; loadError: string; }) {
+  const [aiOutput, setAiOutput] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [distributor, setDistributor] = useState("KEHE");
+  const [generated, setGenerated] = useState(false);
+  const outputRef = useRef<HTMLDivElement>(null);
+
+  const ctx = useMemo(() => buildAnalyticsContext(rows), [rows]);
+
+  const runAnalysis = useCallback(async () => {
+    if (!ctx) return;
+    setAiLoading(true);
+    setAiOutput("");
+    setAiError("");
+    setGenerated(false);
+
+    try {
+      const prompt = buildAIPrompt(ctx, distributor);
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          stream: true,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+
+      if (!response.ok) throw new Error(`API error ${response.status}`);
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      if (!reader) throw new Error("No response stream");
+
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") continue;
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed?.delta?.text ?? parsed?.content?.[0]?.text ?? "";
+              if (delta) setAiOutput((prev) => prev + delta);
+            } catch {}
+          }
+        }
+      }
+      setGenerated(true);
+    } catch (err: any) {
+      setAiError(err?.message || "Analysis failed.");
+    } finally {
+      setAiLoading(false);
+    }
+  }, [ctx, distributor]);
+
+  // Render markdown-like output into styled sections
+  const renderOutput = (text: string) => {
+    if (!text) return null;
+    const lines = text.split("\n");
+    const elements: React.ReactNode[] = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (line.startsWith("## ")) {
+        elements.push(<h2 key={i} className="mt-8 mb-3 text-xl font-bold text-slate-900 border-b border-slate-200 pb-2">{line.slice(3)}</h2>);
+      } else if (line.startsWith("**") && line.endsWith("**")) {
+        elements.push(<p key={i} className="mt-4 mb-1 font-semibold text-slate-800">{line.replace(/\*\*/g, "")}</p>);
+      } else if (line.startsWith("**") && line.includes("**")) {
+        // inline bold e.g. "**Label:** content"
+        const parts = line.split("**");
+        elements.push(
+          <p key={i} className="mt-3 mb-1 text-slate-700">
+            {parts.map((p, pi) => pi % 2 === 1 ? <strong key={pi}>{p}</strong> : p)}
+          </p>
+        );
+      } else if (line.startsWith("- ") || line.startsWith("• ")) {
+        const content = line.slice(2);
+        // detect priority emoji prefix
+        const isHigh = content.startsWith("🔴");
+        const isMed = content.startsWith("🟡");
+        const isLow = content.startsWith("🟢");
+        const isNone = content.startsWith("⚫");
+        const bg = isHigh ? "bg-red-50 border-red-200" : isMed ? "bg-amber-50 border-amber-200" : isLow ? "bg-emerald-50 border-emerald-200" : isNone ? "bg-slate-50 border-slate-200" : "bg-white border-slate-100";
+        elements.push(
+          <div key={i} className={`flex gap-2 rounded-xl border px-4 py-2.5 mb-2 text-sm text-slate-700 ${bg}`}>
+            <span className="shrink-0 mt-0.5 text-slate-400">•</span>
+            <span>{content}</span>
+          </div>
+        );
+      } else if (line.trim() === "") {
+        // skip empty
+      } else {
+        elements.push(<p key={i} className="text-sm text-slate-700 leading-relaxed mb-2">{line}</p>);
+      }
+      i++;
+    }
+    return elements;
+  };
+
+  // Quick stat cards from ctx
+  const statCards = useMemo(() => {
+    if (!ctx) return [];
+    const winBackCount = ctx.winBackCandidates.length;
+    const decliningCount = ctx.decliningStores.length;
+    const top = ctx.areaSummaries[0];
+    const totalActive = ctx.areaSummaries.reduce((s, a) => s + a.activeLastMonth, 0);
+    const totalStores = ctx.areaSummaries.reduce((s, a) => s + a.total, 0);
+    const pct = totalStores > 0 ? Math.round((totalActive / totalStores) * 100) : 0;
+    return [
+      { label: "Total Stores", value: String(ctx.totalStores), sub: "across all areas", color: "bg-blue-50 text-blue-700 border-blue-200" },
+      { label: "Active Last Month", value: `${totalActive} / ${totalStores}`, sub: `${pct}% pull rate`, color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+      { label: "Win-Back Candidates", value: String(winBackCount), sub: "zero last 3 months, had prior volume", color: "bg-amber-50 text-amber-700 border-amber-200" },
+      { label: "Declining Stores", value: String(decliningCount), sub: "volume dropped 50%+", color: "bg-red-50 text-red-700 border-red-200" },
+      { label: "Top Area", value: top ? top.area : "—", sub: top ? `${top.areaCases} cases, ${top.activeLastMonth}/${top.total} active` : "", color: "bg-purple-50 text-purple-700 border-purple-200" },
+    ];
+  }, [ctx]);
+
+  // Area breakdown table
+  const areaTable = useMemo(() => {
+    if (!ctx) return null;
+    return ctx.areaSummaries.slice(0, 20);
+  }, [ctx]);
+
+  if (loading) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">Loading data for analysis...</div>;
+  if (loadError) return <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>;
+  if (!ctx) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">No data available for analysis.</div>;
+
+  return (
+    <div className="space-y-6">
+      {/* Header card */}
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h2 className="text-2xl font-bold text-slate-900">Sales Analytics</h2>
+            <p className="mt-1 text-sm text-slate-500">AI-powered account analysis across {ctx.allMonths.length} months of velocity data</p>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">Distributor</label>
+              <input type="text" value={distributor} onChange={(e) => setDistributor(e.target.value)}
+                className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400 w-40" />
+            </div>
+            <button type="button" onClick={runAnalysis} disabled={aiLoading}
+              className="h-11 flex items-center gap-2 rounded-2xl bg-slate-900 px-6 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed">
+              {aiLoading ? (
+                <><svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Analyzing...</>
+              ) : (
+                <><svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>{generated ? "Re-run Analysis" : "Run AI Analysis"}</>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        {statCards.map((card) => (
+          <div key={card.label} className={`rounded-3xl border p-5 shadow-sm ${card.color}`}>
+            <div className="text-2xl font-bold">{card.value}</div>
+            <div className="mt-1 text-sm font-semibold">{card.label}</div>
+            <div className="mt-0.5 text-xs opacity-75">{card.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Area breakdown table */}
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h3 className="mb-4 text-lg font-semibold text-slate-900">Retailer Area Breakdown <span className="text-sm font-normal text-slate-500 ml-2">(last month: {ctx.lastMonth})</span></h3>
+        <div className="overflow-auto rounded-2xl border border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-4 py-3 text-left font-semibold text-slate-700">Retailer</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-700">Area</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-700">Total Stores</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-700">Active Last Month</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-700">Inactive Last Month</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-700">Gone 3+ Months</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-700">Pull Rate</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-700">Total Cases</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(areaTable ?? []).map((row, i) => {
+                const pullRate = row.total > 0 ? Math.round((row.activeLastMonth / row.total) * 100) : 0;
+                const rateColor = pullRate >= 70 ? "text-emerald-600 font-semibold" : pullRate >= 40 ? "text-amber-600 font-semibold" : "text-red-600 font-semibold";
+                return (
+                  <tr key={i} className="border-t border-slate-200 hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3 text-slate-700">{row.retailer}</td>
+                    <td className="px-4 py-3 text-slate-700">{row.area}</td>
+                    <td className="px-4 py-3 text-right text-slate-700">{row.total}</td>
+                    <td className="px-4 py-3 text-right text-emerald-700 font-medium">{row.activeLastMonth}</td>
+                    <td className="px-4 py-3 text-right text-red-600">{row.inactiveLastMonth}</td>
+                    <td className="px-4 py-3 text-right">
+                      {row.inactive3Plus > 0 ? <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">{row.inactive3Plus}</span> : <span className="text-slate-400">0</span>}
+                    </td>
+                    <td className={`px-4 py-3 text-right ${rateColor}`}>{pullRate}%</td>
+                    <td className="px-4 py-3 text-right font-semibold text-slate-900">{row.areaCases.toLocaleString()}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Win-back candidates */}
+      {ctx.winBackCandidates.length > 0 && (
+        <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
+          <h3 className="mb-1 text-lg font-semibold text-amber-900">🔁 Win-Back Candidates <span className="text-sm font-normal text-amber-700 ml-1">({ctx.winBackCandidates.length} stores)</span></h3>
+          <p className="mb-4 text-sm text-amber-700">These stores had meaningful historical volume but have not pulled in 3+ months.</p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {ctx.winBackCandidates.slice(0, 9).map((s, i) => (
+              <div key={i} className="rounded-2xl border border-amber-200 bg-white p-4">
+                <div className="text-sm font-semibold text-slate-800 leading-snug">{s.customer}</div>
+                <div className="mt-1 text-xs text-slate-500">{s.retailer} · {s.retailerArea}</div>
+                <div className="mt-2 text-lg font-bold text-amber-700">{s.total} <span className="text-xs font-normal text-slate-500">historical cases</span></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Declining stores */}
+      {ctx.decliningStores.length > 0 && (
+        <div className="rounded-3xl border border-red-200 bg-red-50 p-6 shadow-sm">
+          <h3 className="mb-1 text-lg font-semibold text-red-900">📉 Declining Stores <span className="text-sm font-normal text-red-700 ml-1">({ctx.decliningStores.length} stores)</span></h3>
+          <p className="mb-4 text-sm text-red-700">Volume dropped 50%+ comparing last 2 months to prior 2 months.</p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {ctx.decliningStores.slice(0, 6).map((s, i) => (
+              <div key={i} className="rounded-2xl border border-red-200 bg-white p-4">
+                <div className="text-sm font-semibold text-slate-800 leading-snug">{s.customer}</div>
+                <div className="mt-1 text-xs text-slate-500">{s.retailer} · {s.retailerArea}</div>
+                <div className="mt-2 text-lg font-bold text-red-600">{s.total} <span className="text-xs font-normal text-slate-500">total cases</span></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* AI Analysis output */}
+      {(aiLoading || aiOutput || aiError) && (
+        <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm" ref={outputRef}>
+          <div className="flex items-center gap-3 mb-6">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900">
+              <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+            </div>
+            <div>
+              <div className="font-semibold text-slate-900">AI Sales Analysis — {distributor}</div>
+              <div className="text-xs text-slate-500">{ctx.recentMonths[0]} – {ctx.lastMonth}</div>
+            </div>
+            {aiLoading && <div className="ml-auto flex items-center gap-2 text-sm text-slate-400"><svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Streaming...</div>}
+          </div>
+          {aiError && <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{aiError}</div>}
+          {aiOutput && <div className="space-y-1">{renderOutput(aiOutput)}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function KeheDashboardView() {
   const [activeTab, setActiveTab] = useState<TabKey>("analytics");
   const [velocitySubTab, setVelocitySubTab] = useState<VelocitySubTabKey>("best-selling-store");
@@ -431,12 +650,9 @@ export default function KeheDashboardView() {
 
   useEffect(() => {
     const load = async () => {
-      setLoading(true);
-      setLoadError("");
+      setLoading(true); setLoadError("");
       try {
-        const pageSize = 1000;
-        let from = 0;
-        let all: VelocityRow[] = [];
+        const pageSize = 1000; let from = 0; let all: VelocityRow[] = [];
         while (true) {
           const { data, error } = await supabase.from("kehe_velocity").select("*").range(from, from + pageSize - 1);
           if (error) throw error;
@@ -446,21 +662,14 @@ export default function KeheDashboardView() {
           from += pageSize;
         }
         setRows(all);
-      } catch (err: any) {
-        setLoadError(err?.message || "Failed to load KEHE velocity data.");
-      } finally {
-        setLoading(false);
-      }
+      } catch (err: any) { setLoadError(err?.message || "Failed to load KEHE velocity data."); }
+      finally { setLoading(false); }
     };
     load();
   }, []);
 
-  const retailerOptions = useMemo(() => [
-    "All Retailers",
-    ...Array.from(new Set(rows.map((r) => String(r.retailer || "").replace(/\u00a0/g, " ").trim()).filter(Boolean))).sort(),
-  ], [rows]);
+  const retailerOptions = useMemo(() => ["All Retailers", ...Array.from(new Set(rows.map((r) => String(r.retailer || "").replace(/\u00a0/g, " ").trim()).filter(Boolean))).sort()], [rows]);
 
-  // selected months
   const bestStoreSelectedMonths = useMemo(() => {
     if (bestStorePeriodMode === "lastMonth") return [normalizeMonthLabel(getLastMonthLabel())];
     if (bestStorePeriodMode === "past12Months") return buildPastNMonthsRange(12).map(normalizeMonthLabel);
@@ -489,142 +698,62 @@ export default function KeheDashboardView() {
     return buildMonthRange(pulloutFromMonth, pulloutToMonth).map(normalizeMonthLabel);
   }, [pulloutPeriodMode, pulloutFromMonth, pulloutToMonth]);
 
-  // velocity data
-  const bestStoreRows = useMemo(() => rows.filter((row) => {
-    const rowMonth = normalizeMonthLabel(row.month);
-    const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
-    return bestStoreSelectedMonths.includes(rowMonth) &&
-      (retailerFilter === "All Retailers" || rowRetailer === retailerFilter);
-  }), [rows, bestStoreSelectedMonths, retailerFilter]);
+  const bestStoreRows = useMemo(() => rows.filter((row) => bestStoreSelectedMonths.includes(normalizeMonthLabel(row.month)) && (retailerFilter === "All Retailers" || String(row.retailer || "").replace(/\u00a0/g, " ").trim() === retailerFilter)), [rows, bestStoreSelectedMonths, retailerFilter]);
+  const topSellingStores = useMemo(() => { const g = new Map<string, number>(); for (const r of bestStoreRows) { if (!r.customer) continue; g.set(r.customer, (g.get(r.customer) || 0) + Number(r.cases || 0)); } return Array.from(g.entries()).map(([c, t]) => ({ customer: c, totalCases: t })).sort((a, b) => b.totalCases - a.totalCases).slice(0, topN); }, [bestStoreRows, topN]);
 
-  const topSellingStores = useMemo(() => {
-    const grouped = new Map<string, number>();
-    for (const row of bestStoreRows) {
-      if (!row.customer) continue;
-      grouped.set(row.customer, (grouped.get(row.customer) || 0) + Number(row.cases || 0));
-    }
-    return Array.from(grouped.entries())
-      .map(([customer, totalCases]) => ({ customer, totalCases }))
-      .sort((a, b) => b.totalCases - a.totalCases)
-      .slice(0, topN);
-  }, [bestStoreRows, topN]);
-
-  const monthlyCasesRows = useMemo(() =>
-    rows.filter((row) => monthlyCasesSelectedMonths.includes(normalizeMonthLabel(row.month))),
-    [rows, monthlyCasesSelectedMonths]);
-
+  const monthlyCasesRows = useMemo(() => rows.filter((r) => monthlyCasesSelectedMonths.includes(normalizeMonthLabel(r.month))), [rows, monthlyCasesSelectedMonths]);
   const monthlyCasesSeries = useMemo(() => {
-    const sortedMonths = [...monthlyCasesSelectedMonths].sort(compareMonthLabelsAsc)
-      .filter((m) => monthlyCasesRows.some((r) => normalizeMonthLabel(r.month) === m));
-    const retailerNames = ["Kroger", "Fresh Thyme", "INFRA & Others"];
+    const sm = [...monthlyCasesSelectedMonths].sort(compareMonthLabelsAsc).filter((m) => monthlyCasesRows.some((r) => normalizeMonthLabel(r.month) === m));
+    const rn = ["Kroger", "Fresh Thyme", "INFRA & Others"];
     const colors: Record<string, string> = { Kroger: "#123f73", "Fresh Thyme": "#f59e0b", "INFRA & Others": "#60c7df" };
-    const grouped: Record<string, Record<string, number>> = {};
-    for (const m of sortedMonths) { grouped[m] = {}; for (const r of retailerNames) grouped[m][r] = 0; }
-    for (const row of monthlyCasesRows) {
-      const m = normalizeMonthLabel(row.month);
-      const r = String(row.retailer || "").replace(/\u00a0/g, " ").trim() || "Unknown";
-      if (!grouped[m]) grouped[m] = {};
-      grouped[m][r] = (grouped[m][r] || 0) + Number(row.cases || 0);
-    }
-    return { months: sortedMonths, series: retailerNames.map((r) => ({ name: r, fill: colors[r] || "#4a83e7", values: sortedMonths.map((m) => grouped[m]?.[r] || 0) })) };
+    const g: Record<string, Record<string, number>> = {};
+    for (const m of sm) { g[m] = {}; for (const r of rn) g[m][r] = 0; }
+    for (const row of monthlyCasesRows) { const m = normalizeMonthLabel(row.month); const r = String(row.retailer || "").replace(/\u00a0/g, " ").trim() || "Unknown"; if (!g[m]) g[m] = {}; g[m][r] = (g[m][r] || 0) + Number(row.cases || 0); }
+    return { months: sm, series: rn.map((r) => ({ name: r, fill: colors[r] || "#4a83e7", values: sm.map((m) => g[m]?.[r] || 0) })) };
   }, [monthlyCasesRows, monthlyCasesSelectedMonths]);
 
-  const avgCakesRows = useMemo(() =>
-    rows.filter((row) => avgCakesSelectedMonths.includes(normalizeMonthLabel(row.month))),
-    [rows, avgCakesSelectedMonths]);
-
+  const avgCakesRows = useMemo(() => rows.filter((r) => avgCakesSelectedMonths.includes(normalizeMonthLabel(r.month))), [rows, avgCakesSelectedMonths]);
   const averageCakesPerWeekSeries = useMemo(() => {
-    const sortedMonths = [...avgCakesSelectedMonths].sort(compareMonthLabelsAsc)
-      .filter((m) => avgCakesRows.some((r) => normalizeMonthLabel(r.month) === m));
-    const cakeNames = Array.from(new Set(avgCakesRows.map((r) => getCakeSeriesName(r.description)).filter(Boolean)))
-      .sort((a, b) => { const w = getCakeSortWeight(a) - getCakeSortWeight(b); return w !== 0 ? w : a.localeCompare(b); });
-    const palette = ["#123f73", "#f59e0b", "#60c7df", "#7c3aed", "#10b981", "#ef4444", "#8b5cf6", "#14b8a6", "#f97316", "#3b82f6"];
-    const grouped: Record<string, Record<string, number>> = {};
-    for (const m of sortedMonths) { grouped[m] = {}; for (const c of cakeNames) grouped[m][c] = 0; }
-    for (const row of avgCakesRows) {
-      const m = normalizeMonthLabel(row.month);
-      const c = getCakeSeriesName(row.description);
-      if (!c || !grouped[m]) continue;
-      grouped[m][c] = (grouped[m][c] || 0) + Number(row.eaches || 0);
-    }
-    return { months: sortedMonths, series: cakeNames.map((c, i) => ({ name: c, fill: palette[i % palette.length], values: sortedMonths.map((m) => Number(((grouped[m]?.[c] || 0) / 4).toFixed(1))) })) };
+    const sm = [...avgCakesSelectedMonths].sort(compareMonthLabelsAsc).filter((m) => avgCakesRows.some((r) => normalizeMonthLabel(r.month) === m));
+    const cakes = Array.from(new Set(avgCakesRows.map((r) => getCakeSeriesName(r.description)).filter(Boolean))).sort((a, b) => { const w = getCakeSortWeight(a) - getCakeSortWeight(b); return w !== 0 ? w : a.localeCompare(b); });
+    const pal = ["#123f73", "#f59e0b", "#60c7df", "#7c3aed", "#10b981", "#ef4444", "#8b5cf6", "#14b8a6", "#f97316", "#3b82f6"];
+    const g: Record<string, Record<string, number>> = {};
+    for (const m of sm) { g[m] = {}; for (const c of cakes) g[m][c] = 0; }
+    for (const row of avgCakesRows) { const m = normalizeMonthLabel(row.month); const c = getCakeSeriesName(row.description); if (!c || !g[m]) continue; g[m][c] = (g[m][c] || 0) + Number(row.eaches || 0); }
+    return { months: sm, series: cakes.map((c, i) => ({ name: c, fill: pal[i % pal.length], values: sm.map((m) => Number(((g[m]?.[c] || 0) / 4).toFixed(1))) })) };
   }, [avgCakesRows, avgCakesSelectedMonths]);
 
-  // pullout base rows
-  const pulloutRows = useMemo(() => rows.filter((row) => {
-    const rowMonth = normalizeMonthLabel(row.month);
-    const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
-    return pulloutSelectedMonths.includes(rowMonth) &&
-      (pulloutRetailerFilter === "All Retailers" || rowRetailer === pulloutRetailerFilter);
-  }), [rows, pulloutSelectedMonths, pulloutRetailerFilter]);
-
-  const customerOptions = useMemo(() => [
-    "All Customers",
-    ...Array.from(new Set(pulloutRows.map((r) => String(r.customer || "").trim()).filter(Boolean))).sort(),
-  ], [pulloutRows]);
-
+  const pulloutRows = useMemo(() => rows.filter((row) => pulloutSelectedMonths.includes(normalizeMonthLabel(row.month)) && (pulloutRetailerFilter === "All Retailers" || String(row.retailer || "").replace(/\u00a0/g, " ").trim() === pulloutRetailerFilter)), [rows, pulloutSelectedMonths, pulloutRetailerFilter]);
+  const customerOptions = useMemo(() => ["All Customers", ...Array.from(new Set(pulloutRows.map((r) => String(r.customer || "").trim()).filter(Boolean))).sort()], [pulloutRows]);
   useEffect(() => { setPulloutCustomerFilter("All Customers"); }, [pulloutRetailerFilter]);
   useEffect(() => { setPulloutSearchQuery(""); }, [pulloutSubTab]);
 
-  // by area table
   const pulloutByAreaTable = useMemo(() => {
-    const monthColumns = [...pulloutSelectedMonths].sort(compareMonthLabelsAsc);
-    const grouped = new Map<string, { retailer: string; retailer_area: string; months: Record<string, number>; total: number }>();
+    const mc = [...pulloutSelectedMonths].sort(compareMonthLabelsAsc);
+    const g = new Map<string, { retailer: string; retailer_area: string; months: Record<string, number>; total: number }>();
     for (const row of pulloutRows) {
-      const month = normalizeMonthLabel(row.month);
-      const retailer = String(row.retailer || "").trim() || "Unknown";
-      const retailerArea = String(row.retailer_area || "").trim() || "Unknown";
-      const key = `${retailer}__${retailerArea}`;
-      if (!grouped.has(key)) grouped.set(key, { retailer, retailer_area: retailerArea, months: {}, total: 0 });
-      const item = grouped.get(key)!;
-      item.months[month] = (item.months[month] || 0) + Number(row.cases || 0);
-      item.total += Number(row.cases || 0);
+      const month = normalizeMonthLabel(row.month), retailer = String(row.retailer || "").trim() || "Unknown", ra = String(row.retailer_area || "").trim() || "Unknown", key = `${retailer}__${ra}`;
+      if (!g.has(key)) g.set(key, { retailer, retailer_area: ra, months: {}, total: 0 });
+      const item = g.get(key)!; item.months[month] = (item.months[month] || 0) + Number(row.cases || 0); item.total += Number(row.cases || 0);
     }
-    return { monthColumns, rows: Array.from(grouped.values()).sort((a, b) => b.total - a.total) };
+    return { monthColumns: mc, rows: Array.from(g.values()).sort((a, b) => b.total - a.total) };
   }, [pulloutRows, pulloutSelectedMonths]);
 
-  // by store table
   const pulloutByStoreTable = useMemo(() => {
-    const monthColumns = [...pulloutSelectedMonths].sort(compareMonthLabelsAsc);
-    const filtered = pulloutRows.filter((row) => {
-      const customer = String(row.customer || "").trim();
-      return pulloutCustomerFilter === "All Customers" || customer === pulloutCustomerFilter;
-    });
-    const grouped = new Map<string, { retailer: string; retailer_area: string; customer: string; months: Record<string, number>; total: number }>();
+    const mc = [...pulloutSelectedMonths].sort(compareMonthLabelsAsc);
+    const filtered = pulloutRows.filter((r) => pulloutCustomerFilter === "All Customers" || String(r.customer || "").trim() === pulloutCustomerFilter);
+    const g = new Map<string, { retailer: string; retailer_area: string; customer: string; months: Record<string, number>; total: number }>();
     for (const row of filtered) {
-      const month = normalizeMonthLabel(row.month);
-      const retailer = String(row.retailer || "").trim() || "Unknown";
-      const retailerArea = String(row.retailer_area || "").trim() || "Unknown";
-      const customer = String(row.customer || "").trim() || "Unknown";
-      const key = `${retailer}__${retailerArea}__${customer}`;
-      if (!grouped.has(key)) grouped.set(key, { retailer, retailer_area: retailerArea, customer, months: {}, total: 0 });
-      const item = grouped.get(key)!;
-      item.months[month] = (item.months[month] || 0) + Number(row.cases || 0);
-      item.total += Number(row.cases || 0);
+      const month = normalizeMonthLabel(row.month), retailer = String(row.retailer || "").trim() || "Unknown", ra = String(row.retailer_area || "").trim() || "Unknown", cust = String(row.customer || "").trim() || "Unknown", key = `${retailer}__${ra}__${cust}`;
+      if (!g.has(key)) g.set(key, { retailer, retailer_area: ra, customer: cust, months: {}, total: 0 });
+      const item = g.get(key)!; item.months[month] = (item.months[month] || 0) + Number(row.cases || 0); item.total += Number(row.cases || 0);
     }
-    return { monthColumns, rows: Array.from(grouped.values()).sort((a, b) => b.total - a.total) };
+    return { monthColumns: mc, rows: Array.from(g.values()).sort((a, b) => b.total - a.total) };
   }, [pulloutRows, pulloutSelectedMonths, pulloutCustomerFilter]);
 
-  // search-filtered rows
-  const filteredByAreaRows = useMemo(() => {
-    const q = pulloutSearchQuery.trim().toLowerCase();
-    if (!q) return pulloutByAreaTable.rows;
-    return pulloutByAreaTable.rows.filter((r) =>
-      r.retailer.toLowerCase().includes(q) || r.retailer_area.toLowerCase().includes(q)
-    );
-  }, [pulloutByAreaTable.rows, pulloutSearchQuery]);
+  const filteredByAreaRows = useMemo(() => { const q = pulloutSearchQuery.trim().toLowerCase(); if (!q) return pulloutByAreaTable.rows; return pulloutByAreaTable.rows.filter((r) => r.retailer.toLowerCase().includes(q) || r.retailer_area.toLowerCase().includes(q)); }, [pulloutByAreaTable.rows, pulloutSearchQuery]);
+  const filteredByStoreRows = useMemo(() => { const q = pulloutSearchQuery.trim().toLowerCase(); if (!q) return pulloutByStoreTable.rows; return pulloutByStoreTable.rows.filter((r) => r.retailer.toLowerCase().includes(q) || r.retailer_area.toLowerCase().includes(q) || r.customer.toLowerCase().includes(q)); }, [pulloutByStoreTable.rows, pulloutSearchQuery]);
 
-  const filteredByStoreRows = useMemo(() => {
-    const q = pulloutSearchQuery.trim().toLowerCase();
-    if (!q) return pulloutByStoreTable.rows;
-    return pulloutByStoreTable.rows.filter((r) =>
-      r.retailer.toLowerCase().includes(q) ||
-      r.retailer_area.toLowerCase().includes(q) ||
-      r.customer.toLowerCase().includes(q)
-    );
-  }, [pulloutByStoreTable.rows, pulloutSearchQuery]);
-
-  // ── Render helpers ──────────────────────────────────────────────────────────
   const renderTabButtons = () => (
     <div className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="flex flex-wrap gap-2">
@@ -640,29 +769,18 @@ export default function KeheDashboardView() {
 
   const renderVelocitySubTabs = () => (
     <div className="flex flex-wrap gap-2">
-      {([
-        ["best-selling-store", "Best Selling Store"],
-        ["total-cases-per-month", "Total Cases Per Month"],
-        ["overall-average-cakes-per-week", "Overall: Average Cakes Per Week"],
-      ] as [VelocitySubTabKey, string][]).map(([key, label]) => (
+      {([["best-selling-store", "Best Selling Store"], ["total-cases-per-month", "Total Cases Per Month"], ["overall-average-cakes-per-week", "Overall: Average Cakes Per Week"]] as [VelocitySubTabKey, string][]).map(([key, label]) => (
         <button key={key} type="button" onClick={() => setVelocitySubTab(key)}
-          className={`rounded-2xl px-4 py-2 text-sm font-medium transition ${velocitySubTab === key ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
-          {label}
-        </button>
+          className={`rounded-2xl px-4 py-2 text-sm font-medium transition ${velocitySubTab === key ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>{label}</button>
       ))}
     </div>
   );
 
   const renderPulloutSubTabs = () => (
     <div className="flex flex-wrap gap-2">
-      {([
-        ["by-retailer-area", "Monthly Cases by Retailer Area"],
-        ["by-retailer-store", "Monthly Cases by Retailer Store"],
-      ] as [PulloutSubTabKey, string][]).map(([key, label]) => (
+      {([["by-retailer-area", "Monthly Cases by Retailer Area"], ["by-retailer-store", "Monthly Cases by Retailer Store"]] as [PulloutSubTabKey, string][]).map(([key, label]) => (
         <button key={key} type="button" onClick={() => setPulloutSubTab(key)}
-          className={`rounded-2xl px-4 py-2 text-sm font-medium transition ${pulloutSubTab === key ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
-          {label}
-        </button>
+          className={`rounded-2xl px-4 py-2 text-sm font-medium transition ${pulloutSubTab === key ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>{label}</button>
       ))}
     </div>
   );
@@ -670,211 +788,58 @@ export default function KeheDashboardView() {
   const renderVelocityFilters = () => {
     if (velocitySubTab === "best-selling-store") return (
       <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
-        <div className="min-w-[160px]">
-          <label className="mb-1 block text-sm font-medium text-slate-700">Retailer</label>
-          <select value={retailerFilter} onChange={(e) => setRetailerFilter(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
-            {retailerOptions.map((o) => <option key={o}>{o}</option>)}
-          </select>
-        </div>
-        <div className="min-w-[140px]">
-          <label className="mb-1 block text-sm font-medium text-slate-700">Show Top</label>
-          <select value={topN} onChange={(e) => setTopN(Number(e.target.value) as TopN)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
-            {[5, 10, 15, 20].map((n) => <option key={n}>{n}</option>)}
-          </select>
-        </div>
-        <div className="min-w-[180px]">
-          <label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label>
-          <select value={bestStorePeriodMode} onChange={(e) => setBestStorePeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
-            <option value="lastMonth">Last Month</option>
-            <option value="past6Months">Past 6 Months</option>
-            <option value="past12Months">Past 12 Months</option>
-            <option value="custom">Custom</option>
-          </select>
-        </div>
-        {bestStorePeriodMode === "custom" && <>
-          <div className="min-w-[180px]">
-            <label className="mb-1 block text-sm font-medium text-slate-700">From</label>
-            <input type="month" value={bestStoreFromMonth} onChange={(e) => setBestStoreFromMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" />
-          </div>
-          <div className="min-w-[180px]">
-            <label className="mb-1 block text-sm font-medium text-slate-700">To</label>
-            <input type="month" value={bestStoreToMonth} onChange={(e) => setBestStoreToMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" />
-          </div>
-        </>}
+        <div className="min-w-[160px]"><label className="mb-1 block text-sm font-medium text-slate-700">Retailer</label><select value={retailerFilter} onChange={(e) => setRetailerFilter(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">{retailerOptions.map((o) => <option key={o}>{o}</option>)}</select></div>
+        <div className="min-w-[140px]"><label className="mb-1 block text-sm font-medium text-slate-700">Show Top</label><select value={topN} onChange={(e) => setTopN(Number(e.target.value) as TopN)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">{[5, 10, 15, 20].map((n) => <option key={n}>{n}</option>)}</select></div>
+        <div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label><select value={bestStorePeriodMode} onChange={(e) => setBestStorePeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"><option value="lastMonth">Last Month</option><option value="past6Months">Past 6 Months</option><option value="past12Months">Past 12 Months</option><option value="custom">Custom</option></select></div>
+        {bestStorePeriodMode === "custom" && <><div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">From</label><input type="month" value={bestStoreFromMonth} onChange={(e) => setBestStoreFromMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div><div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">To</label><input type="month" value={bestStoreToMonth} onChange={(e) => setBestStoreToMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div></>}
       </div>
     );
-
     if (velocitySubTab === "total-cases-per-month") return (
       <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
-        <div className="min-w-[180px]">
-          <label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label>
-          <select value={monthlyCasesPeriodMode} onChange={(e) => setMonthlyCasesPeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
-            <option value="past6Months">Past 6 Months</option>
-            <option value="past12Months">Past 12 Months</option>
-            <option value="custom">Custom</option>
-          </select>
-        </div>
-        {monthlyCasesPeriodMode === "custom" && <>
-          <div className="min-w-[180px]">
-            <label className="mb-1 block text-sm font-medium text-slate-700">From</label>
-            <input type="month" value={monthlyCasesFromMonth} onChange={(e) => setMonthlyCasesFromMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" />
-          </div>
-          <div className="min-w-[180px]">
-            <label className="mb-1 block text-sm font-medium text-slate-700">To</label>
-            <input type="month" value={monthlyCasesToMonth} onChange={(e) => setMonthlyCasesToMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" />
-          </div>
-        </>}
+        <div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label><select value={monthlyCasesPeriodMode} onChange={(e) => setMonthlyCasesPeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"><option value="past6Months">Past 6 Months</option><option value="past12Months">Past 12 Months</option><option value="custom">Custom</option></select></div>
+        {monthlyCasesPeriodMode === "custom" && <><div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">From</label><input type="month" value={monthlyCasesFromMonth} onChange={(e) => setMonthlyCasesFromMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div><div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">To</label><input type="month" value={monthlyCasesToMonth} onChange={(e) => setMonthlyCasesToMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div></>}
       </div>
     );
-
     return (
       <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
-        <div className="min-w-[180px]">
-          <label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label>
-          <select value={avgCakesPeriodMode} onChange={(e) => setAvgCakesPeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
-            <option value="past6Months">Past 6 Months</option>
-            <option value="past12Months">Past 12 Months</option>
-            <option value="custom">Custom</option>
-          </select>
-        </div>
-        {avgCakesPeriodMode === "custom" && <>
-          <div className="min-w-[180px]">
-            <label className="mb-1 block text-sm font-medium text-slate-700">From</label>
-            <input type="month" value={avgCakesFromMonth} onChange={(e) => setAvgCakesFromMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" />
-          </div>
-          <div className="min-w-[180px]">
-            <label className="mb-1 block text-sm font-medium text-slate-700">To</label>
-            <input type="month" value={avgCakesToMonth} onChange={(e) => setAvgCakesToMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" />
-          </div>
-        </>}
+        <div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label><select value={avgCakesPeriodMode} onChange={(e) => setAvgCakesPeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"><option value="past6Months">Past 6 Months</option><option value="past12Months">Past 12 Months</option><option value="custom">Custom</option></select></div>
+        {avgCakesPeriodMode === "custom" && <><div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">From</label><input type="month" value={avgCakesFromMonth} onChange={(e) => setAvgCakesFromMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div><div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">To</label><input type="month" value={avgCakesToMonth} onChange={(e) => setAvgCakesToMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div></>}
       </div>
     );
   };
 
-  // Pullout filter bar — includes search bar inline
   const renderPulloutFilters = () => (
     <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
-      {/* Search bar — now in the filter header */}
-      <div>
-        <label className="mb-1 block text-sm font-medium text-slate-700">Search</label>
-        <SearchBar
-          value={pulloutSearchQuery}
-          onChange={setPulloutSearchQuery}
-          placeholder={pulloutSubTab === "by-retailer-area" ? "Search retailer or area..." : "Search retailer, area or customer..."}
-        />
-      </div>
-
-      <div className="min-w-[180px]">
-        <label className="mb-1 block text-sm font-medium text-slate-700">Retailer</label>
-        <select value={pulloutRetailerFilter} onChange={(e) => setPulloutRetailerFilter(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
-          {retailerOptions.map((o) => <option key={o}>{o}</option>)}
-        </select>
-      </div>
-
-      {/* Customer filter — only on by-retailer-store */}
-      {pulloutSubTab === "by-retailer-store" && (
-        <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">Customer</label>
-          <SearchableSelect
-            options={customerOptions}
-            value={pulloutCustomerFilter}
-            onChange={setPulloutCustomerFilter}
-            placeholder="Search customer..."
-          />
-        </div>
-      )}
-
-      {/* Date filter — only shows From/To when Custom is selected */}
-      <div className="min-w-[180px]">
-        <label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label>
-        <select
-          value={pulloutPeriodMode}
-          onChange={(e) => setPulloutPeriodMode(e.target.value as PeriodMode)}
-          className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-        >
-          <option value="past6Months">Past 6 Months</option>
-          <option value="lastMonth">Last Month</option>
-          <option value="past12Months">Past 12 Months</option>
-          <option value="custom">Custom</option>
-        </select>
-      </div>
-
-      {/* From / To only appear when Custom is selected */}
-      {pulloutPeriodMode === "custom" && (
-        <>
-          <div className="min-w-[180px]">
-            <label className="mb-1 block text-sm font-medium text-slate-700">From</label>
-            <input
-              type="month"
-              value={pulloutFromMonth}
-              onChange={(e) => setPulloutFromMonth(e.target.value)}
-              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-            />
-          </div>
-          <div className="min-w-[180px]">
-            <label className="mb-1 block text-sm font-medium text-slate-700">To</label>
-            <input
-              type="month"
-              value={pulloutToMonth}
-              onChange={(e) => setPulloutToMonth(e.target.value)}
-              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-            />
-          </div>
-        </>
-      )}
+      <div><label className="mb-1 block text-sm font-medium text-slate-700">Search</label><SearchBar value={pulloutSearchQuery} onChange={setPulloutSearchQuery} placeholder={pulloutSubTab === "by-retailer-area" ? "Search retailer or area..." : "Search retailer, area or customer..."} /></div>
+      <div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">Retailer</label><select value={pulloutRetailerFilter} onChange={(e) => setPulloutRetailerFilter(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">{retailerOptions.map((o) => <option key={o}>{o}</option>)}</select></div>
+      {pulloutSubTab === "by-retailer-store" && <div><label className="mb-1 block text-sm font-medium text-slate-700">Customer</label><SearchableSelect options={customerOptions} value={pulloutCustomerFilter} onChange={setPulloutCustomerFilter} placeholder="Search customer..." /></div>}
+      <div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label><select value={pulloutPeriodMode} onChange={(e) => setPulloutPeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"><option value="past6Months">Past 6 Months</option><option value="lastMonth">Last Month</option><option value="past12Months">Past 12 Months</option><option value="custom">Custom</option></select></div>
+      {pulloutPeriodMode === "custom" && <><div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">From</label><input type="month" value={pulloutFromMonth} onChange={(e) => setPulloutFromMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div><div className="min-w-[180px]"><label className="mb-1 block text-sm font-medium text-slate-700">To</label><input type="month" value={pulloutToMonth} onChange={(e) => setPulloutToMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div></>}
     </div>
   );
 
   const renderPulloutTable = () => {
     if (loading) return <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">Loading KEHE velocity data...</div>;
     if (loadError) return <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>;
-
     const isArea = pulloutSubTab === "by-retailer-area";
     const monthColumns = isArea ? pulloutByAreaTable.monthColumns : pulloutByStoreTable.monthColumns;
     const tableRows = isArea ? filteredByAreaRows : filteredByStoreRows;
-
     const handleExport = () => {
-      const isAreaExport = pulloutSubTab === "by-retailer-area";
-      const headers = isAreaExport
-        ? ["Retailer", "Retailer Area", ...monthColumns, "Total"]
-        : ["Retailer", "Retailer Area", "Customer", ...monthColumns, "Total"];
-      const exportRows = tableRows.map((row) => {
-        const base = isAreaExport
-          ? [row.retailer, row.retailer_area]
-          : [row.retailer, row.retailer_area, (row as any).customer ?? ""];
-        return [...base, ...monthColumns.map((m) => row.months[m] || 0), row.total];
-      });
-      exportToExcel({
-        filename: isAreaExport ? "monthly-cases-by-retailer-area" : "monthly-cases-by-retailer-store",
-        headers,
-        rows: exportRows,
-      });
+      const headers = isArea ? ["Retailer", "Retailer Area", ...monthColumns, "Total"] : ["Retailer", "Retailer Area", "Store", ...monthColumns, "Total"];
+      const exportRows = tableRows.map((row) => { const base = isArea ? [row.retailer, row.retailer_area] : [row.retailer, row.retailer_area, (row as any).customer ?? ""]; return [...base, ...monthColumns.map((m) => row.months[m] || 0), row.total]; });
+      exportToExcel({ filename: isArea ? "monthly-cases-by-retailer-area" : "monthly-cases-by-retailer-store", headers, rows: exportRows });
     };
-
     return (
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        {/* Export button row */}
         <div className="mb-4 flex justify-end">
-          <button
-            type="button"
-            onClick={handleExport}
-            disabled={tableRows.length === 0}
-            title="Download as Excel / CSV"
-            className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {/* Excel-style grid icon */}
-            <svg className="h-4 w-4 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <path d="M3 9h18M3 15h18M9 3v18" />
-            </svg>
+          <button type="button" onClick={handleExport} disabled={tableRows.length === 0} title="Download as Excel / CSV"
+            className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed">
+            <svg className="h-4 w-4 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M3 15h18M9 3v18" /></svg>
             Download Excel
           </button>
         </div>
-
         {tableRows.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            No rows found for the selected filters.
-          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">No rows found for the selected filters.</div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-200">
             <div className="max-h-[70vh] overflow-auto">
@@ -883,10 +848,8 @@ export default function KeheDashboardView() {
                   <tr>
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">Retailer</th>
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">Retailer Area</th>
-                    {!isArea && <th className="px-4 py-3 text-left font-semibold text-slate-700">Customer</th>}
-                    {monthColumns.map((m) => (
-                      <th key={m} className="px-4 py-3 text-left font-semibold text-slate-700">{m}</th>
-                    ))}
+                    {!isArea && <th className="px-4 py-3 text-left font-semibold text-slate-700">Store</th>}
+                    {monthColumns.map((m) => <th key={m} className="px-4 py-3 text-left font-semibold text-slate-700">{m}</th>)}
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">Total</th>
                   </tr>
                 </thead>
@@ -895,12 +858,8 @@ export default function KeheDashboardView() {
                     <tr key={i} className="border-t border-slate-200 hover:bg-slate-50 transition-colors">
                       <td className="px-4 py-3 text-slate-700">{row.retailer}</td>
                       <td className="px-4 py-3 text-slate-700">{row.retailer_area}</td>
-                      {!isArea && "customer" in row && (
-                        <td className="px-4 py-3 text-slate-700">{(row as any).customer}</td>
-                      )}
-                      {monthColumns.map((m) => (
-                        <td key={m} className="px-4 py-3 text-slate-700">{row.months[m] || 0}</td>
-                      ))}
+                      {!isArea && "customer" in row && <td className="px-4 py-3 text-slate-700">{(row as any).customer}</td>}
+                      {monthColumns.map((m) => <td key={m} className="px-4 py-3 text-slate-700">{row.months[m] || 0}</td>)}
                       <td className="px-4 py-3 font-semibold text-slate-900">{row.total}</td>
                     </tr>
                   ))}
@@ -918,10 +877,7 @@ export default function KeheDashboardView() {
       {activeTab === "analytics" && (
         <>
           <div className="sticky top-0 z-20 space-y-4 bg-slate-100 pb-4">{renderTabButtons()}</div>
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="text-lg font-semibold text-slate-900">Analytics</div>
-            <p className="mt-2 text-sm text-slate-500">Analytics will be added next.</p>
-          </div>
+          <AnalyticsTab rows={rows} loading={loading} loadError={loadError} />
         </>
       )}
 
@@ -931,50 +887,24 @@ export default function KeheDashboardView() {
             {renderTabButtons()}
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div className="space-y-3">
-                  <h2 className="text-2xl font-bold text-slate-900">Velocity</h2>
-                  {renderVelocitySubTabs()}
-                </div>
+                <div className="space-y-3"><h2 className="text-2xl font-bold text-slate-900">Velocity</h2>{renderVelocitySubTabs()}</div>
                 {renderVelocityFilters()}
               </div>
             </div>
           </div>
-
-          {loading ? (
-            <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">Loading KEHE velocity data...</div>
-          ) : loadError ? (
-            <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>
-          ) : (
+          {loading ? <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">Loading...</div> : loadError ? <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div> : (
             <>
               {velocitySubTab === "best-selling-store" && (
                 <div className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
                   <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="mb-4 flex items-center justify-between">
-                      <h3 className="text-xl font-semibold text-slate-900">Top Selling Store</h3>
-                      <div className="rounded-xl bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">Top {topN}</div>
-                    </div>
-                    <div className="space-y-3">
-                      {topSellingStores.length === 0 ? (
-                        <div className="text-sm text-slate-500">No data found for the selected filters.</div>
-                      ) : (
-                        topSellingStores.map((item, i) => (
-                          <div key={`${item.customer}-${i}`} className="flex items-start justify-between gap-4 rounded-2xl border border-slate-100 px-4 py-3">
-                            <div className="text-sm font-medium leading-5 text-slate-800">{item.customer}</div>
-                            <div className="min-w-[56px] text-right text-sm font-bold text-slate-900">{item.totalCases}</div>
-                          </div>
-                        ))
-                      )}
-                    </div>
+                    <div className="mb-4 flex items-center justify-between"><h3 className="text-xl font-semibold text-slate-900">Top Selling Store</h3><div className="rounded-xl bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">Top {topN}</div></div>
+                    <div className="space-y-3">{topSellingStores.length === 0 ? <div className="text-sm text-slate-500">No data found for the selected filters.</div> : topSellingStores.map((item, i) => (<div key={`${item.customer}-${i}`} className="flex items-start justify-between gap-4 rounded-2xl border border-slate-100 px-4 py-3"><div className="text-sm font-medium leading-5 text-slate-800">{item.customer}</div><div className="min-w-[56px] text-right text-sm font-bold text-slate-900">{item.totalCases}</div></div>))}</div>
                   </div>
                   <HorizontalBarChart title="Top Selling Store" data={topSellingStores.map((item) => ({ label: item.customer, value: item.totalCases }))} />
                 </div>
               )}
-              {velocitySubTab === "total-cases-per-month" && (
-                <GroupedMonthlyChart title="Total Cases per Month per Retailer" months={monthlyCasesSeries.months} series={monthlyCasesSeries.series} />
-              )}
-              {velocitySubTab === "overall-average-cakes-per-week" && (
-                <GroupedMonthlyChart title="Overall: Average Cakes per Week" months={averageCakesPerWeekSeries.months} series={averageCakesPerWeekSeries.series} />
-              )}
+              {velocitySubTab === "total-cases-per-month" && <GroupedMonthlyChart title="Total Cases per Month per Retailer" months={monthlyCasesSeries.months} series={monthlyCasesSeries.series} />}
+              {velocitySubTab === "overall-average-cakes-per-week" && <GroupedMonthlyChart title="Overall: Average Cakes per Week" months={averageCakesPerWeekSeries.months} series={averageCakesPerWeekSeries.series} />}
             </>
           )}
         </>
@@ -986,9 +916,7 @@ export default function KeheDashboardView() {
             {renderTabButtons()}
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div className="flex flex-col gap-3">
-                  {renderPulloutSubTabs()}
-                </div>
+                <div className="flex flex-col gap-3">{renderPulloutSubTabs()}</div>
                 {renderPulloutFilters()}
               </div>
             </div>
