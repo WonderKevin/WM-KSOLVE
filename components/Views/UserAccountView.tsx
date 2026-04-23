@@ -9,20 +9,30 @@ import { Input } from "@/components/ui/input";
 type UserPermissionRow = {
   id: string;
   email: string;
+
+  // Dashboard
   can_view_dashboard: boolean;
+  can_view_kehe_dashboard: boolean;
+  can_view_tonys_dashboard: boolean;
+
+  // Broker Commission
   can_view_broker_commission_summary: boolean;
   can_view_broker_commission_data_sets: boolean;
+
+  // Accounting
   can_view_accounting_summary: boolean;
   can_view_accounting_check_details: boolean;
-  can_view_reporting_report_xxx: boolean;
+
+  // Database
   can_view_database_ksolve_invoices: boolean;
   can_view_database_kehe_velocity: boolean;
   can_view_database_product_list: boolean;
   can_view_database_locations: boolean;
   can_view_database_deduction_type: boolean;
-  can_view_admin: boolean;
+
+  // Admin
   can_view_user_account: boolean;
-  can_reprocess_invoices: boolean;
+
   created_at?: string;
   updated_at?: string;
 };
@@ -33,7 +43,11 @@ const PERMISSION_GROUPS: Array<{
 }> = [
   {
     label: "Dashboard",
-    children: ["can_view_dashboard"],
+    children: [
+      "can_view_dashboard",
+      "can_view_kehe_dashboard",
+      "can_view_tonys_dashboard",
+    ],
   },
   {
     label: "Broker Commission",
@@ -50,10 +64,6 @@ const PERMISSION_GROUPS: Array<{
     ],
   },
   {
-    label: "Reporting",
-    children: ["can_view_reporting_report_xxx"],
-  },
-  {
     label: "Database",
     children: [
       "can_view_database_ksolve_invoices",
@@ -65,35 +75,33 @@ const PERMISSION_GROUPS: Array<{
   },
   {
     label: "Admin",
-    children: ["can_view_admin", "can_view_user_account"],
-  },
-  {
-    label: "Special",
-    children: ["can_reprocess_invoices"],
+    children: ["can_view_user_account"],
   },
 ];
 
 const LABEL_MAP: Record<string, string> = {
+  // Dashboard
   can_view_dashboard: "Dashboard",
+  can_view_kehe_dashboard: "Kehe Dashboard",
+  can_view_tonys_dashboard: "Tony's Dashboard",
 
-  can_view_broker_commission_summary: "Summary",
+  // Broker Commission
+  can_view_broker_commission_summary: "Broker Commission Summary",
   can_view_broker_commission_data_sets: "Data Sets",
 
+  // Accounting
   can_view_accounting_summary: "Summary",
   can_view_accounting_check_details: "Check Details",
 
-  can_view_reporting_report_xxx: "Report XXX",
-
+  // Database
   can_view_database_ksolve_invoices: "Ksolve Invoices",
   can_view_database_kehe_velocity: "KeHe Velocity",
   can_view_database_product_list: "Product List",
   can_view_database_locations: "Locations",
   can_view_database_deduction_type: "Deduction Type",
 
-  can_view_admin: "Admin Menu",
+  // Admin
   can_view_user_account: "User Account",
-
-  can_reprocess_invoices: "Reprocess Invoices",
 };
 
 export default function UserAccountView() {
@@ -198,12 +206,6 @@ export default function UserAccountView() {
     setSavingEmail(row.email);
 
     try {
-      const payload = fields.reduce<Record<string, boolean>>((acc, field) => {
-        acc[field] = value;
-        return acc;
-      }, {});
-      payload.updated_at = true as unknown as boolean;
-
       const { error } = await supabase
         .from("user_permissions")
         .update({
@@ -236,20 +238,29 @@ export default function UserAccountView() {
     try {
       const { error } = await supabase.from("user_permissions").insert({
         email,
+
+        // Dashboard
         can_view_dashboard: false,
+        can_view_kehe_dashboard: false,
+        can_view_tonys_dashboard: false,
+
+        // Broker Commission
         can_view_broker_commission_summary: false,
         can_view_broker_commission_data_sets: false,
+
+        // Accounting
         can_view_accounting_summary: false,
         can_view_accounting_check_details: false,
-        can_view_reporting_report_xxx: false,
+
+        // Database
         can_view_database_ksolve_invoices: false,
         can_view_database_kehe_velocity: false,
         can_view_database_product_list: false,
         can_view_database_locations: false,
         can_view_database_deduction_type: false,
-        can_view_admin: false,
+
+        // Admin
         can_view_user_account: false,
-        can_reprocess_invoices: false,
       });
 
       if (error) throw error;
@@ -344,7 +355,9 @@ export default function UserAccountView() {
                       {row.email}
                     </div>
                     <div className="text-xs text-slate-400">
-                      {savingEmail === row.email ? "Saving..." : "Click to manage access"}
+                      {savingEmail === row.email
+                        ? "Saving..."
+                        : "Click to manage access"}
                     </div>
                   </div>
 
@@ -377,7 +390,11 @@ export default function UserAccountView() {
                                 type="checkbox"
                                 checked={checked}
                                 onChange={(e) =>
-                                  handleGroupToggle(row, group.children, e.target.checked)
+                                  handleGroupToggle(
+                                    row,
+                                    group.children,
+                                    e.target.checked
+                                  )
                                 }
                                 className="h-4 w-4 accent-slate-900"
                               />
@@ -395,7 +412,11 @@ export default function UserAccountView() {
                                     type="checkbox"
                                     checked={Boolean(row[field])}
                                     onChange={(e) =>
-                                      handleToggle(row.email, field, e.target.checked)
+                                      handleToggle(
+                                        row.email,
+                                        field,
+                                        e.target.checked
+                                      )
                                     }
                                     className="h-4 w-4 accent-slate-900"
                                   />
