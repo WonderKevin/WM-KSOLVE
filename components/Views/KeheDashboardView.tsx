@@ -9,7 +9,7 @@ type VelocitySubTabKey =
   | "total-cases-per-month"
   | "overall-average-cakes-per-week";
 type PulloutSubTabKey = "by-retailer-area" | "by-retailer-store";
-type PeriodMode = "lastMonth" | "custom" | "past12Months";
+type PeriodMode = "lastMonth" | "custom" | "past6Months" | "past12Months";
 type TopN = 5 | 10 | 15 | 20;
 
 type VelocityRow = {
@@ -98,10 +98,10 @@ function buildMonthRange(fromMonth: string, toMonth: string) {
   return result;
 }
 
-function buildPast12MonthsRange() {
+function buildPastNMonthsRange(n: number) {
   const now = new Date();
-  return Array.from({ length: 12 }, (_, i) =>
-    monthLabelFromDate(new Date(now.getFullYear(), now.getMonth() - (11 - i), 1))
+  return Array.from({ length: n }, (_, i) =>
+    monthLabelFromDate(new Date(now.getFullYear(), now.getMonth() - (n - 1 - i), 1))
   );
 }
 
@@ -150,10 +150,7 @@ function SearchableSelect({
         className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-left text-sm text-slate-700 outline-none flex items-center justify-between gap-2 hover:border-slate-300 transition"
       >
         <span className="truncate">{value}</span>
-        <svg
-          className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`}
-          viewBox="0 0 20 20" fill="currentColor"
-        >
+        <svg className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
           <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
         </svg>
       </button>
@@ -187,6 +184,40 @@ function SearchableSelect({
             )}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Search bar ────────────────────────────────────────────────────────────────
+function SearchBar({
+  value,
+  onChange,
+  placeholder = "Search...",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div className="relative min-w-[220px] flex-1 max-w-xs">
+      <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+      </svg>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="h-11 w-full rounded-2xl border border-slate-200 bg-white pl-9 pr-9 text-sm outline-none focus:border-slate-400 transition"
+      />
+      {value && (
+        <button type="button" onClick={() => onChange("")}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
       )}
     </div>
   );
@@ -324,7 +355,7 @@ export default function KeheDashboardView() {
   const [avgCakesToMonth, setAvgCakesToMonth] = useState(getCurrentMonthInputValue());
 
   // pullout filters
-  const [pulloutPeriodMode, setPulloutPeriodMode] = useState<PeriodMode>("custom");
+  const [pulloutPeriodMode, setPulloutPeriodMode] = useState<PeriodMode>("past6Months");
   const [pulloutFromMonth, setPulloutFromMonth] = useState(getPastMonthsInputValue(5));
   const [pulloutToMonth, setPulloutToMonth] = useState(getCurrentMonthInputValue());
   const [pulloutRetailerFilter, setPulloutRetailerFilter] = useState("All Retailers");
@@ -369,25 +400,29 @@ export default function KeheDashboardView() {
   // selected months
   const bestStoreSelectedMonths = useMemo(() => {
     if (bestStorePeriodMode === "lastMonth") return [normalizeMonthLabel(getLastMonthLabel())];
-    if (bestStorePeriodMode === "past12Months") return buildPast12MonthsRange().map(normalizeMonthLabel);
+    if (bestStorePeriodMode === "past12Months") return buildPastNMonthsRange(12).map(normalizeMonthLabel);
+    if (bestStorePeriodMode === "past6Months") return buildPastNMonthsRange(6).map(normalizeMonthLabel);
     return buildMonthRange(bestStoreFromMonth, bestStoreToMonth).map(normalizeMonthLabel);
   }, [bestStorePeriodMode, bestStoreFromMonth, bestStoreToMonth]);
 
   const monthlyCasesSelectedMonths = useMemo(() => {
     if (monthlyCasesPeriodMode === "lastMonth") return [normalizeMonthLabel(getLastMonthLabel())];
-    if (monthlyCasesPeriodMode === "past12Months") return buildPast12MonthsRange().map(normalizeMonthLabel);
+    if (monthlyCasesPeriodMode === "past12Months") return buildPastNMonthsRange(12).map(normalizeMonthLabel);
+    if (monthlyCasesPeriodMode === "past6Months") return buildPastNMonthsRange(6).map(normalizeMonthLabel);
     return buildMonthRange(monthlyCasesFromMonth, monthlyCasesToMonth).map(normalizeMonthLabel);
   }, [monthlyCasesPeriodMode, monthlyCasesFromMonth, monthlyCasesToMonth]);
 
   const avgCakesSelectedMonths = useMemo(() => {
     if (avgCakesPeriodMode === "lastMonth") return [normalizeMonthLabel(getLastMonthLabel())];
-    if (avgCakesPeriodMode === "past12Months") return buildPast12MonthsRange().map(normalizeMonthLabel);
+    if (avgCakesPeriodMode === "past12Months") return buildPastNMonthsRange(12).map(normalizeMonthLabel);
+    if (avgCakesPeriodMode === "past6Months") return buildPastNMonthsRange(6).map(normalizeMonthLabel);
     return buildMonthRange(avgCakesFromMonth, avgCakesToMonth).map(normalizeMonthLabel);
   }, [avgCakesPeriodMode, avgCakesFromMonth, avgCakesToMonth]);
 
   const pulloutSelectedMonths = useMemo(() => {
     if (pulloutPeriodMode === "lastMonth") return [normalizeMonthLabel(getLastMonthLabel())];
-    if (pulloutPeriodMode === "past12Months") return buildPast12MonthsRange().map(normalizeMonthLabel);
+    if (pulloutPeriodMode === "past12Months") return buildPastNMonthsRange(12).map(normalizeMonthLabel);
+    if (pulloutPeriodMode === "past6Months") return buildPastNMonthsRange(6).map(normalizeMonthLabel);
     return buildMonthRange(pulloutFromMonth, pulloutToMonth).map(normalizeMonthLabel);
   }, [pulloutPeriodMode, pulloutFromMonth, pulloutToMonth]);
 
@@ -452,7 +487,7 @@ export default function KeheDashboardView() {
     return { months: sortedMonths, series: cakeNames.map((c, i) => ({ name: c, fill: palette[i % palette.length], values: sortedMonths.map((m) => Number(((grouped[m]?.[c] || 0) / 4).toFixed(1))) })) };
   }, [avgCakesRows, avgCakesSelectedMonths]);
 
-  // pullout base rows (month + retailer)
+  // pullout base rows
   const pulloutRows = useMemo(() => rows.filter((row) => {
     const rowMonth = normalizeMonthLabel(row.month);
     const rowRetailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
@@ -460,15 +495,12 @@ export default function KeheDashboardView() {
       (pulloutRetailerFilter === "All Retailers" || rowRetailer === pulloutRetailerFilter);
   }), [rows, pulloutSelectedMonths, pulloutRetailerFilter]);
 
-  // customer options derived from pullout base rows
   const customerOptions = useMemo(() => [
     "All Customers",
     ...Array.from(new Set(pulloutRows.map((r) => String(r.customer || "").trim()).filter(Boolean))).sort(),
   ], [pulloutRows]);
 
-  // reset customer when retailer changes
   useEffect(() => { setPulloutCustomerFilter("All Customers"); }, [pulloutRetailerFilter]);
-  // reset search when switching sub-tab
   useEffect(() => { setPulloutSearchQuery(""); }, [pulloutSubTab]);
 
   // by area table
@@ -591,6 +623,8 @@ export default function KeheDashboardView() {
           <label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label>
           <select value={bestStorePeriodMode} onChange={(e) => setBestStorePeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
             <option value="lastMonth">Last Month</option>
+            <option value="past6Months">Past 6 Months</option>
+            <option value="past12Months">Past 12 Months</option>
             <option value="custom">Custom</option>
           </select>
         </div>
@@ -612,6 +646,7 @@ export default function KeheDashboardView() {
         <div className="min-w-[180px]">
           <label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label>
           <select value={monthlyCasesPeriodMode} onChange={(e) => setMonthlyCasesPeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
+            <option value="past6Months">Past 6 Months</option>
             <option value="past12Months">Past 12 Months</option>
             <option value="custom">Custom</option>
           </select>
@@ -634,6 +669,7 @@ export default function KeheDashboardView() {
         <div className="min-w-[180px]">
           <label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label>
           <select value={avgCakesPeriodMode} onChange={(e) => setAvgCakesPeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
+            <option value="past6Months">Past 6 Months</option>
             <option value="past12Months">Past 12 Months</option>
             <option value="custom">Custom</option>
           </select>
@@ -652,8 +688,19 @@ export default function KeheDashboardView() {
     );
   };
 
+  // Pullout filter bar — includes search bar inline
   const renderPulloutFilters = () => (
     <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
+      {/* Search bar — now in the filter header */}
+      <div>
+        <label className="mb-1 block text-sm font-medium text-slate-700">Search</label>
+        <SearchBar
+          value={pulloutSearchQuery}
+          onChange={setPulloutSearchQuery}
+          placeholder={pulloutSubTab === "by-retailer-area" ? "Search retailer or area..." : "Search retailer, area or customer..."}
+        />
+      </div>
+
       <div className="min-w-[180px]">
         <label className="mb-1 block text-sm font-medium text-slate-700">Retailer</label>
         <select value={pulloutRetailerFilter} onChange={(e) => setPulloutRetailerFilter(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
@@ -661,7 +708,7 @@ export default function KeheDashboardView() {
         </select>
       </div>
 
-      {/* Customer filter only on by-retailer-store */}
+      {/* Customer filter — only on by-retailer-store */}
       {pulloutSubTab === "by-retailer-store" && (
         <div>
           <label className="mb-1 block text-sm font-medium text-slate-700">Customer</label>
@@ -674,23 +721,44 @@ export default function KeheDashboardView() {
         </div>
       )}
 
-      <div className="min-w-[210px]">
+      {/* Date filter — only shows From/To when Custom is selected */}
+      <div className="min-w-[180px]">
         <label className="mb-1 block text-sm font-medium text-slate-700">Date Filter</label>
-        <select value={pulloutPeriodMode} onChange={(e) => setPulloutPeriodMode(e.target.value as PeriodMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
-          <option value="custom">Past 6 Months / Custom</option>
+        <select
+          value={pulloutPeriodMode}
+          onChange={(e) => setPulloutPeriodMode(e.target.value as PeriodMode)}
+          className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+        >
+          <option value="past6Months">Past 6 Months</option>
           <option value="lastMonth">Last Month</option>
+          <option value="past12Months">Past 12 Months</option>
+          <option value="custom">Custom</option>
         </select>
       </div>
-      {pulloutPeriodMode === "custom" && <>
-        <div className="min-w-[180px]">
-          <label className="mb-1 block text-sm font-medium text-slate-700">From</label>
-          <input type="month" value={pulloutFromMonth} onChange={(e) => setPulloutFromMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" />
-        </div>
-        <div className="min-w-[180px]">
-          <label className="mb-1 block text-sm font-medium text-slate-700">To</label>
-          <input type="month" value={pulloutToMonth} onChange={(e) => setPulloutToMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" />
-        </div>
-      </>}
+
+      {/* From / To only appear when Custom is selected */}
+      {pulloutPeriodMode === "custom" && (
+        <>
+          <div className="min-w-[180px]">
+            <label className="mb-1 block text-sm font-medium text-slate-700">From</label>
+            <input
+              type="month"
+              value={pulloutFromMonth}
+              onChange={(e) => setPulloutFromMonth(e.target.value)}
+              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+            />
+          </div>
+          <div className="min-w-[180px]">
+            <label className="mb-1 block text-sm font-medium text-slate-700">To</label>
+            <input
+              type="month"
+              value={pulloutToMonth}
+              onChange={(e) => setPulloutToMonth(e.target.value)}
+              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 
@@ -705,30 +773,12 @@ export default function KeheDashboardView() {
 
     return (
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        {/* Search bar */}
-        <div className="mb-4 flex items-center gap-3">
-          <div className="relative flex-1 max-w-sm">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
-            </svg>
-            <input
-              type="text"
-              value={pulloutSearchQuery}
-              onChange={(e) => setPulloutSearchQuery(e.target.value)}
-              placeholder={isArea ? "Search retailer or area..." : "Search retailer, area or customer..."}
-              className="h-10 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-9 pr-9 text-sm outline-none focus:border-slate-400 focus:bg-white transition"
-            />
-            {pulloutSearchQuery && (
-              <button type="button" onClick={() => setPulloutSearchQuery("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-          </div>
-          <span className="shrink-0 text-sm text-slate-400">
-            {tableRows.length} of {totalCount} rows
+        {/* Row count indicator */}
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-sm text-slate-400">
+            {tableRows.length === totalCount
+              ? `${totalCount} rows`
+              : `${tableRows.length} of ${totalCount} rows`}
           </span>
         </div>
 
@@ -800,6 +850,7 @@ export default function KeheDashboardView() {
               </div>
             </div>
           </div>
+
           {loading ? (
             <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">Loading KEHE velocity data...</div>
           ) : loadError ? (
