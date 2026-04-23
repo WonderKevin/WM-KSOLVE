@@ -110,25 +110,29 @@ function truncateLabel(value: string, max = 42) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
-// ── Searchable dropdown ───────────────────────────────────────────────────────
+// ── Searchable dropdown (Excel-style with Select All) ─────────────────────────
 function SearchableSelect({
   options,
   value,
   onChange,
   placeholder = "Search...",
+  allLabel = "All Customers",
 }: {
   options: string[];
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
+  allLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
 
+  // options should already include the "All" entry as first item
+  const nonAllOptions = useMemo(() => options.filter((o) => o !== allLabel), [options, allLabel]);
   const filtered = useMemo(
-    () => options.filter((o) => o.toLowerCase().includes(query.toLowerCase())),
-    [options, query]
+    () => nonAllOptions.filter((o) => o.toLowerCase().includes(query.toLowerCase())),
+    [nonAllOptions, query]
   );
 
   useEffect(() => {
@@ -141,6 +145,8 @@ function SearchableSelect({
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
+
+  const isAll = value === allLabel;
 
   return (
     <div ref={ref} className="relative min-w-[200px]">
@@ -156,7 +162,8 @@ function SearchableSelect({
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-1 w-full min-w-[220px] rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden">
+        <div className="absolute z-50 mt-1 w-full min-w-[260px] rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden">
+          {/* Search input */}
           <div className="p-2 border-b border-slate-100">
             <input
               autoFocus
@@ -167,20 +174,52 @@ function SearchableSelect({
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
             />
           </div>
+
+          {/* (Select All) — always pinned at top, hidden when actively searching */}
+          {!query && (
+            <div className="border-b border-slate-100">
+              <button
+                type="button"
+                onClick={() => { onChange(allLabel); setOpen(false); setQuery(""); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-semibold hover:bg-slate-50 transition text-slate-800"
+              >
+                <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${isAll ? "border-slate-800 bg-slate-800" : "border-slate-300"}`}>
+                  {isAll && (
+                    <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" />
+                    </svg>
+                  )}
+                </span>
+                (Select All)
+              </button>
+            </div>
+          )}
+
+          {/* Individual options */}
           <div className="max-h-56 overflow-y-auto">
             {filtered.length === 0 ? (
               <div className="px-4 py-3 text-sm text-slate-400">No results</div>
             ) : (
-              filtered.map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  onClick={() => { onChange(option); setOpen(false); setQuery(""); }}
-                  className={`w-full px-4 py-2.5 text-left text-sm transition hover:bg-slate-50 ${value === option ? "font-semibold text-slate-900 bg-slate-50" : "text-slate-700"}`}
-                >
-                  {option}
-                </button>
-              ))
+              filtered.map((option) => {
+                const selected = value === option;
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => { onChange(option); setOpen(false); setQuery(""); }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm transition hover:bg-slate-50 text-slate-700"
+                  >
+                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${selected ? "border-slate-800 bg-slate-800" : "border-slate-300"}`}>
+                      {selected && (
+                        <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" />
+                        </svg>
+                      )}
+                    </span>
+                    {option}
+                  </button>
+                );
+              })
             )}
           </div>
         </div>
@@ -333,6 +372,30 @@ function HorizontalBarChart({ data, title, minWidth = 1100, labelWidth = 360 }: 
       </div>
     </div>
   );
+}
+
+// ── Excel / CSV export ────────────────────────────────────────────────────────
+function exportToExcel({
+  filename,
+  headers,
+  rows,
+}: {
+  filename: string;
+  headers: string[];
+  rows: (string | number)[][];
+}) {
+  const escape = (v: string | number) => {
+    const s = String(v ?? "");
+    return s.search(/[",\n]/) >= 0 ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [headers.map(escape).join(","), ...rows.map((r) => r.map(escape).join(","))];
+  const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${filename}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -770,8 +833,44 @@ export default function KeheDashboardView() {
     const monthColumns = isArea ? pulloutByAreaTable.monthColumns : pulloutByStoreTable.monthColumns;
     const tableRows = isArea ? filteredByAreaRows : filteredByStoreRows;
 
+    const handleExport = () => {
+      const isAreaExport = pulloutSubTab === "by-retailer-area";
+      const headers = isAreaExport
+        ? ["Retailer", "Retailer Area", ...monthColumns, "Total"]
+        : ["Retailer", "Retailer Area", "Customer", ...monthColumns, "Total"];
+      const exportRows = tableRows.map((row) => {
+        const base = isAreaExport
+          ? [row.retailer, row.retailer_area]
+          : [row.retailer, row.retailer_area, (row as any).customer ?? ""];
+        return [...base, ...monthColumns.map((m) => row.months[m] || 0), row.total];
+      });
+      exportToExcel({
+        filename: isAreaExport ? "monthly-cases-by-retailer-area" : "monthly-cases-by-retailer-store",
+        headers,
+        rows: exportRows,
+      });
+    };
+
     return (
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        {/* Export button row */}
+        <div className="mb-4 flex justify-end">
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={tableRows.length === 0}
+            title="Download as Excel / CSV"
+            className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {/* Excel-style grid icon */}
+            <svg className="h-4 w-4 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M3 9h18M3 15h18M9 3v18" />
+            </svg>
+            Download Excel
+          </button>
+        </div>
+
         {tableRows.length === 0 ? (
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
             No rows found for the selected filters.
