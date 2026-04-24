@@ -462,7 +462,120 @@ function AreaRow({ row, lastMonth, allMonths }: {
   );
 }
 
-// ── Win-Back Area Group (collapsible) ─────────────────────────────────────────
+// ── Analytics Header (frozen/sticky) ─────────────────────────────────────────
+function AnalyticsHeader({ rows, loading, loadError }: { rows: VelocityRow[]; loading: boolean; loadError: string; }) {
+  const allAvailableMonths = useMemo(() => Array.from(new Set(rows.map((r) => normalizeMonthLabel(r.month)))).sort(compareMonthLabelsAsc), [rows]);
+  const defaultLastMonth = allAvailableMonths[allAvailableMonths.length - 1] ?? "";
+  const [analyticsDateMode, setAnalyticsDateMode] = useState<"lastMonth" | "custom">("lastMonth");
+  const [analyticsCustomMonth, setAnalyticsCustomMonth] = useState(getLastMonthInputValue());
+  const retailerOptions = useMemo(() => ["All Retailers", ...Array.from(new Set(rows.map((r) => String(r.retailer || "").replace(/\u00a0/g, " ").trim()).filter(Boolean))).sort()], [rows]);
+  const [retailerFilter, setRetailerFilter] = useState("All Retailers");
+
+  const analyticsLastMonth = useMemo(() => {
+    if (analyticsDateMode === "lastMonth") return defaultLastMonth;
+    const [y, m] = analyticsCustomMonth.split("-").map(Number);
+    if (!y || !m) return defaultLastMonth;
+    return normalizeMonthLabel(monthLabelFromDate(new Date(y, m - 1, 1)));
+  }, [analyticsDateMode, analyticsCustomMonth, defaultLastMonth]);
+
+  const filteredRows = useMemo(() =>
+    retailerFilter === "All Retailers" ? rows : rows.filter((r) => String(r.retailer || "").replace(/\u00a0/g, " ").trim() === retailerFilter),
+    [rows, retailerFilter]);
+
+  const ctx = useMemo(() => buildAnalyticsContext(filteredRows, analyticsLastMonth), [filteredRows, analyticsLastMonth]);
+
+  const totalActive = useMemo(() => ctx?.areaSummaries.reduce((s, a) => s + a.activeLastMonth, 0) ?? 0, [ctx]);
+  const totalStores = useMemo(() => ctx?.areaSummaries.reduce((s, a) => s + a.total, 0) ?? 0, [ctx]);
+  const overallPullPct = totalStores > 0 ? Math.round((totalActive / totalStores) * 100) : 0;
+  const winBackCount = ctx?.winBackCandidates.length ?? 0;
+  const decliningCount = ctx?.decliningStores.length ?? 0;
+
+  if (loading || loadError || !ctx) return null;
+
+  return (
+    <div className="space-y-3">
+      {/* Title + filters row */}
+      <div className="rounded-3xl border border-slate-200 bg-white px-5 py-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-xl font-bold text-slate-900">Sales Analytics</h2>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs font-medium text-slate-400 whitespace-nowrap">Retailer</label>
+              <select value={retailerFilter} onChange={(e) => setRetailerFilter(e.target.value)}
+                className="h-9 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400">
+                {retailerOptions.map((o) => <option key={o}>{o}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs font-medium text-slate-400 whitespace-nowrap">Reference Month</label>
+              <select value={analyticsDateMode} onChange={(e) => setAnalyticsDateMode(e.target.value as "lastMonth" | "custom")}
+                className="h-9 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400">
+                <option value="lastMonth">Last Month ({defaultLastMonth})</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            {analyticsDateMode === "custom" && (
+              <input type="month" value={analyticsCustomMonth} onChange={(e) => setAnalyticsCustomMonth(e.target.value)}
+                className="h-9 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400" />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Stat cards — numbers right-aligned */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {/* Active Last Month */}
+        <div className="rounded-3xl border bg-emerald-50 text-emerald-700 border-emerald-200 px-5 py-3 shadow-sm flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">Active Last Month</div>
+            <div className="text-xs opacity-70 mt-0.5">{overallPullPct}% pull rate · all areas</div>
+          </div>
+          <div className="text-right shrink-0">
+            <span className="text-3xl font-extrabold leading-none">{totalActive}</span>
+            <span className="text-base font-semibold text-emerald-400 ml-1">/{totalStores}</span>
+          </div>
+        </div>
+
+        {/* Pull Out Rate per Area */}
+        <div className="rounded-3xl border bg-purple-50 text-purple-700 border-purple-200 px-5 py-3 shadow-sm flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">Pull Out Rate per Area</div>
+            <div className="text-xs opacity-70 mt-0.5">{totalActive}/{totalStores} stores active</div>
+          </div>
+          <div className="text-right shrink-0">
+            <span className="text-3xl font-extrabold leading-none">{overallPullPct}%</span>
+          </div>
+        </div>
+
+        {/* Win-Back Candidates */}
+        <div className="rounded-3xl border bg-amber-50 text-amber-700 border-amber-200 px-5 py-3 shadow-sm flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">Win-Back Candidates</div>
+            <div className="text-xs opacity-70 mt-0.5">zero last 3 months, had prior volume</div>
+          </div>
+          <div className="text-right shrink-0">
+            <span className="text-3xl font-extrabold leading-none">{winBackCount}</span>
+            <span className="text-xs font-semibold text-amber-400 ml-1">stores</span>
+          </div>
+        </div>
+
+        {/* Declining Stores */}
+        <div className="rounded-3xl border bg-red-50 text-red-700 border-red-200 px-5 py-3 shadow-sm flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">Declining Stores</div>
+            <div className="text-xs opacity-70 mt-0.5">volume dropped 50%+</div>
+          </div>
+          <div className="text-right shrink-0">
+            <span className="text-3xl font-extrabold leading-none">{decliningCount}</span>
+            <span className="text-xs font-semibold text-red-400 ml-1">stores</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Analytics Tab Component (scrollable content only) ─────────────────────────
 function WinBackAreaGroup({ group, effectiveMonths }: {
   group: { retailer: string; area: string; totalStoresInArea: number; stores: { customer: string; retailer: string; retailerArea: string; monthCases: Record<string, number>; total: number }[] };
   effectiveMonths: string[];
@@ -523,32 +636,10 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
   const areaBreakdownRef = useRef<HTMLDivElement>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
 
-  // Date filter
   const allAvailableMonths = useMemo(() => Array.from(new Set(rows.map((r) => normalizeMonthLabel(r.month)))).sort(compareMonthLabelsAsc), [rows]);
-  const defaultLastMonth = allAvailableMonths[allAvailableMonths.length - 1] ?? "";
-  const [analyticsDateMode, setAnalyticsDateMode] = useState<"lastMonth" | "custom">("lastMonth");
-  const [analyticsCustomMonth, setAnalyticsCustomMonth] = useState(getLastMonthInputValue());
+  const analyticsLastMonth = allAvailableMonths[allAvailableMonths.length - 1] ?? "";
 
-  // Retailer filter
-  const retailerOptions = useMemo(() => {
-    const all = Array.from(new Set(rows.map((r) => String(r.retailer || "").replace(/\u00a0/g, " ").trim()).filter(Boolean))).sort();
-    return ["All Retailers", ...all];
-  }, [rows]);
-  const [retailerFilter, setRetailerFilter] = useState("All Retailers");
-
-  const analyticsLastMonth = useMemo(() => {
-    if (analyticsDateMode === "lastMonth") return defaultLastMonth;
-    const [y, m] = analyticsCustomMonth.split("-").map(Number);
-    if (!y || !m) return defaultLastMonth;
-    return normalizeMonthLabel(monthLabelFromDate(new Date(y, m - 1, 1)));
-  }, [analyticsDateMode, analyticsCustomMonth, defaultLastMonth]);
-
-  // Filter rows by retailer before building context
-  const filteredRows = useMemo(() =>
-    retailerFilter === "All Retailers" ? rows : rows.filter((r) => String(r.retailer || "").replace(/\u00a0/g, " ").trim() === retailerFilter),
-    [rows, retailerFilter]);
-
-  const ctx = useMemo(() => buildAnalyticsContext(filteredRows, analyticsLastMonth), [filteredRows, analyticsLastMonth]);
+  const ctx = useMemo(() => buildAnalyticsContext(rows, analyticsLastMonth), [rows, analyticsLastMonth]);
 
   // All derived data computed as hooks — MUST be before any early returns
   const totalActive = useMemo(() => ctx?.areaSummaries.reduce((s, a) => s + a.activeLastMonth, 0) ?? 0, [ctx]);
@@ -611,87 +702,12 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
     return Array.from(map.values()).sort((a, b) => b.stores.length - a.stores.length);
   }, [ctx]);
 
-  if (loading) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">Loading data for analysis...</div>;
-  if (loadError) return <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>;
-  if (!ctx) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">No data available for analysis.</div>;
+  if (loading) return null;
+  if (loadError) return null;
+  if (!ctx) return null;
 
   return (
     <div className="space-y-6">
-      {/* Header — filters inline on one row */}
-      <div className="rounded-3xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <h2 className="text-2xl font-bold text-slate-900">Sales Analytics</h2>
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex items-end gap-1.5">
-              <label className="text-xs font-medium text-slate-500 mb-2 whitespace-nowrap">Retailer</label>
-              <select value={retailerFilter} onChange={(e) => setRetailerFilter(e.target.value)}
-                className="h-10 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400">
-                {retailerOptions.map((o) => <option key={o}>{o}</option>)}
-              </select>
-            </div>
-            <div className="flex items-end gap-1.5">
-              <label className="text-xs font-medium text-slate-500 mb-2 whitespace-nowrap">Reference Month</label>
-              <select value={analyticsDateMode} onChange={(e) => setAnalyticsDateMode(e.target.value as "lastMonth" | "custom")}
-                className="h-10 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400">
-                <option value="lastMonth">Last Month ({defaultLastMonth})</option>
-                <option value="custom">Custom</option>
-              </select>
-            </div>
-            {analyticsDateMode === "custom" && (
-              <input type="month" value={analyticsCustomMonth} onChange={(e) => setAnalyticsCustomMonth(e.target.value)}
-                className="h-10 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400" />
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Stat cards — 4 across, numbers inline with labels */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {/* Active Last Month */}
-        <div className="rounded-3xl border bg-emerald-50 text-emerald-700 border-emerald-200 p-4 shadow-sm">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="text-3xl font-extrabold leading-none">{totalActive}</span>
-            <span className="text-base font-semibold text-emerald-500">/ {totalStores}</span>
-          </div>
-          <div className="mt-1.5 text-sm font-semibold">Active Last Month</div>
-          <div className="mt-0.5 text-xs opacity-70">{pct}% pull rate · all areas</div>
-        </div>
-        {/* Pull Out Rate per Area — clicks to breakdown */}
-        <button type="button" onClick={() => areaBreakdownRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          className="rounded-3xl border bg-purple-50 text-purple-700 border-purple-200 p-4 shadow-sm text-left hover:bg-purple-100 transition">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="text-3xl font-extrabold leading-none">
-              {topAreaByPullRate ? `${Math.round((topAreaByPullRate.activeLastMonth / topAreaByPullRate.total) * 100)}%` : "—"}
-            </span>
-            <span className="text-sm font-semibold text-purple-400 truncate max-w-[130px]">{topAreaByPullRate?.area ?? ""}</span>
-          </div>
-          <div className="mt-1.5 text-sm font-semibold">Pull Out Rate per Area ↓</div>
-          <div className="mt-0.5 text-xs opacity-70">
-            {topAreaByPullRate ? `${topAreaByPullRate.activeLastMonth}/${topAreaByPullRate.total} stores · ${topAreaByPullRate.lastMonthCases} cases` : ""}
-          </div>
-        </button>
-        {/* Win-Back Candidates */}
-        <button type="button" onClick={() => winBackRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          className="rounded-3xl border bg-amber-50 text-amber-700 border-amber-200 p-4 shadow-sm text-left hover:bg-amber-100 transition">
-          <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-extrabold leading-none">{ctx.winBackCandidates.length}</span>
-            <span className="text-sm font-semibold text-amber-500">stores</span>
-          </div>
-          <div className="mt-1.5 text-sm font-semibold">Win-Back Candidates ↓</div>
-          <div className="mt-0.5 text-xs opacity-70">zero last 3 months, had prior volume</div>
-        </button>
-        {/* Declining Stores */}
-        <button type="button" onClick={() => decliningRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          className="rounded-3xl border bg-red-50 text-red-700 border-red-200 p-4 shadow-sm text-left hover:bg-red-100 transition">
-          <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-extrabold leading-none">{ctx.decliningStores.length}</span>
-            <span className="text-sm font-semibold text-red-400">stores</span>
-          </div>
-          <div className="mt-1.5 text-sm font-semibold">Declining Stores ↓</div>
-          <div className="mt-0.5 text-xs opacity-70">volume dropped 50%+</div>
-        </button>
-      </div>
-
       {/* Top 5 Summary panels */}
       <div ref={summaryRef} className="grid grid-cols-1 gap-4 lg:grid-cols-3 scroll-mt-4">
         {/* Top 5 Areas by Pull Rate */}
@@ -1105,7 +1121,11 @@ export default function KeheDashboardView() {
     <div className="space-y-6">
       {activeTab === "analytics" && (
         <>
-          <div className="sticky top-0 z-20 space-y-4 bg-slate-100 pb-4">{renderTabButtons()}</div>
+          <div className="sticky top-0 z-20 bg-slate-100 pb-3 space-y-3">
+            {renderTabButtons()}
+            {/* Frozen header + stat cards */}
+            <AnalyticsHeader rows={rows} loading={loading} loadError={loadError} />
+          </div>
           <AnalyticsTab rows={rows} loading={loading} loadError={loadError} />
         </>
       )}
