@@ -79,6 +79,12 @@ function truncateLabel(value: string, max = 42) {
   const t = String(value || ""); return t.length > max ? `${t.slice(0, max)}...` : t;
 }
 
+function formatSelectedCustomers(selected: string[]) {
+  if (!selected.length) return "All Customers";
+  if (selected.length === 1) return selected[0];
+  return `${selected.length} customers selected`;
+}
+
 // ── Excel export ──────────────────────────────────────────────────────────────
 function exportToExcel({ filename, headers, rows }: { filename: string; headers: string[]; rows: (string | number)[][]; }) {
   const esc = (v: string | number) => { const s = String(v ?? ""); return s.search(/[",\n]/) >= 0 ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -89,57 +95,150 @@ function exportToExcel({ filename, headers, rows }: { filename: string; headers:
   URL.revokeObjectURL(url);
 }
 
-// ── Searchable dropdown (Excel-style) ─────────────────────────────────────────
-function SearchableSelect({ options, value, onChange, placeholder = "Search...", allLabel = "All Customers" }: {
-  options: string[]; value: string; onChange: (v: string) => void; placeholder?: string; allLabel?: string;
+// ── Searchable dropdown (Excel-style multi-select) ─────────────────────────────
+function SearchableSelect({
+  options,
+  value,
+  onChange,
+  placeholder = "Search...",
+  allLabel = "All Customers",
+}: {
+  options: string[];
+  value: string[];
+  onChange: (v: string[]) => void;
+  placeholder?: string;
+  allLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+
   const nonAll = useMemo(() => options.filter((o) => o !== allLabel), [options, allLabel]);
-  const filtered = useMemo(() => nonAll.filter((o) => o.toLowerCase().includes(query.toLowerCase())), [nonAll, query]);
+  const filtered = useMemo(
+    () => nonAll.filter((o) => o.toLowerCase().includes(query.toLowerCase())),
+    [nonAll, query]
+  );
+
   useEffect(() => {
-    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setQuery(""); } };
-    document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h);
+    const h = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
   }, []);
-  const isAll = value === allLabel;
+
+  const selectedSet = useMemo(() => new Set(value), [value]);
+  const isAll = value.length === 0;
+  const allFilteredSelected = filtered.length > 0 && filtered.every((opt) => selectedSet.has(opt));
+
+  const toggleOne = (opt: string) => {
+    if (selectedSet.has(opt)) {
+      onChange(value.filter((v) => v !== opt));
+    } else {
+      onChange([...value, opt]);
+    }
+  };
+
+  const selectFiltered = () => {
+    const merged = new Set(value);
+    filtered.forEach((opt) => merged.add(opt));
+    onChange(Array.from(merged));
+  };
+
+  const clearFiltered = () => {
+    const filteredSet = new Set(filtered);
+    onChange(value.filter((v) => !filteredSet.has(v)));
+  };
+
   return (
-    <div ref={ref} className="relative min-w-[200px]">
-      <button type="button" onClick={() => { setOpen((o) => !o); setQuery(""); }}
-        className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-left text-sm text-slate-700 outline-none flex items-center justify-between gap-2 hover:border-slate-300 transition">
-        <span className="truncate">{value}</span>
+    <div ref={ref} className="relative min-w-[220px]">
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((o) => !o);
+          setQuery("");
+        }}
+        className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-left text-sm text-slate-700 outline-none flex items-center justify-between gap-2 hover:border-slate-300 transition"
+      >
+        <span className="truncate">{formatSelectedCustomers(value)}</span>
         <svg className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
           <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
         </svg>
       </button>
+
       {open && (
-        <div className="absolute z-50 mt-1 w-full min-w-[260px] rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden">
+        <div className="absolute z-50 mt-1 w-full min-w-[320px] rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden">
           <div className="p-2 border-b border-slate-100">
-            <input autoFocus type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={placeholder}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400" />
+            <input
+              autoFocus
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={placeholder}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+            />
           </div>
-          {!query && (
-            <div className="border-b border-slate-100">
-              <button type="button" onClick={() => { onChange(allLabel); setOpen(false); setQuery(""); }}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-semibold hover:bg-slate-50 transition text-slate-800">
-                <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${isAll ? "border-slate-800 bg-slate-800" : "border-slate-300"}`}>
-                  {isAll && <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" /></svg>}
-                </span>(Select All)
+
+          <div className="border-b border-slate-100">
+            <button
+              type="button"
+              onClick={() => {
+                onChange([]);
+                setOpen(false);
+                setQuery("");
+              }}
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-semibold hover:bg-slate-50 transition text-slate-800"
+            >
+              <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${isAll ? "border-slate-800 bg-slate-800" : "border-slate-300"}`}>
+                {isAll && <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" /></svg>}
+              </span>
+              (Select All Customers)
+            </button>
+
+            {query && filtered.length > 0 && (
+              <button
+                type="button"
+                onClick={allFilteredSelected ? clearFiltered : selectFiltered}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-semibold hover:bg-slate-50 transition text-slate-800"
+              >
+                <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${allFilteredSelected ? "border-slate-800 bg-slate-800" : "border-slate-300"}`}>
+                  {allFilteredSelected && <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" /></svg>}
+                </span>
+                {allFilteredSelected ? `Clear all matching "${query}"` : `Select all matching "${query}"`}
               </button>
+            )}
+          </div>
+
+          {value.length > 0 && (
+            <div className="border-b border-slate-100 px-4 py-2 text-xs text-slate-500">
+              {value.length} selected
             </div>
           )}
-          <div className="max-h-56 overflow-y-auto">
-            {filtered.length === 0 ? <div className="px-4 py-3 text-sm text-slate-400">No results</div> : filtered.map((opt) => {
-              const sel = value === opt;
-              return (
-                <button key={opt} type="button" onClick={() => { onChange(opt); setOpen(false); setQuery(""); }}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm transition hover:bg-slate-50 text-slate-700">
-                  <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${sel ? "border-slate-800 bg-slate-800" : "border-slate-300"}`}>
-                    {sel && <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" /></svg>}
-                  </span>{opt}
-                </button>
-              );
-            })}
+
+          <div className="max-h-64 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <div className="px-4 py-3 text-sm text-slate-400">No results</div>
+            ) : (
+              filtered.map((opt) => {
+                const sel = selectedSet.has(opt);
+                return (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => toggleOne(opt)}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm transition hover:bg-slate-50 text-slate-700"
+                  >
+                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${sel ? "border-slate-800 bg-slate-800" : "border-slate-300"}`}>
+                      {sel && <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" /></svg>}
+                    </span>
+                    <span className="truncate">{opt}</span>
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
       )}
@@ -380,7 +479,7 @@ function AreaRow({ row, lastMonth, allMonths }: {
 }) {
   const [open, setOpen] = useState(false);
   const pullRate = row.total > 0 ? Math.round((row.activeLastMonth / row.total) * 100) : 0;
-  const rateColor = pullRate >= 70 ? "text-emerald-600 font-bold" : pullRate >= 40 ? "text-amber-600 font-bold" : "text-red-600 font-bold";
+  const rateColor = pullRate >= 70 ? "text-emerald-600 font-bold" : pullRate >= 40 ? "text-amber-600 font-bold" : "text-slate-600 font-bold";
 
   // compute inactive months per store
   function getInactiveMoCount(store: typeof row.sortedStores[0]) {
@@ -407,10 +506,10 @@ function AreaRow({ row, lastMonth, allMonths }: {
         <td className="px-4 py-3 text-slate-700 font-medium">{row.area}</td>
         <td className="px-4 py-3 text-right text-slate-700">{row.total}</td>
         <td className="px-4 py-3 text-right text-emerald-700 font-semibold">{row.activeLastMonth}</td>
-        <td className="px-4 py-3 text-right text-red-600">{row.inactiveLastMonth}</td>
+        <td className="px-4 py-3 text-right text-slate-600">{row.inactiveLastMonth}</td>
         <td className="px-4 py-3 text-right">
           {row.inactive3Plus > 0
-            ? <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">{row.inactive3Plus}</span>
+            ? <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{row.inactive3Plus}</span>
             : <span className="text-slate-400">0</span>}
         </td>
         <td className={`px-4 py-3 text-right ${rateColor}`}>{pullRate}%</td>
@@ -445,7 +544,7 @@ function AreaRow({ row, lastMonth, allMonths }: {
                         </td>
                         <td className="py-2 text-right">
                           {!isActive && inactiveMo > 0
-                            ? <span className={`font-semibold ${inactiveMo >= 3 ? "text-red-600" : "text-amber-600"}`}>No pull for {inactiveMo} month{inactiveMo !== 1 ? "s" : ""}</span>
+                            ? <span className={`font-semibold ${inactiveMo >= 3 ? "text-slate-600" : "text-amber-600"}`}>No pull for {inactiveMo} month{inactiveMo !== 1 ? "s" : ""}</span>
                             : <span className="text-slate-400">—</span>}
                         </td>
                         <td className="py-2 text-right text-slate-700">{store.monthCases[lastMonth] || 0}</td>
@@ -613,7 +712,7 @@ function AnalyticsHeader({
         <button
           type="button"
           onClick={() => setAnalyticsSection("win-back")}
-          className={`${cardBase} bg-amber-50 text-amber-700 border-amber-200 ${analyticsSection === "win-back" ? selectedRing : ""}`}
+          className={`${cardBase} bg-slate-50 text-slate-700 border-amber-200 ${analyticsSection === "win-back" ? selectedRing : ""}`}
         >
           <div>
             <div className="text-sm font-semibold">Win-Back Candidates</div>
@@ -621,14 +720,14 @@ function AnalyticsHeader({
           </div>
           <div className="text-right shrink-0">
             <span className="text-3xl font-extrabold leading-none">{winBackCount}</span>
-            <span className="text-xs font-semibold text-amber-400 ml-1">stores</span>
+            <span className="text-xs font-semibold text-slate-400 ml-1">stores</span>
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => setAnalyticsSection("declining")}
-          className={`${cardBase} bg-red-50 text-red-700 border-red-200 ${analyticsSection === "declining" ? selectedRing : ""}`}
+          className={`${cardBase} bg-slate-50 text-slate-600 border-red-200 ${analyticsSection === "declining" ? selectedRing : ""}`}
         >
           <div>
             <div className="text-sm font-semibold">Declining Stores</div>
@@ -654,11 +753,11 @@ function WinBackAreaGroup({ group, effectiveMonths }: {
   const total = group.totalStoresInArea;
 
   return (
-    <div className="rounded-2xl border border-amber-200 bg-white overflow-hidden">
+    <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
       <button type="button" onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-amber-50 transition text-left">
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-50 transition text-left">
         <div className="flex items-center gap-3 min-w-0">
-          <svg className={`h-3.5 w-3.5 text-amber-400 transition-transform shrink-0 ${open ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+          <svg className={`h-3.5 w-3.5 text-slate-400 transition-transform shrink-0 ${open ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
           <div className="min-w-0">
             <span className="font-semibold text-sm text-slate-800">{group.area}</span>
             <span className="ml-2 text-xs text-slate-500">{group.retailer}</span>
@@ -666,26 +765,26 @@ function WinBackAreaGroup({ group, effectiveMonths }: {
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <span className="text-xs text-slate-500">{pulled}/{total} stores</span>
-          <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-800">{pulled} win-back</span>
+          <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-bold text-slate-700">{pulled} win-back</span>
         </div>
       </button>
       {open && (
-        <div className="border-t border-amber-100 overflow-auto">
+        <div className="border-t border-slate-100 overflow-auto">
           <table className="min-w-full text-xs">
-            <thead className="bg-amber-50">
+            <thead className="bg-slate-50">
               <tr>
-                <th className="px-4 py-2 text-left font-semibold text-amber-900">Store</th>
-                <th className="px-4 py-2 text-right font-semibold text-amber-900">Historical Cases</th>
-                <th className="px-4 py-2 text-right font-semibold text-amber-900">Last Active Month</th>
+                <th className="px-4 py-2 text-left font-semibold text-slate-700">Store</th>
+                <th className="px-4 py-2 text-right font-semibold text-slate-700">Historical Cases</th>
+                <th className="px-4 py-2 text-right font-semibold text-slate-700">Last Active Month</th>
               </tr>
             </thead>
             <tbody>
               {group.stores.map((s, i) => {
                 const lastActiveMo = [...effectiveMonths].reverse().find((m) => (s.monthCases[m] || 0) > 0) ?? "—";
                 return (
-                  <tr key={i} className="border-t border-amber-50 hover:bg-amber-50 transition-colors">
+                  <tr key={i} className="border-t border-amber-50 hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-2 font-medium text-slate-800">{s.customer}</td>
-                    <td className="px-4 py-2 text-right font-bold text-amber-700">{s.total}</td>
+                    <td className="px-4 py-2 text-right font-bold text-slate-700">{s.total}</td>
                     <td className="px-4 py-2 text-right text-slate-500">{lastActiveMo}</td>
                   </tr>
                 );
@@ -784,8 +883,8 @@ function AnalyticsTab({
         </div>
       </div>
 
-      <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
-        <h3 className="mb-1 text-sm font-bold text-amber-900 uppercase tracking-wide">Win-Back by Area</h3>
+      <div className="rounded-3xl border border-amber-200 bg-slate-50 p-5 shadow-sm">
+        <h3 className="mb-1 text-sm font-bold text-slate-700 uppercase tracking-wide">Win-Back by Area</h3>
         <p className="mb-3 text-xs text-amber-600">Areas with most win-back stores · pulled/total shown</p>
         <div className="space-y-2">
           {winBackByArea.length === 0 ? <p className="text-xs text-amber-600">No win-back candidates</p> :
@@ -796,7 +895,7 @@ function AnalyticsTab({
               return (
                 <div key={i} className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="w-5 h-5 flex items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-700 shrink-0">{i + 1}</span>
+                    <span className="w-5 h-5 flex items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-slate-700 shrink-0">{i + 1}</span>
                     <span className="text-xs text-slate-700 truncate">{areaKey}</span>
                   </div>
                   <div className="shrink-0 flex items-center gap-1.5">
@@ -809,18 +908,18 @@ function AnalyticsTab({
         </div>
       </div>
 
-      <div className="rounded-3xl border border-red-200 bg-red-50 p-5 shadow-sm">
-        <h3 className="mb-1 text-sm font-bold text-red-900 uppercase tracking-wide">Declining Stores by Area</h3>
-        <p className="mb-3 text-xs text-red-600">Areas with most stores declining 50%+</p>
+      <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-1 text-sm font-bold text-slate-900 uppercase tracking-wide">Declining Stores by Area</h3>
+        <p className="mb-3 text-xs text-slate-600">Areas with most stores declining 50%+</p>
         <div className="space-y-2">
-          {decliningByArea.length === 0 ? <p className="text-xs text-red-600">No declining stores</p> :
+          {decliningByArea.length === 0 ? <p className="text-xs text-slate-600">No declining stores</p> :
             decliningByArea.map(([area, count], i) => (
               <div key={i} className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-5 h-5 flex items-center justify-center rounded-full bg-red-100 text-xs font-bold text-red-600 shrink-0">{i + 1}</span>
+                  <span className="w-5 h-5 flex items-center justify-center rounded-full bg-red-100 text-xs font-bold text-slate-600 shrink-0">{i + 1}</span>
                   <span className="text-xs text-slate-700 truncate">{area}</span>
                 </div>
-                <span className="shrink-0 rounded-full bg-red-200 px-2 py-0.5 text-xs font-bold text-red-800">{count} stores</span>
+                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700">{count} stores</span>
               </div>
             ))}
         </div>
@@ -857,13 +956,13 @@ function AnalyticsTab({
   );
 
   const WinBackCandidates = () => (
-    <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
-      <h3 className="mb-1 text-lg font-semibold text-amber-900">🔁 Win-Back Candidates
-        <span className="ml-2 text-sm font-normal text-amber-700">({ctx.winBackCandidates.length} stores across {winBackByAreaGrouped.length} areas)</span>
+    <div className="rounded-3xl border border-amber-200 bg-slate-50 p-6 shadow-sm">
+      <h3 className="mb-1 text-lg font-semibold text-slate-700">🔁 Win-Back Candidates
+        <span className="ml-2 text-sm font-normal text-slate-700">({ctx.winBackCandidates.length} stores across {winBackByAreaGrouped.length} areas)</span>
       </h3>
-      <p className="mb-4 text-sm text-amber-700">Had meaningful historical volume · zero orders last 3 months · grouped by retailer area</p>
+      <p className="mb-4 text-sm text-slate-700">Had meaningful historical volume · zero orders last 3 months · grouped by retailer area</p>
       {ctx.winBackCandidates.length === 0 ? (
-        <div className="rounded-2xl border border-amber-200 bg-white px-4 py-6 text-sm text-amber-700">No win-back candidates found for the current filters.</div>
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-sm text-slate-700">No win-back candidates found for the current filters.</div>
       ) : (
         <div className="space-y-3">
           {winBackByAreaGrouped.map((group, gi) => (
@@ -875,32 +974,32 @@ function AnalyticsTab({
   );
 
   const DecliningStores = () => (
-    <div className="rounded-3xl border border-red-200 bg-red-50 p-6 shadow-sm">
-      <h3 className="mb-1 text-lg font-semibold text-red-900">📉 Declining Stores
-        <span className="ml-2 text-sm font-normal text-red-700">({ctx.decliningStores.length} stores)</span>
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h3 className="mb-1 text-lg font-semibold text-slate-900">📉 Declining Stores
+        <span className="ml-2 text-sm font-normal text-slate-600">({ctx.decliningStores.length} stores)</span>
       </h3>
-      <p className="mb-4 text-sm text-red-700">Volume dropped 50%+ comparing last 2 months vs prior 2 months.</p>
+      <p className="mb-4 text-sm text-slate-600">Volume dropped 50%+ comparing last 2 months vs prior 2 months.</p>
       {ctx.decliningStores.length === 0 ? (
-        <div className="rounded-2xl border border-red-200 bg-white px-4 py-6 text-sm text-red-700">No declining stores found for the current filters.</div>
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-sm text-slate-600">No declining stores found for the current filters.</div>
       ) : (
-        <div className="overflow-auto rounded-2xl border border-red-200 bg-white">
+        <div className="overflow-auto rounded-2xl border border-slate-200 bg-white">
           <table className="min-w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-red-50 shadow-sm">
+            <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
               <tr>
-                <th className="px-4 py-3 text-left font-semibold text-red-900">Store</th>
-                <th className="px-4 py-3 text-left font-semibold text-red-900">Retailer</th>
-                <th className="px-4 py-3 text-left font-semibold text-red-900">Area</th>
-                <th className="px-4 py-3 text-right font-semibold text-red-900">Total Cases</th>
-                <th className="px-4 py-3 text-right font-semibold text-red-900">Cases ({ctx.lastMonth})</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-900">Store</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-900">Retailer</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-900">Area</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-900">Total Cases</th>
+                <th className="px-4 py-3 text-right font-semibold text-slate-900">Cases ({ctx.lastMonth})</th>
               </tr>
             </thead>
             <tbody>
               {ctx.decliningStores.map((s, i) => (
-                <tr key={i} className="border-t border-red-100 hover:bg-red-50 transition-colors">
+                <tr key={i} className="border-t border-red-100 hover:bg-slate-50 transition-colors">
                   <td className="px-4 py-2.5 font-medium text-slate-800">{s.customer}</td>
                   <td className="px-4 py-2.5 text-slate-600">{s.retailer}</td>
                   <td className="px-4 py-2.5 text-slate-600">{s.retailerArea}</td>
-                  <td className="px-4 py-2.5 text-right font-bold text-red-700">{s.total}</td>
+                  <td className="px-4 py-2.5 text-right font-bold text-slate-600">{s.total}</td>
                   <td className="px-4 py-2.5 text-right text-slate-700">{s.monthCases[ctx.lastMonth] || 0}</td>
                 </tr>
               ))}
@@ -945,7 +1044,7 @@ export default function KeheDashboardView() {
   const [pulloutFromMonth, setPulloutFromMonth] = useState(getPastMonthsInputValue(5));
   const [pulloutToMonth, setPulloutToMonth] = useState(getCurrentMonthInputValue());
   const [pulloutRetailerFilter, setPulloutRetailerFilter] = useState("All Retailers");
-  const [pulloutCustomerFilter, setPulloutCustomerFilter] = useState("All Customers");
+  const [pulloutCustomerFilter, setPulloutCustomerFilter] = useState<string[]>([]);
   const [pulloutSearchQuery, setPulloutSearchQuery] = useState("");
 
   const [rows, setRows] = useState<VelocityRow[]>([]);
@@ -1088,7 +1187,7 @@ export default function KeheDashboardView() {
 
   const pulloutRows = useMemo(() => rows.filter((row) => pulloutSelectedMonths.includes(normalizeMonthLabel(row.month)) && (pulloutRetailerFilter === "All Retailers" || String(row.retailer || "").replace(/\u00a0/g, " ").trim() === pulloutRetailerFilter)), [rows, pulloutSelectedMonths, pulloutRetailerFilter]);
   const customerOptions = useMemo(() => ["All Customers", ...Array.from(new Set(pulloutRows.map((r) => String(r.customer || "").trim()).filter(Boolean))).sort()], [pulloutRows]);
-  useEffect(() => { setPulloutCustomerFilter("All Customers"); }, [pulloutRetailerFilter]);
+  useEffect(() => { setPulloutCustomerFilter([]); }, [pulloutRetailerFilter]);
   useEffect(() => { setPulloutSearchQuery(""); }, [pulloutSubTab]);
 
   const pulloutByAreaTable = useMemo(() => {
@@ -1104,7 +1203,7 @@ export default function KeheDashboardView() {
 
   const pulloutByStoreTable = useMemo(() => {
     const mc = [...pulloutSelectedMonths].sort(compareMonthLabelsAsc);
-    const filtered = pulloutRows.filter((r) => pulloutCustomerFilter === "All Customers" || String(r.customer || "").trim() === pulloutCustomerFilter);
+    const selectedCustomers = new Set(pulloutCustomerFilter);\n    const filtered = pulloutRows.filter((r) => pulloutCustomerFilter.length === 0 || selectedCustomers.has(String(r.customer || "").trim()));
     const g = new Map<string, { retailer: string; retailer_area: string; customer: string; months: Record<string, number>; total: number }>();
     for (const row of filtered) {
       const month = normalizeMonthLabel(row.month), retailer = String(row.retailer || "").trim() || "Unknown", ra = String(row.retailer_area || "").trim() || "Unknown", cust = String(row.customer || "").trim() || "Unknown", key = `${retailer}__${ra}__${cust}`;
@@ -1183,7 +1282,7 @@ export default function KeheDashboardView() {
 
   const renderPulloutTable = () => {
     if (loading) return <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">Loading KEHE velocity data...</div>;
-    if (loadError) return <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>;
+    if (loadError) return <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">{loadError}</div>;
     const isArea = pulloutSubTab === "by-retailer-area";
     const monthColumns = isArea ? pulloutByAreaTable.monthColumns : pulloutByStoreTable.monthColumns;
     const tableRows = isArea ? filteredByAreaRows : filteredByStoreRows;
@@ -1312,7 +1411,7 @@ export default function KeheDashboardView() {
                 Loading...
               </div>
             ) : loadError ? (
-              <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">
+              <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
                 {loadError}
               </div>
             ) : (
