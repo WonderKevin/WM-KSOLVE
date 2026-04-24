@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 
 type TabKey = "analytics" | "velocity" | "pullout";
@@ -450,79 +450,35 @@ function AreaRow({ row, lastMonth, allMonths }: {
 
 // ── Analytics Tab Component ───────────────────────────────────────────────────
 function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loading: boolean; loadError: string; }) {
-  const [aiOutput, setAiOutput] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState("");
-  const [distributor, setDistributor] = useState("KEHE");
-  const [generated, setGenerated] = useState(false);
-  const outputRef = useRef<HTMLDivElement>(null);
   const winBackRef = useRef<HTMLDivElement>(null);
   const decliningRef = useRef<HTMLDivElement>(null);
 
-  // Date filter for analytics
+  // Date filter
   const allAvailableMonths = useMemo(() => Array.from(new Set(rows.map((r) => normalizeMonthLabel(r.month)))).sort(compareMonthLabelsAsc), [rows]);
   const defaultLastMonth = allAvailableMonths[allAvailableMonths.length - 1] ?? "";
   const [analyticsDateMode, setAnalyticsDateMode] = useState<"lastMonth" | "custom">("lastMonth");
   const [analyticsCustomMonth, setAnalyticsCustomMonth] = useState(getLastMonthInputValue());
 
+  // Retailer filter
+  const retailerOptions = useMemo(() => {
+    const all = Array.from(new Set(rows.map((r) => String(r.retailer || "").replace(/\u00a0/g, " ").trim()).filter(Boolean))).sort();
+    return ["All Retailers", ...all];
+  }, [rows]);
+  const [retailerFilter, setRetailerFilter] = useState("All Retailers");
+
   const analyticsLastMonth = useMemo(() => {
     if (analyticsDateMode === "lastMonth") return defaultLastMonth;
-    // convert "2025-03" to month label
     const [y, m] = analyticsCustomMonth.split("-").map(Number);
     if (!y || !m) return defaultLastMonth;
     return normalizeMonthLabel(monthLabelFromDate(new Date(y, m - 1, 1)));
   }, [analyticsDateMode, analyticsCustomMonth, defaultLastMonth]);
 
-  const ctx = useMemo(() => buildAnalyticsContext(rows, analyticsLastMonth), [rows, analyticsLastMonth]);
+  // Filter rows by retailer before building context
+  const filteredRows = useMemo(() =>
+    retailerFilter === "All Retailers" ? rows : rows.filter((r) => String(r.retailer || "").replace(/\u00a0/g, " ").trim() === retailerFilter),
+    [rows, retailerFilter]);
 
-  const runAnalysis = useCallback(async () => {
-    if (!ctx) return;
-    setAiLoading(true); setAiOutput(""); setAiError(""); setGenerated(false);
-    try {
-      const prompt = buildAIPrompt(ctx, distributor);
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, stream: true, messages: [{ role: "user", content: prompt }] }),
-      });
-      if (!response.ok) throw new Error(`API error ${response.status}`);
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      if (!reader) throw new Error("No response stream");
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6).trim();
-            if (data === "[DONE]") continue;
-            try { const p = JSON.parse(data); const d = p?.delta?.text ?? p?.content?.[0]?.text ?? ""; if (d) setAiOutput((prev) => prev + d); } catch {}
-          }
-        }
-      }
-      setGenerated(true);
-    } catch (err: any) { setAiError(err?.message || "Analysis failed."); }
-    finally { setAiLoading(false); }
-  }, [ctx, distributor]);
-
-  const renderOutput = (text: string) => {
-    if (!text) return null;
-    return text.split("\n").map((line, i) => {
-      if (line.startsWith("## ")) return <h2 key={i} className="mt-8 mb-3 text-xl font-bold text-slate-900 border-b border-slate-200 pb-2">{line.slice(3)}</h2>;
-      if (line.startsWith("**") && line.endsWith("**")) return <p key={i} className="mt-4 mb-1 font-semibold text-slate-800">{line.replace(/\*\*/g, "")}</p>;
-      if (line.startsWith("**") && line.includes("**")) { const parts = line.split("**"); return <p key={i} className="mt-3 mb-1 text-slate-700">{parts.map((p, pi) => pi % 2 === 1 ? <strong key={pi}>{p}</strong> : p)}</p>; }
-      if (line.startsWith("- ") || line.startsWith("• ")) {
-        const content = line.slice(2);
-        const bg = content.startsWith("🔴") ? "bg-red-50 border-red-200" : content.startsWith("🟡") ? "bg-amber-50 border-amber-200" : content.startsWith("🟢") ? "bg-emerald-50 border-emerald-200" : content.startsWith("⚫") ? "bg-slate-50 border-slate-200" : "bg-white border-slate-100";
-        return <div key={i} className={`flex gap-2 rounded-xl border px-4 py-2.5 mb-2 text-sm text-slate-700 ${bg}`}><span className="shrink-0 mt-0.5 text-slate-400">•</span><span>{content}</span></div>;
-      }
-      if (line.trim() === "") return null;
-      return <p key={i} className="text-sm text-slate-700 leading-relaxed mb-2">{line}</p>;
-    });
-  };
+  const ctx = useMemo(() => buildAnalyticsContext(filteredRows, analyticsLastMonth), [filteredRows, analyticsLastMonth]);
 
   if (loading) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">Loading data for analysis...</div>;
   if (loadError) return <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>;
@@ -531,19 +487,62 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
   const totalActive = ctx.areaSummaries.reduce((s, a) => s + a.activeLastMonth, 0);
   const totalStores = ctx.areaSummaries.reduce((s, a) => s + a.total, 0);
   const pct = totalStores > 0 ? Math.round((totalActive / totalStores) * 100) : 0;
-  const topAreaByLastMonth = ctx.areaSummaries[0];
+
+  // Top area by pull rate (highest pull rate with meaningful store count)
+  const topAreaByPullRate = [...ctx.areaSummaries]
+    .filter((a) => a.total >= 3)
+    .sort((a, b) => {
+      const ra = a.total > 0 ? a.activeLastMonth / a.total : 0;
+      const rb = b.total > 0 ? b.activeLastMonth / b.total : 0;
+      return rb - ra;
+    })[0];
+
+  // Sorted by pull rate for breakdown table
+  const areasByPullRate = [...ctx.areaSummaries].sort((a, b) => {
+    const ra = a.total > 0 ? a.activeLastMonth / a.total : 0;
+    const rb = b.total > 0 ? b.activeLastMonth / b.total : 0;
+    return rb - ra;
+  });
+
+  // Top 5 by pull rate %
+  const top5ByPullRate = areasByPullRate.slice(0, 5);
+
+  // Win-back by area: count win-back candidates per area
+  const winBackByArea = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of ctx.winBackCandidates) {
+      const key = `${s.retailer} · ${s.retailerArea}`;
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [ctx.winBackCandidates]);
+
+  // Declining by area
+  const decliningByArea = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of ctx.decliningStores) {
+      const key = `${s.retailer} · ${s.retailerArea}`;
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [ctx.decliningStores]);
 
   return (
     <div className="space-y-6">
       {/* Header card */}
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-slate-900">Sales Analytics</h2>
-            <p className="mt-1 text-sm text-slate-500">AI-powered account analysis · {ctx.allMonths.length} months of velocity data</p>
-          </div>
+          <h2 className="text-2xl font-bold text-slate-900">Sales Analytics</h2>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end flex-wrap">
-            {/* Date filter */}
+            {/* Retailer filter */}
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">Retailer</label>
+              <select value={retailerFilter} onChange={(e) => setRetailerFilter(e.target.value)}
+                className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400">
+                {retailerOptions.map((o) => <option key={o}>{o}</option>)}
+              </select>
+            </div>
+            {/* Reference Month */}
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Reference Month</label>
               <select value={analyticsDateMode} onChange={(e) => setAnalyticsDateMode(e.target.value as "lastMonth" | "custom")}
@@ -559,85 +558,108 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
                   className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400" />
               </div>
             )}
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Distributor</label>
-              <input type="text" value={distributor} onChange={(e) => setDistributor(e.target.value)}
-                className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400 w-36" />
-            </div>
-            <button type="button" onClick={runAnalysis} disabled={aiLoading}
-              className="h-11 flex items-center gap-2 rounded-2xl bg-slate-900 px-6 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed">
-              {aiLoading
-                ? <><svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Analyzing...</>
-                : <><svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>{generated ? "Re-run Analysis" : "Run AI Analysis"}</>}
-            </button>
           </div>
         </div>
       </div>
 
-      {/* Stat cards — clickable Win-Back and Declining scroll to section */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        {/* Total Stores */}
-        <div className="rounded-3xl border bg-blue-50 text-blue-700 border-blue-200 p-5 shadow-sm">
-          <div className="text-2xl font-bold">{ctx.totalStores}</div>
-          <div className="mt-1 text-sm font-semibold">Total Stores</div>
-          <div className="mt-0.5 text-xs opacity-75">across all areas</div>
-        </div>
-        {/* Top Area - moved right after Total Stores */}
-        <div className="rounded-3xl border bg-purple-50 text-purple-700 border-purple-200 p-5 shadow-sm">
-          <div className="text-2xl font-bold truncate">{topAreaByLastMonth ? topAreaByLastMonth.area : "—"}</div>
-          <div className="mt-1 text-sm font-semibold">Top Area</div>
-          <div className="mt-0.5 text-xs opacity-75">{topAreaByLastMonth ? `${topAreaByLastMonth.lastMonthCases} cases last month` : ""}</div>
-        </div>
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {/* Active Last Month */}
         <div className="rounded-3xl border bg-emerald-50 text-emerald-700 border-emerald-200 p-5 shadow-sm">
           <div className="text-2xl font-bold">{totalActive} / {totalStores}</div>
           <div className="mt-1 text-sm font-semibold">Active Last Month</div>
-          <div className="mt-0.5 text-xs opacity-75">{pct}% pull rate</div>
+          <div className="mt-0.5 text-xs opacity-75">{pct}% pull rate across all areas</div>
         </div>
-        {/* Win-Back Candidates — clickable */}
+        {/* Top Area */}
+        <div className="rounded-3xl border bg-purple-50 text-purple-700 border-purple-200 p-5 shadow-sm">
+          <div className="text-2xl font-bold truncate">{topAreaByPullRate ? topAreaByPullRate.area : "—"}</div>
+          <div className="mt-1 text-sm font-semibold">Top Area</div>
+          <div className="mt-0.5 text-xs opacity-75">
+            {topAreaByPullRate ? `${Math.round((topAreaByPullRate.activeLastMonth / topAreaByPullRate.total) * 100)}% pull rate · ${topAreaByPullRate.lastMonthCases} cases` : ""}
+          </div>
+        </div>
+        {/* Win-Back — clickable */}
         <button type="button" onClick={() => winBackRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          className="rounded-3xl border bg-amber-50 text-amber-700 border-amber-200 p-5 shadow-sm text-left hover:bg-amber-100 transition cursor-pointer">
+          className="rounded-3xl border bg-amber-50 text-amber-700 border-amber-200 p-5 shadow-sm text-left hover:bg-amber-100 transition">
           <div className="text-2xl font-bold">{ctx.winBackCandidates.length}</div>
           <div className="mt-1 text-sm font-semibold">Win-Back Candidates</div>
           <div className="mt-0.5 text-xs opacity-75">zero last 3 months, had prior volume ↓</div>
         </button>
-        {/* Declining Stores — clickable */}
+        {/* Declining — clickable */}
         <button type="button" onClick={() => decliningRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          className="rounded-3xl border bg-red-50 text-red-700 border-red-200 p-5 shadow-sm text-left hover:bg-red-100 transition cursor-pointer">
+          className="rounded-3xl border bg-red-50 text-red-700 border-red-200 p-5 shadow-sm text-left hover:bg-red-100 transition">
           <div className="text-2xl font-bold">{ctx.decliningStores.length}</div>
           <div className="mt-1 text-sm font-semibold">Declining Stores</div>
           <div className="mt-0.5 text-xs opacity-75">volume dropped 50%+ ↓</div>
         </button>
       </div>
 
-      {/* Area summary bar — sorted by last month cases */}
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="mb-4 text-base font-semibold text-slate-900">Area Summary <span className="text-sm font-normal text-slate-500 ml-1">— sorted by cases pulled in {ctx.lastMonth}</span></h3>
-        <div className="space-y-2">
-          {ctx.areaSummaries.map((area, i) => {
-            const maxCases = ctx.areaSummaries[0]?.lastMonthCases || 1;
-            const barPct = Math.round((area.lastMonthCases / maxCases) * 100);
-            const pullRate = area.total > 0 ? Math.round((area.activeLastMonth / area.total) * 100) : 0;
-            const rateColor = pullRate >= 70 ? "text-emerald-600" : pullRate >= 40 ? "text-amber-600" : "text-red-500";
-            return (
-              <div key={i} className="flex items-center gap-3">
-                <div className="w-44 shrink-0 text-sm text-slate-700 truncate" title={area.area}>{area.area}</div>
-                <div className="flex-1 h-6 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-slate-700 rounded-full transition-all" style={{ width: `${barPct}%` }} />
+      {/* Top 5 Summary — 3 columns */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {/* Top 5 Areas by Pull Rate */}
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-3 text-sm font-bold text-slate-800 uppercase tracking-wide">Top 5 Areas by Pull Rate</h3>
+          <p className="mb-3 text-xs text-slate-500">{ctx.lastMonth}</p>
+          <div className="space-y-2">
+            {top5ByPullRate.map((area, i) => {
+              const rate = area.total > 0 ? Math.round((area.activeLastMonth / area.total) * 100) : 0;
+              const color = rate >= 70 ? "bg-emerald-500" : rate >= 40 ? "bg-amber-400" : "bg-red-400";
+              return (
+                <div key={i} className="flex items-center gap-3">
+                  <span className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600 shrink-0">{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold text-slate-700 truncate">{area.area}</div>
+                    <div className="mt-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${color}`} style={{ width: `${rate}%` }} />
+                    </div>
+                  </div>
+                  <span className={`text-xs font-bold shrink-0 ${rate >= 70 ? "text-emerald-600" : rate >= 40 ? "text-amber-600" : "text-red-500"}`}>{rate}%</span>
+                  <span className="text-xs text-slate-400 shrink-0">{area.activeLastMonth}/{area.total}</span>
                 </div>
-                <div className="w-16 text-right text-sm font-semibold text-slate-900">{area.lastMonthCases}</div>
-                <div className={`w-14 text-right text-xs font-semibold ${rateColor}`}>{pullRate}%</div>
-                <div className="w-28 text-right text-xs text-slate-500">{area.activeLastMonth}/{area.total} active</div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Top 5 Win-Back by Area */}
+        <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+          <h3 className="mb-3 text-sm font-bold text-amber-900 uppercase tracking-wide">Win-Back by Area</h3>
+          <p className="mb-3 text-xs text-amber-700">Areas with most stores gone 3+ months</p>
+          <div className="space-y-2">
+            {winBackByArea.length === 0 ? <p className="text-xs text-amber-600">No win-back candidates</p> : winBackByArea.map(([area, count], i) => (
+              <div key={i} className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-5 h-5 flex items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-700 shrink-0">{i + 1}</span>
+                  <span className="text-xs text-slate-700 truncate">{area}</span>
+                </div>
+                <span className="shrink-0 rounded-full bg-amber-200 px-2 py-0.5 text-xs font-bold text-amber-800">{count} stores</span>
               </div>
-            );
-          })}
+            ))}
+          </div>
+        </div>
+
+        {/* Top 5 Declining by Area */}
+        <div className="rounded-3xl border border-red-200 bg-red-50 p-5 shadow-sm">
+          <h3 className="mb-3 text-sm font-bold text-red-900 uppercase tracking-wide">Declining Stores by Area</h3>
+          <p className="mb-3 text-xs text-red-700">Areas with most stores declining 50%+</p>
+          <div className="space-y-2">
+            {decliningByArea.length === 0 ? <p className="text-xs text-red-600">No declining stores</p> : decliningByArea.map(([area, count], i) => (
+              <div key={i} className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-5 h-5 flex items-center justify-center rounded-full bg-red-100 text-xs font-bold text-red-600 shrink-0">{i + 1}</span>
+                  <span className="text-xs text-slate-700 truncate">{area}</span>
+                </div>
+                <span className="shrink-0 rounded-full bg-red-200 px-2 py-0.5 text-xs font-bold text-red-800">{count} stores</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Retailer Area Breakdown — expandable rows */}
+      {/* Retailer Area Breakdown — sorted by pull rate highest to lowest */}
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <h3 className="mb-1 text-lg font-semibold text-slate-900">Retailer Area Breakdown</h3>
-        <p className="mb-4 text-sm text-slate-500">Click any row to expand and see all stores. Pull Rate = last month ({ctx.lastMonth}). Gone 3+ = stores with no pull for 3+ consecutive months.</p>
+        <p className="mb-4 text-sm text-slate-500">Click any row to expand and see all stores. Sorted by pull rate highest to lowest. Pull Rate = last month ({ctx.lastMonth}). Gone 3+ = stores with no pull for 3+ consecutive months.</p>
         <div className="overflow-auto rounded-2xl border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50">
@@ -653,7 +675,7 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
               </tr>
             </thead>
             <tbody>
-              {ctx.areaSummaries.map((row, i) => (
+              {areasByPullRate.map((row, i) => (
                 <AreaRow key={i} row={row} lastMonth={ctx.lastMonth} allMonths={ctx.effectiveMonths} />
               ))}
             </tbody>
@@ -729,23 +751,6 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
         </div>
       )}
 
-      {/* AI Analysis output */}
-      {(aiLoading || aiOutput || aiError) && (
-        <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm" ref={outputRef}>
-          <div className="flex items-center gap-3 mb-6">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900">
-              <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
-            </div>
-            <div>
-              <div className="font-semibold text-slate-900">AI Sales Analysis — {distributor}</div>
-              <div className="text-xs text-slate-500">Reference month: {ctx.lastMonth}</div>
-            </div>
-            {aiLoading && <div className="ml-auto flex items-center gap-2 text-sm text-slate-400"><svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Streaming...</div>}
-          </div>
-          {aiError && <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{aiError}</div>}
-          {aiOutput && <div className="space-y-1">{renderOutput(aiOutput)}</div>}
-        </div>
-      )}
     </div>
   );
 }
