@@ -475,8 +475,10 @@ function AnalyticsHeader({
   setRetailerFilter,
   analyticsDateMode,
   setAnalyticsDateMode,
-  analyticsCustomMonth,
-  setAnalyticsCustomMonth,
+  analyticsFromMonth,
+  setAnalyticsFromMonth,
+  analyticsToMonth,
+  setAnalyticsToMonth,
   analyticsSearchQuery,
   setAnalyticsSearchQuery,
 }: {
@@ -490,8 +492,10 @@ function AnalyticsHeader({
   setRetailerFilter: (value: string) => void;
   analyticsDateMode: "lastMonth" | "custom";
   setAnalyticsDateMode: (value: "lastMonth" | "custom") => void;
-  analyticsCustomMonth: string;
-  setAnalyticsCustomMonth: (value: string) => void;
+  analyticsFromMonth: string;
+  setAnalyticsFromMonth: (value: string) => void;
+  analyticsToMonth: string;
+  setAnalyticsToMonth: (value: string) => void;
   analyticsSearchQuery: string;
   setAnalyticsSearchQuery: (value: string) => void;
 }) {
@@ -550,12 +554,26 @@ function AnalyticsHeader({
               </select>
             </div>
             {analyticsDateMode === "custom" && (
-              <input
-                type="month"
-                value={analyticsCustomMonth}
-                onChange={(e) => setAnalyticsCustomMonth(e.target.value)}
-                className="h-9 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400"
-              />
+              <>
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs font-medium text-slate-400 whitespace-nowrap">From</label>
+                  <input
+                    type="month"
+                    value={analyticsFromMonth}
+                    onChange={(e) => setAnalyticsFromMonth(e.target.value)}
+                    className="h-9 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs font-medium text-slate-400 whitespace-nowrap">To</label>
+                  <input
+                    type="month"
+                    value={analyticsToMonth}
+                    onChange={(e) => setAnalyticsToMonth(e.target.value)}
+                    className="h-9 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400"
+                  />
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -904,7 +922,7 @@ function AnalyticsTab({
 }
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
-export default function KeheDashboardView({ appHeaderHeight = 88 }: { appHeaderHeight?: number }) {
+export default function KeheDashboardView() {
   const [activeTab, setActiveTab] = useState<TabKey>("analytics");
   const [velocitySubTab, setVelocitySubTab] = useState<VelocitySubTabKey>("best-selling-store");
   const [pulloutSubTab, setPulloutSubTab] = useState<PulloutSubTabKey>("by-retailer-area");
@@ -939,7 +957,8 @@ export default function KeheDashboardView({ appHeaderHeight = 88 }: { appHeaderH
   const [analyticsRetailerFilter, setAnalyticsRetailerFilter] = useState("All Retailers");
   const [analyticsSearchQuery, setAnalyticsSearchQuery] = useState("");
   const [analyticsDateMode, setAnalyticsDateMode] = useState<"lastMonth" | "custom">("lastMonth");
-  const [analyticsCustomMonth, setAnalyticsCustomMonth] = useState(getLastMonthInputValue());
+  const [analyticsFromMonth, setAnalyticsFromMonth] = useState(getPastMonthsInputValue(2));
+  const [analyticsToMonth, setAnalyticsToMonth] = useState(getCurrentMonthInputValue());
 
   useEffect(() => {
     const load = async () => {
@@ -994,16 +1013,25 @@ export default function KeheDashboardView({ appHeaderHeight = 88 }: { appHeaderH
 
   const analyticsDefaultLastMonth = analyticsAvailableMonths[analyticsAvailableMonths.length - 1] ?? "";
 
+  const analyticsSelectedMonths = useMemo(() => {
+    if (analyticsDateMode === "lastMonth") return analyticsAvailableMonths;
+    return buildMonthRange(analyticsFromMonth, analyticsToMonth).map(normalizeMonthLabel);
+  }, [analyticsDateMode, analyticsAvailableMonths, analyticsFromMonth, analyticsToMonth]);
+
+  const analyticsRowsByDate = useMemo(() => {
+    if (analyticsDateMode === "lastMonth") return analyticsFilteredRows;
+    const selected = new Set(analyticsSelectedMonths);
+    return analyticsFilteredRows.filter((row) => selected.has(normalizeMonthLabel(row.month)));
+  }, [analyticsDateMode, analyticsFilteredRows, analyticsSelectedMonths]);
+
   const analyticsLastMonth = useMemo(() => {
     if (analyticsDateMode === "lastMonth") return analyticsDefaultLastMonth;
-    const [y, m] = analyticsCustomMonth.split("-").map(Number);
-    if (!y || !m) return analyticsDefaultLastMonth;
-    return normalizeMonthLabel(monthLabelFromDate(new Date(y, m - 1, 1)));
-  }, [analyticsDateMode, analyticsCustomMonth, analyticsDefaultLastMonth]);
+    return analyticsSelectedMonths[analyticsSelectedMonths.length - 1] ?? analyticsDefaultLastMonth;
+  }, [analyticsDateMode, analyticsDefaultLastMonth, analyticsSelectedMonths]);
 
   const analyticsCtx = useMemo(
-    () => buildAnalyticsContext(analyticsFilteredRows, analyticsLastMonth),
-    [analyticsFilteredRows, analyticsLastMonth]
+    () => buildAnalyticsContext(analyticsRowsByDate, analyticsLastMonth),
+    [analyticsRowsByDate, analyticsLastMonth]
   );
   const bestStoreSelectedMonths = useMemo(() => {
     if (bestStorePeriodMode === "lastMonth") return [normalizeMonthLabel(getLastMonthLabel())];
@@ -1229,8 +1257,10 @@ export default function KeheDashboardView({ appHeaderHeight = 88 }: { appHeaderH
                 setRetailerFilter={setAnalyticsRetailerFilter}
                 analyticsDateMode={analyticsDateMode}
                 setAnalyticsDateMode={setAnalyticsDateMode}
-                analyticsCustomMonth={analyticsCustomMonth}
-                setAnalyticsCustomMonth={setAnalyticsCustomMonth}
+                analyticsFromMonth={analyticsFromMonth}
+                setAnalyticsFromMonth={setAnalyticsFromMonth}
+                analyticsToMonth={analyticsToMonth}
+                setAnalyticsToMonth={setAnalyticsToMonth}
                 analyticsSearchQuery={analyticsSearchQuery}
                 setAnalyticsSearchQuery={setAnalyticsSearchQuery}
               />
