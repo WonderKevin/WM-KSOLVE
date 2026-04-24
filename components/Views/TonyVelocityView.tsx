@@ -237,6 +237,9 @@ export default function TonyVelocityView() {
   const [pendingSourceName, setPendingSourceName] = useState("");
   const [missingLocations, setMissingLocations] = useState<MissingLocation[]>([]);
   const [showVelocityUploadOptions, setShowVelocityUploadOptions] = useState(false);
+  const [showLocationModal, setShowLocationModal] = useState(false);
+  const [manualCustomer, setManualCustomer] = useState("");
+  const [manualLocation, setManualLocation] = useState("");
 
   const loadData = async () => {
     setLoading(true);
@@ -263,6 +266,12 @@ export default function TonyVelocityView() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 3500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   const locationMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -385,6 +394,7 @@ export default function TonyVelocityView() {
       if (upsertError) throw upsertError;
 
       setNotice(`Uploaded ${parsed.length.toLocaleString()} location mappings.`);
+      setShowLocationModal(false);
       await loadData();
     } catch (err: any) {
       setError(err?.message || "Failed to upload Tony location file.");
@@ -431,6 +441,37 @@ export default function TonyVelocityView() {
       setError(err?.message || "Failed to save location mappings.");
     } finally {
       setUploadingVelocity(false);
+    }
+  };
+
+
+  const saveManualLocation = async () => {
+    const customer = normalize(manualCustomer);
+    const location = normalize(manualLocation);
+    if (!customer || !location) {
+      setError("Please enter both Customer and Location.");
+      return;
+    }
+
+    setUploadingLocations(true);
+    setError("");
+    setNotice("");
+    try {
+      const { error: upsertError } = await supabase
+        .from("tony_locations")
+        .upsert([{ customer, location }], { onConflict: "customer" });
+
+      if (upsertError) throw upsertError;
+
+      setManualCustomer("");
+      setManualLocation("");
+      setNotice("Location mapping saved.");
+      setShowLocationModal(false);
+      await loadData();
+    } catch (err: any) {
+      setError(err?.message || "Failed to save location mapping.");
+    } finally {
+      setUploadingLocations(false);
     }
   };
 
@@ -490,7 +531,7 @@ export default function TonyVelocityView() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="sticky top-0 z-20 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <h2 className="text-xl font-bold text-slate-900">Tony&apos;s Velocity</h2>
@@ -538,12 +579,12 @@ export default function TonyVelocityView() {
 
             <button
               type="button"
-              onClick={() => locationInputRef.current?.click()}
+              onClick={() => setShowLocationModal(true)}
               className="inline-flex h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50"
               disabled={uploadingLocations}
             >
               <Upload className="h-4 w-4" />
-              {uploadingLocations ? "Uploading..." : "Upload Location File"}
+              {uploadingLocations ? "Uploading..." : "Upload Location"}
             </button>
 
             <button
@@ -686,6 +727,82 @@ export default function TonyVelocityView() {
           </div>
         </div>
       </div>
+
+
+      {showLocationModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-6">
+          <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-200 px-6 py-4">
+              <h2 className="text-xl font-bold text-slate-900">Upload or Add Tony Location</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Add one Customer → Location mapping, or bulk upload an Excel/CSV with columns Customer and Location.
+              </p>
+            </div>
+
+            <div className="space-y-5 p-6">
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">Manual Entry</h3>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Customer</label>
+                    <input
+                      value={manualCustomer}
+                      onChange={(e) => setManualCustomer(e.target.value)}
+                      placeholder="Example: ANDRONICO'S #0173"
+                      className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Location</label>
+                    <input
+                      value={manualLocation}
+                      onChange={(e) => setManualLocation(e.target.value)}
+                      placeholder="Example: ANDRONICOS"
+                      className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                    />
+                  </div>
+                </div>
+                <div className="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={saveManualLocation}
+                    disabled={uploadingLocations}
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Save Location
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-slate-500">Bulk Upload</h3>
+                <p className="mb-3 text-sm text-slate-500">
+                  Upload an Excel or CSV file with exactly these columns: Customer and Location.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => locationInputRef.current?.click()}
+                  disabled={uploadingLocations}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Upload className="h-4 w-4" />
+                  {uploadingLocations ? "Uploading..." : "Choose Location File"}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end border-t border-slate-200 px-6 py-4">
+              <button
+                type="button"
+                onClick={() => setShowLocationModal(false)}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {missingLocations.length > 0 && (
         <LocationResolutionModal
