@@ -963,6 +963,48 @@ export default function KeheDashboardView({ appHeaderHeight = 88 }: { appHeaderH
 
   const retailerOptions = useMemo(() => ["All Retailers", ...Array.from(new Set(rows.map((r) => String(r.retailer || "").replace(/\u00a0/g, " ").trim()).filter(Boolean))).sort()], [rows]);
 
+
+  const analyticsFilteredRows = useMemo(() => {
+    const q = analyticsSearchQuery.trim().toLowerCase();
+
+    return rows.filter((r) => {
+      const retailer = String(r.retailer || "").replace(/\u00a0/g, " ").trim();
+      const area = String(r.retailer_area || "").replace(/\u00a0/g, " ").trim();
+      const customer = String(r.customer || "").replace(/\u00a0/g, " ").trim();
+      const upc = String(r.upc || "").replace(/\u00a0/g, " ").trim();
+      const description = String(r.description || "").replace(/\u00a0/g, " ").trim();
+
+      const retailerMatch = analyticsRetailerFilter === "All Retailers" || retailer === analyticsRetailerFilter;
+      const searchMatch =
+        !q ||
+        retailer.toLowerCase().includes(q) ||
+        area.toLowerCase().includes(q) ||
+        customer.toLowerCase().includes(q) ||
+        upc.toLowerCase().includes(q) ||
+        description.toLowerCase().includes(q);
+
+      return retailerMatch && searchMatch;
+    });
+  }, [rows, analyticsRetailerFilter, analyticsSearchQuery]);
+
+  const analyticsAvailableMonths = useMemo(
+    () => Array.from(new Set(analyticsFilteredRows.map((r) => normalizeMonthLabel(r.month)))).sort(compareMonthLabelsAsc),
+    [analyticsFilteredRows]
+  );
+
+  const analyticsDefaultLastMonth = analyticsAvailableMonths[analyticsAvailableMonths.length - 1] ?? "";
+
+  const analyticsLastMonth = useMemo(() => {
+    if (analyticsDateMode === "lastMonth") return analyticsDefaultLastMonth;
+    const [y, m] = analyticsCustomMonth.split("-").map(Number);
+    if (!y || !m) return analyticsDefaultLastMonth;
+    return normalizeMonthLabel(monthLabelFromDate(new Date(y, m - 1, 1)));
+  }, [analyticsDateMode, analyticsCustomMonth, analyticsDefaultLastMonth]);
+
+  const analyticsCtx = useMemo(
+    () => buildAnalyticsContext(analyticsFilteredRows, analyticsLastMonth),
+    [analyticsFilteredRows, analyticsLastMonth]
+  );
   const bestStoreSelectedMonths = useMemo(() => {
     if (bestStorePeriodMode === "lastMonth") return [normalizeMonthLabel(getLastMonthLabel())];
     if (bestStorePeriodMode === "past12Months") return buildPastNMonthsRange(12).map(normalizeMonthLabel);
