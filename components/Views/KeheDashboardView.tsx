@@ -863,7 +863,7 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
 }
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
-export default function KeheDashboardView() {
+export default function KeheDashboardView({ appHeaderHeight = 88 }: { appHeaderHeight?: number }) {
   const [activeTab, setActiveTab] = useState<TabKey>("analytics");
   const [velocitySubTab, setVelocitySubTab] = useState<VelocitySubTabKey>("best-selling-store");
   const [pulloutSubTab, setPulloutSubTab] = useState<PulloutSubTabKey>("by-retailer-area");
@@ -1118,24 +1118,27 @@ export default function KeheDashboardView() {
   };
 
   return (
-    <div className="flex flex-col h-full min-h-screen">
-      {/* ── FROZEN TOP PANE — never moves ── */}
-      <div className="sticky top-0 z-30 bg-slate-100 flex-shrink-0">
+    <div className="flex flex-col">
+      {/* ── FROZEN TOP PANE — sticks exactly below the parent app header ── */}
+      <div
+        className="sticky z-20 bg-slate-100 pt-3 pb-3 -mx-6 px-6 shadow-[0_2px_8px_0_rgba(0,0,0,0.06)]"
+        style={{ top: appHeaderHeight }}
+      >
         {/* Tab buttons — always visible */}
-        <div className="px-0 pt-0 pb-2">
+        <div className="pb-2">
           {renderTabButtons()}
         </div>
 
         {/* Analytics frozen header + stat cards */}
         {activeTab === "analytics" && (
-          <div className="pb-3">
+          <div className="pb-1">
             <AnalyticsHeader rows={rows} loading={loading} loadError={loadError} />
           </div>
         )}
 
         {/* Velocity frozen sub-tabs + filters */}
         {activeTab === "velocity" && (
-          <div className="pb-3">
+          <div className="pb-1">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div className="space-y-3">
@@ -1150,7 +1153,7 @@ export default function KeheDashboardView() {
 
         {/* Pullout frozen sub-tabs + filters */}
         {activeTab === "pullout" && (
-          <div className="pb-3">
+          <div className="pb-1">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div className="flex flex-col gap-3">{renderPulloutSubTabs()}</div>
@@ -1162,7 +1165,7 @@ export default function KeheDashboardView() {
       </div>
 
       {/* ── SCROLLABLE CONTENT BELOW ── */}
-      <div className="flex-1 space-y-6 pb-10">
+      <div className="space-y-6 pt-4 pb-10">
         {activeTab === "analytics" && (
           <AnalyticsTab rows={rows} loading={loading} loadError={loadError} />
         )}

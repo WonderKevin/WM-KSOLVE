@@ -166,6 +166,19 @@ export default function WMKsolveApp() {
   const [userEmail, setUserEmail] = useState("");
   const [permissions, setPermissions] = useState<Permissions | null>(null);
 
+  // Track the app header height so child components can offset their sticky elements
+  const [appHeaderHeight, setAppHeaderHeight] = useState(88);
+
+  useEffect(() => {
+    const header = document.getElementById("app-main-header");
+    if (!header) return;
+    const update = () => setAppHeaderHeight(header.offsetHeight);
+    update();
+    const obs = new ResizeObserver(update);
+    obs.observe(header);
+    return () => obs.disconnect();
+  }, []);
+
   useEffect(() => {
     let mounted = true;
 
@@ -248,80 +261,36 @@ export default function WMKsolveApp() {
 
     const allowedKeys: string[] = [];
 
-    if (canViewKeheDashboard) {
-      allowedKeys.push("dashboard-kehe");
-    }
-
-    if (canViewTonyDashboard) {
-      allowedKeys.push("dashboard-tony");
-    }
-
-    if (permissions.can_view_broker_commission_summary) {
-      allowedKeys.push("broker-commission-summary");
-    }
-
-    if (permissions.can_view_broker_commission_data_sets) {
-      allowedKeys.push("broker-commission-data-sets");
-    }
-
+    if (canViewKeheDashboard) allowedKeys.push("dashboard-kehe");
+    if (canViewTonyDashboard) allowedKeys.push("dashboard-tony");
+    if (permissions.can_view_broker_commission_summary) allowedKeys.push("broker-commission-summary");
+    if (permissions.can_view_broker_commission_data_sets) allowedKeys.push("broker-commission-data-sets");
     if (permissions.can_view_accounting_summary) {
       allowedKeys.push("accounting-summary");
       allowedKeys.push("accounting-wm-invoice-discrepancy");
     }
+    if (permissions.can_view_accounting_check_details) allowedKeys.push("accounting-check-details");
+    if (permissions.can_view_database_ksolve_invoices) allowedKeys.push("database-ksolve-invoices");
+    if (permissions.can_view_database_kehe_velocity) allowedKeys.push("database-kehe-velocity");
+    if (permissions.can_view_database_product_list) allowedKeys.push("database-product-list");
+    if (permissions.can_view_database_locations) allowedKeys.push("database-locations");
+    if (permissions.can_view_database_deduction_type) allowedKeys.push("database-deduction-type");
+    if (permissions.can_view_user_account) allowedKeys.push("admin-user-account");
 
-    if (permissions.can_view_accounting_check_details) {
-      allowedKeys.push("accounting-check-details");
-    }
-
-    if (permissions.can_view_database_ksolve_invoices) {
-      allowedKeys.push("database-ksolve-invoices");
-    }
-
-    if (permissions.can_view_database_kehe_velocity) {
-      allowedKeys.push("database-kehe-velocity");
-    }
-
-    if (permissions.can_view_database_product_list) {
-      allowedKeys.push("database-product-list");
-    }
-
-    if (permissions.can_view_database_locations) {
-      allowedKeys.push("database-locations");
-    }
-
-    if (permissions.can_view_database_deduction_type) {
-      allowedKeys.push("database-deduction-type");
-    }
-
-    if (permissions.can_view_user_account) {
-      allowedKeys.push("admin-user-account");
-    }
-
-    if (activeKey && !allowedKeys.includes(activeKey)) {
-      setActiveKey("");
-    }
+    if (activeKey && !allowedKeys.includes(activeKey)) setActiveKey("");
 
     setOpenGroups((prev) => ({
       ...prev,
       "broker-commission":
-        activeKey === "broker-commission-summary" ||
-        activeKey === "broker-commission-data-sets"
-          ? true
-          : prev["broker-commission"],
+        activeKey === "broker-commission-summary" || activeKey === "broker-commission-data-sets"
+          ? true : prev["broker-commission"],
       accounting:
-        activeKey === "accounting-summary" ||
-        activeKey === "accounting-check-details" ||
-        activeKey === "accounting-wm-invoice-discrepancy"
-          ? true
-          : prev.accounting,
+        activeKey === "accounting-summary" || activeKey === "accounting-check-details" || activeKey === "accounting-wm-invoice-discrepancy"
+          ? true : prev.accounting,
       database:
-        activeKey === "database-ksolve-invoices" ||
-        activeKey === "database-kehe-velocity" ||
-        activeKey === "database-product-list" ||
-        activeKey === "database-locations" ||
-        activeKey === "database-deduction-type"
-          ? true
-          : prev.database,
+        activeKey === "database-ksolve-invoices" || activeKey === "database-kehe-velocity" ||
+        activeKey === "database-product-list" || activeKey === "database-locations" || activeKey === "database-deduction-type"
+          ? true : prev.database,
       admin: activeKey === "admin-user-account" ? true : prev.admin,
     }));
   }, [permissions, activeKey]);
@@ -342,115 +311,55 @@ export default function WMKsolveApp() {
 
     const items: any[] = [];
 
-    const canViewKeheDashboard =
-      permissions.can_view_dashboard_kehe ?? permissions.can_view_dashboard;
-
-    const canViewTonyDashboard =
-      permissions.can_view_dashboard_tony ?? permissions.can_view_dashboard;
+    const canViewKeheDashboard = permissions.can_view_dashboard_kehe ?? permissions.can_view_dashboard;
+    const canViewTonyDashboard = permissions.can_view_dashboard_tony ?? permissions.can_view_dashboard;
 
     const dashboardChildren = [
-      canViewKeheDashboard
-        ? { label: "Kehe Dashboard", key: "dashboard-kehe" }
-        : null,
-      canViewTonyDashboard
-        ? { label: "Tony's Dashboard", key: "dashboard-tony" }
-        : null,
+      canViewKeheDashboard ? { label: "Kehe Dashboard", key: "dashboard-kehe" } : null,
+      canViewTonyDashboard ? { label: "Tony's Dashboard", key: "dashboard-tony" } : null,
     ].filter(Boolean);
 
     if (dashboardChildren.length) {
-      items.push({
-        label: "Dashboard",
-        icon: LayoutDashboard,
-        key: "dashboard",
-        children: dashboardChildren,
-      });
+      items.push({ label: "Dashboard", icon: LayoutDashboard, key: "dashboard", children: dashboardChildren });
     }
 
     const brokerChildren = [
-      permissions.can_view_broker_commission_summary
-        ? {
-            label: "Broker Commission Summary",
-            key: "broker-commission-summary",
-          }
-        : null,
-      permissions.can_view_broker_commission_data_sets
-        ? { label: "Data Sets", key: "broker-commission-data-sets" }
-        : null,
+      permissions.can_view_broker_commission_summary ? { label: "Broker Commission Summary", key: "broker-commission-summary" } : null,
+      permissions.can_view_broker_commission_data_sets ? { label: "Data Sets", key: "broker-commission-data-sets" } : null,
     ].filter(Boolean);
 
     if (brokerChildren.length) {
-      items.push({
-        label: "Broker Commission",
-        icon: Receipt,
-        key: "broker-commission",
-        children: brokerChildren,
-      });
+      items.push({ label: "Broker Commission", icon: Receipt, key: "broker-commission", children: brokerChildren });
     }
 
     const accountingChildren = [
-      permissions.can_view_accounting_summary
-        ? { label: "Summary", key: "accounting-summary" }
-        : null,
-      permissions.can_view_accounting_check_details
-        ? { label: "Check Details", key: "accounting-check-details" }
-        : null,
-      permissions.can_view_accounting_summary
-        ? {
-            label: "WM Invoice Discrepancy",
-            key: "accounting-wm-invoice-discrepancy",
-          }
-        : null,
+      permissions.can_view_accounting_summary ? { label: "Summary", key: "accounting-summary" } : null,
+      permissions.can_view_accounting_check_details ? { label: "Check Details", key: "accounting-check-details" } : null,
+      permissions.can_view_accounting_summary ? { label: "WM Invoice Discrepancy", key: "accounting-wm-invoice-discrepancy" } : null,
     ].filter(Boolean);
 
     if (accountingChildren.length) {
-      items.push({
-        label: "Accounting",
-        icon: BadgeDollarSign,
-        key: "accounting",
-        children: accountingChildren,
-      });
+      items.push({ label: "Accounting", icon: BadgeDollarSign, key: "accounting", children: accountingChildren });
     }
 
     const databaseChildren = [
-      permissions.can_view_database_ksolve_invoices
-        ? { label: "Ksolve Invoices", key: "database-ksolve-invoices" }
-        : null,
-      permissions.can_view_database_kehe_velocity
-        ? { label: "KeHe Velocity", key: "database-kehe-velocity" }
-        : null,
-      permissions.can_view_database_product_list
-        ? { label: "Product List", key: "database-product-list" }
-        : null,
-      permissions.can_view_database_locations
-        ? { label: "Locations", key: "database-locations" }
-        : null,
-      permissions.can_view_database_deduction_type
-        ? { label: "Deduction Type", key: "database-deduction-type" }
-        : null,
+      permissions.can_view_database_ksolve_invoices ? { label: "Ksolve Invoices", key: "database-ksolve-invoices" } : null,
+      permissions.can_view_database_kehe_velocity ? { label: "KeHe Velocity", key: "database-kehe-velocity" } : null,
+      permissions.can_view_database_product_list ? { label: "Product List", key: "database-product-list" } : null,
+      permissions.can_view_database_locations ? { label: "Locations", key: "database-locations" } : null,
+      permissions.can_view_database_deduction_type ? { label: "Deduction Type", key: "database-deduction-type" } : null,
     ].filter(Boolean);
 
     if (databaseChildren.length) {
-      items.push({
-        label: "Database",
-        icon: Database,
-        key: "database",
-        children: databaseChildren,
-      });
+      items.push({ label: "Database", icon: Database, key: "database", children: databaseChildren });
     }
 
     const adminChildren = [
-      permissions.can_view_user_account
-        ? { label: "User Account", key: "admin-user-account" }
-        : null,
+      permissions.can_view_user_account ? { label: "User Account", key: "admin-user-account" } : null,
     ].filter(Boolean);
 
     if (permissions.can_view_admin && adminChildren.length) {
-      items.push({
-        label: "Admin",
-        icon: Shield,
-        key: "admin",
-        children: adminChildren,
-      });
+      items.push({ label: "Admin", icon: Shield, key: "admin", children: adminChildren });
     }
 
     return items;
@@ -473,10 +382,12 @@ export default function WMKsolveApp() {
     "admin-user-account": "User Account",
   };
 
+  const isKeheDashboard = activeKey === "dashboard-kehe";
+
   const renderContent = () => {
     switch (activeKey) {
       case "dashboard-kehe":
-        return <KeheDashboardView />;
+        return <KeheDashboardView appHeaderHeight={appHeaderHeight} />;
       case "dashboard-tony":
         return <PlaceholderView title="Tony's Dashboard" />;
       case "broker-commission-summary":
@@ -532,7 +443,6 @@ export default function WMKsolveApp() {
               WM-KSOLVE
             </div>
           </div>
-
           <div className="space-y-2">
             {sidebarItems.map((item) => (
               <SidebarItem
@@ -548,70 +458,76 @@ export default function WMKsolveApp() {
         </aside>
       )}
 
-      <main className="flex-1 h-screen overflow-y-auto px-6 py-5">
-        <div className="sticky top-0 z-30 mb-6 rounded-3xl border border-slate-200 bg-white/95 px-6 py-5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-4">
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="rounded-2xl border-slate-200"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setSidebarOpen((prev) => !prev);
-                }}
-              >
-                <Menu className="h-4 w-4" />
-              </Button>
-
-              <div>
-                <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
-                  {titleMap[activeKey || "home"] || "WM-KSOLVE"}
-                </h1>
+      {/* Main scroll container */}
+      <main className="flex-1 h-screen overflow-y-auto">
+        {/* App-level sticky header — measured via id */}
+        <div
+          id="app-main-header"
+          className="sticky top-0 z-30 bg-slate-100 px-6 pt-5 pb-4 border-b border-slate-200"
+        >
+          <div className="rounded-3xl border border-slate-200 bg-white/95 px-6 py-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="rounded-2xl border-slate-200"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSidebarOpen((prev) => !prev);
+                  }}
+                >
+                  <Menu className="h-4 w-4" />
+                </Button>
+                <div>
+                  <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
+                    {titleMap[activeKey || "home"] || "WM-KSOLVE"}
+                  </h1>
+                </div>
               </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              {activeKey === "database-ksolve-invoices" && (
-                <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="rounded-2xl border-slate-200"
-                    onClick={() => setInvoiceUploadSignal((prev) => prev + 1)}
-                  >
-                    <Upload className="mr-2 h-4 w-4" />
-                    Upload Ksolve Invoices
-                  </Button>
-
-                  <Button
-                    type="button"
-                    className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-                    onClick={() => setDocumentUploadSignal((prev) => prev + 1)}
-                  >
-                    <Upload className="mr-2 h-4 w-4" />
-                    Upload Files
-                  </Button>
-                </>
-              )}
-
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-2xl border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
-                onClick={handleLogout}
-                disabled={loggingOut}
-              >
-                <LogOut className="mr-2 h-4 w-4" />
-                {loggingOut ? "Logging out..." : "Logout"}
-              </Button>
+              <div className="flex items-center gap-3">
+                {activeKey === "database-ksolve-invoices" && (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-2xl border-slate-200"
+                      onClick={() => setInvoiceUploadSignal((prev) => prev + 1)}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      Upload Ksolve Invoices
+                    </Button>
+                    <Button
+                      type="button"
+                      className="rounded-2xl bg-slate-900 hover:bg-slate-800"
+                      onClick={() => setDocumentUploadSignal((prev) => prev + 1)}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      Upload Files
+                    </Button>
+                  </>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-2xl border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                  onClick={handleLogout}
+                  disabled={loggingOut}
+                >
+                  <LogOut className="mr-2 h-4 w-4" />
+                  {loggingOut ? "Logging out..." : "Logout"}
+                </Button>
+              </div>
             </div>
           </div>
         </div>
 
-        {renderContent()}
+        {/* Page content — no extra padding-top for Kehe Dashboard (it manages its own sticky) */}
+        <div className={isKeheDashboard ? "px-6 pb-10" : "px-6 py-5"}>
+          {renderContent()}
+        </div>
       </main>
     </div>
   );
