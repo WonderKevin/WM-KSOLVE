@@ -15,6 +15,7 @@ type TonyVelocityRow = {
   item_size: string;
   vendor_item: string;
   quantity_shipped: number;
+  eaches: number;
   ext_net_ship_weight: number;
   actual_cost_gross: number;
   source_file_name?: string;
@@ -292,6 +293,8 @@ export default function TonyVelocityView() {
       .map((row) => {
         const customer = normalize(getCell(row, headers, ["sh Long Description", "Customer", "Ship to Customer"]));
         const location = locationMap.get(normalizeKey(customer)) || "";
+        const quantityShipped = toNumber(getCell(row, headers, ["Quantity shipped", "Quantity shipped Mar 26 to Mar 26"]));
+
         return {
           month,
           warehouse: normalize(getCell(row, headers, ["Warehouse"])),
@@ -301,7 +304,8 @@ export default function TonyVelocityView() {
           item_pack: normalize(getCell(row, headers, ["Item Pack"])),
           item_size: normalize(getCell(row, headers, ["Item Size"])),
           vendor_item: normalize(getCell(row, headers, ["Vendor Item"])),
-          quantity_shipped: toNumber(getCell(row, headers, ["Quantity shipped", "Quantity shipped Mar 26 to Mar 26"])),
+          quantity_shipped: quantityShipped,
+          eaches: quantityShipped * 12,
           ext_net_ship_weight: toNumber(getCell(row, headers, ["Ext Net Ship Weight", "Ext Net Ship Weight Mar 26 to Mar 26"])),
           actual_cost_gross: toNumber(getCell(row, headers, ["Actual Cost Gross", "Actual Cost Gross Mar 26 to Mar 26"])),
           source_file_name: file.name,
@@ -509,7 +513,8 @@ export default function TonyVelocityView() {
         "Item Pack",
         "Item Size",
         "Vendor Item",
-        "Quantity shipped",
+        "Cases Shipped",
+        "Eaches",
         "Ext Net Ship Weight",
         "Actual Cost Gross",
       ],
@@ -523,6 +528,7 @@ export default function TonyVelocityView() {
         row.item_size,
         row.vendor_item,
         row.quantity_shipped,
+        row.eaches ?? row.quantity_shipped * 12,
         row.ext_net_ship_weight,
         row.actual_cost_gross,
       ])
@@ -688,7 +694,8 @@ export default function TonyVelocityView() {
                     "Item Pack",
                     "Item Size",
                     "Vendor Item",
-                    "Quantity shipped",
+                    "Cases Shipped",
+                    "Eaches",
                     "Ext Net Ship Weight",
                     "Actual Cost Gross",
                   ].map((header) => (
@@ -701,7 +708,7 @@ export default function TonyVelocityView() {
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-4 py-8 text-center text-sm text-slate-500">
+                    <td colSpan={12} className="px-4 py-8 text-center text-sm text-slate-500">
                       No Tony velocity rows found.
                     </td>
                   </tr>
@@ -717,6 +724,7 @@ export default function TonyVelocityView() {
                       <td className="px-4 py-3 text-slate-700">{row.item_size}</td>
                       <td className="px-4 py-3 text-slate-700">{row.vendor_item}</td>
                       <td className="px-4 py-3 text-right text-slate-700">{row.quantity_shipped.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right text-slate-700">{(row.eaches ?? row.quantity_shipped * 12).toLocaleString()}</td>
                       <td className="px-4 py-3 text-right text-slate-700">{row.ext_net_ship_weight.toLocaleString()}</td>
                       <td className="px-4 py-3 text-right font-semibold text-slate-900">{row.actual_cost_gross.toLocaleString(undefined, { style: "currency", currency: "USD" })}</td>
                     </tr>
