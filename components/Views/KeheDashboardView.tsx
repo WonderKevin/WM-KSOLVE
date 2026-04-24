@@ -166,24 +166,38 @@ function SearchBar({ value, onChange, placeholder = "Search..." }: { value: stri
 
 // ── Charts ────────────────────────────────────────────────────────────────────
 function GroupedMonthlyChart({ title, months, series }: { title: string; months: string[]; series: { name: string; values: number[]; fill: string }[]; }) {
-  const cH = 360, cW = Math.max(980, 140 + months.length * 120);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(980);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const obs = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w) setContainerWidth(Math.max(w, 400));
+    });
+    obs.observe(containerRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  const cH = 360;
+  const cW = containerWidth;
   const lP = 55, rP = 20, tP = 20, bP = 95;
   const iW = cW - lP - rP, iH = cH - tP - bP;
   const max = Math.max(1, ...series.flatMap((s) => s.values));
   const gW = months.length > 0 ? iW / months.length : iW;
-  const bGap = 6, gPad = 12;
-  const bW = Math.max(14, (gW - gPad * 2 - bGap * Math.max(series.length - 1, 0)) / Math.max(series.length, 1));
+  const bGap = 4, gPad = 8;
+  const bW = Math.max(10, (gW - gPad * 2 - bGap * Math.max(series.length - 1, 0)) / Math.max(series.length, 1));
   const ticks = Array.from({ length: 5 }, (_, i) => ({ value: Math.round((max / 4) * i), y: tP + iH - (iH / 4) * i }));
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="mb-4 text-2xl font-semibold text-slate-700">{title}</h3>
-      <div className="overflow-x-auto">
-        <svg width={cW} height={cH} style={{ minWidth: "980px" }}>
+      <div ref={containerRef} className="w-full overflow-hidden">
+        <svg width={cW} height={cH} style={{ display: "block", width: "100%" }}>
           {ticks.map((t, i) => (<g key={i}><line x1={lP} y1={t.y} x2={cW - rP} y2={t.y} stroke="#e2e8f0" strokeWidth="1" /><text x={lP - 10} y={t.y + 4} textAnchor="end" fontSize="11" fill="#64748b">{t.value}</text></g>))}
           <line x1={lP} y1={tP + iH} x2={cW - rP} y2={tP + iH} stroke="#94a3b8" strokeWidth="1.5" />
           {months.map((month, mi) => {
             const gX = lP + mi * gW + gPad;
-            return (<g key={month}>{series.map((item, si) => { const v = item.values[mi] || 0; const bH = (v / max) * iH; const x = gX + si * (bW + bGap); const y = tP + iH - bH; return (<g key={`${month}-${item.name}`}><rect x={x} y={y} width={bW} height={bH} rx="3" fill={item.fill} /><text x={x + bW / 2} y={y - 6} textAnchor="middle" fontSize="11" fontWeight="700" fill={item.fill}>{v}</text></g>); })}<text x={lP + mi * gW + gW / 2} y={tP + iH + 18} textAnchor="middle" fontSize="11" fill="#334155">{month.toUpperCase()}</text></g>);
+            return (<g key={month}>{series.map((item, si) => { const v = item.values[mi] || 0; const bH = (v / max) * iH; const x = gX + si * (bW + bGap); const y = tP + iH - bH; return (<g key={`${month}-${item.name}`}><rect x={x} y={y} width={bW} height={bH} rx="3" fill={item.fill} /><text x={x + bW / 2} y={y - 6} textAnchor="middle" fontSize="10" fontWeight="700" fill={item.fill}>{v}</text></g>); })}<text x={lP + mi * gW + gW / 2} y={tP + iH + 18} textAnchor="middle" fontSize="11" fill="#334155">{month.toUpperCase()}</text></g>);
           })}
         </svg>
       </div>
@@ -448,10 +462,66 @@ function AreaRow({ row, lastMonth, allMonths }: {
   );
 }
 
+// ── Win-Back Area Group (collapsible) ─────────────────────────────────────────
+function WinBackAreaGroup({ group, effectiveMonths }: {
+  group: { retailer: string; area: string; totalStoresInArea: number; stores: { customer: string; retailer: string; retailerArea: string; monthCases: Record<string, number>; total: number }[] };
+  effectiveMonths: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const pulled = group.stores.length;
+  const total = group.totalStoresInArea;
+
+  return (
+    <div className="rounded-2xl border border-amber-200 bg-white overflow-hidden">
+      <button type="button" onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-amber-50 transition text-left">
+        <div className="flex items-center gap-3 min-w-0">
+          <svg className={`h-3.5 w-3.5 text-amber-400 transition-transform shrink-0 ${open ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+          <div className="min-w-0">
+            <span className="font-semibold text-sm text-slate-800">{group.area}</span>
+            <span className="ml-2 text-xs text-slate-500">{group.retailer}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="text-xs text-slate-500">{pulled}/{total} stores</span>
+          <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-800">{pulled} win-back</span>
+        </div>
+      </button>
+      {open && (
+        <div className="border-t border-amber-100 overflow-auto">
+          <table className="min-w-full text-xs">
+            <thead className="bg-amber-50">
+              <tr>
+                <th className="px-4 py-2 text-left font-semibold text-amber-900">Store</th>
+                <th className="px-4 py-2 text-right font-semibold text-amber-900">Historical Cases</th>
+                <th className="px-4 py-2 text-right font-semibold text-amber-900">Last Active Month</th>
+              </tr>
+            </thead>
+            <tbody>
+              {group.stores.map((s, i) => {
+                const lastActiveMo = [...effectiveMonths].reverse().find((m) => (s.monthCases[m] || 0) > 0) ?? "—";
+                return (
+                  <tr key={i} className="border-t border-amber-50 hover:bg-amber-50 transition-colors">
+                    <td className="px-4 py-2 font-medium text-slate-800">{s.customer}</td>
+                    <td className="px-4 py-2 text-right font-bold text-amber-700">{s.total}</td>
+                    <td className="px-4 py-2 text-right text-slate-500">{lastActiveMo}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Analytics Tab Component ───────────────────────────────────────────────────
 function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loading: boolean; loadError: string; }) {
   const winBackRef = useRef<HTMLDivElement>(null);
   const decliningRef = useRef<HTMLDivElement>(null);
+  const areaBreakdownRef = useRef<HTMLDivElement>(null);
+  const summaryRef = useRef<HTMLDivElement>(null);
 
   // Date filter
   const allAvailableMonths = useMemo(() => Array.from(new Set(rows.map((r) => normalizeMonthLabel(r.month)))).sort(compareMonthLabelsAsc), [rows]);
@@ -527,143 +597,173 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
   }, [ctx]);
 
+  // Win-back grouped by area for collapsible section
+  const winBackByAreaGrouped = useMemo(() => {
+    if (!ctx) return [];
+    const map = new Map<string, { retailer: string; area: string; totalStoresInArea: number; stores: typeof ctx.winBackCandidates }>();
+    // get total stores per area from areaSummaries
+    const areaTotal = new Map(ctx.areaSummaries.map((a) => [`${a.retailer}||${a.area}`, a.total]));
+    for (const s of ctx.winBackCandidates) {
+      const key = `${s.retailer}||${s.retailerArea}`;
+      if (!map.has(key)) map.set(key, { retailer: s.retailer, area: s.retailerArea, totalStoresInArea: areaTotal.get(key) ?? 0, stores: [] });
+      map.get(key)!.stores.push(s);
+    }
+    return Array.from(map.values()).sort((a, b) => b.stores.length - a.stores.length);
+  }, [ctx]);
+
   if (loading) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">Loading data for analysis...</div>;
   if (loadError) return <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>;
   if (!ctx) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">No data available for analysis.</div>;
 
   return (
     <div className="space-y-6">
-      {/* Header card */}
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+      {/* Header — filters inline on one row */}
+      <div className="rounded-3xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
+        <div className="flex flex-wrap items-end justify-between gap-3">
           <h2 className="text-2xl font-bold text-slate-900">Sales Analytics</h2>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end flex-wrap">
-            {/* Retailer filter */}
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Retailer</label>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex items-end gap-1.5">
+              <label className="text-xs font-medium text-slate-500 mb-2 whitespace-nowrap">Retailer</label>
               <select value={retailerFilter} onChange={(e) => setRetailerFilter(e.target.value)}
-                className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400">
+                className="h-10 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400">
                 {retailerOptions.map((o) => <option key={o}>{o}</option>)}
               </select>
             </div>
-            {/* Reference Month */}
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Reference Month</label>
+            <div className="flex items-end gap-1.5">
+              <label className="text-xs font-medium text-slate-500 mb-2 whitespace-nowrap">Reference Month</label>
               <select value={analyticsDateMode} onChange={(e) => setAnalyticsDateMode(e.target.value as "lastMonth" | "custom")}
-                className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400">
+                className="h-10 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400">
                 <option value="lastMonth">Last Month ({defaultLastMonth})</option>
                 <option value="custom">Custom</option>
               </select>
             </div>
             {analyticsDateMode === "custom" && (
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Month</label>
-                <input type="month" value={analyticsCustomMonth} onChange={(e) => setAnalyticsCustomMonth(e.target.value)}
-                  className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400" />
-              </div>
+              <input type="month" value={analyticsCustomMonth} onChange={(e) => setAnalyticsCustomMonth(e.target.value)}
+                className="h-10 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400" />
             )}
           </div>
         </div>
       </div>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {/* Stat cards — 5 across, numbers prominent */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {/* Active Last Month */}
-        <div className="rounded-3xl border bg-emerald-50 text-emerald-700 border-emerald-200 p-5 shadow-sm">
-          <div className="text-2xl font-bold">{totalActive} / {totalStores}</div>
-          <div className="mt-1 text-sm font-semibold">Active Last Month</div>
-          <div className="mt-0.5 text-xs opacity-75">{pct}% pull rate across all areas</div>
+        <div className="rounded-3xl border bg-emerald-50 text-emerald-700 border-emerald-200 p-4 shadow-sm">
+          <div className="text-3xl font-extrabold leading-none">{totalActive}<span className="text-lg font-semibold text-emerald-500">/{totalStores}</span></div>
+          <div className="mt-1.5 text-sm font-semibold">Active Last Month</div>
+          <div className="mt-0.5 text-xs opacity-70">{pct}% pull rate · all areas</div>
         </div>
-        {/* Top Area */}
-        <div className="rounded-3xl border bg-purple-50 text-purple-700 border-purple-200 p-5 shadow-sm">
-          <div className="text-2xl font-bold truncate">{topAreaByPullRate ? topAreaByPullRate.area : "—"}</div>
-          <div className="mt-1 text-sm font-semibold">Top Area</div>
-          <div className="mt-0.5 text-xs opacity-75">
-            {topAreaByPullRate ? `${Math.round((topAreaByPullRate.activeLastMonth / topAreaByPullRate.total) * 100)}% pull rate · ${topAreaByPullRate.lastMonthCases} cases` : ""}
+        {/* Top Area — clicks to breakdown */}
+        <button type="button" onClick={() => areaBreakdownRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          className="rounded-3xl border bg-purple-50 text-purple-700 border-purple-200 p-4 shadow-sm text-left hover:bg-purple-100 transition">
+          <div className="text-lg font-extrabold leading-tight truncate">{topAreaByPullRate ? topAreaByPullRate.area : "—"}</div>
+          <div className="mt-1.5 text-sm font-semibold">Top Area ↓</div>
+          <div className="mt-0.5 text-xs opacity-70">
+            {topAreaByPullRate ? `${Math.round((topAreaByPullRate.activeLastMonth / topAreaByPullRate.total) * 100)}% pull · ${topAreaByPullRate.lastMonthCases} cases` : ""}
           </div>
-        </div>
-        {/* Win-Back — clickable */}
-        <button type="button" onClick={() => winBackRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          className="rounded-3xl border bg-amber-50 text-amber-700 border-amber-200 p-5 shadow-sm text-left hover:bg-amber-100 transition">
-          <div className="text-2xl font-bold">{ctx.winBackCandidates.length}</div>
-          <div className="mt-1 text-sm font-semibold">Win-Back Candidates</div>
-          <div className="mt-0.5 text-xs opacity-75">zero last 3 months, had prior volume ↓</div>
         </button>
-        {/* Declining — clickable */}
+        {/* Summary — clicks to show/hide Top 5 panels */}
+        <button type="button" onClick={() => summaryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          className="rounded-3xl border bg-slate-800 text-white border-slate-700 p-4 shadow-sm text-left hover:bg-slate-700 transition">
+          <div className="text-3xl font-extrabold leading-none">{ctx.areaSummaries.length}</div>
+          <div className="mt-1.5 text-sm font-semibold">Area Summary ↓</div>
+          <div className="mt-0.5 text-xs opacity-70">Top 5 pull rate · win-back · declining</div>
+        </button>
+        {/* Win-Back Candidates */}
+        <button type="button" onClick={() => winBackRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          className="rounded-3xl border bg-amber-50 text-amber-700 border-amber-200 p-4 shadow-sm text-left hover:bg-amber-100 transition">
+          <div className="text-3xl font-extrabold leading-none">{ctx.winBackCandidates.length}</div>
+          <div className="mt-1.5 text-sm font-semibold">Win-Back Candidates ↓</div>
+          <div className="mt-0.5 text-xs opacity-70">zero last 3 months, had prior volume</div>
+        </button>
+        {/* Declining Stores */}
         <button type="button" onClick={() => decliningRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          className="rounded-3xl border bg-red-50 text-red-700 border-red-200 p-5 shadow-sm text-left hover:bg-red-100 transition">
-          <div className="text-2xl font-bold">{ctx.decliningStores.length}</div>
-          <div className="mt-1 text-sm font-semibold">Declining Stores</div>
-          <div className="mt-0.5 text-xs opacity-75">volume dropped 50%+ ↓</div>
+          className="rounded-3xl border bg-red-50 text-red-700 border-red-200 p-4 shadow-sm text-left hover:bg-red-100 transition">
+          <div className="text-3xl font-extrabold leading-none">{ctx.decliningStores.length}</div>
+          <div className="mt-1.5 text-sm font-semibold">Declining Stores ↓</div>
+          <div className="mt-0.5 text-xs opacity-70">volume dropped 50%+</div>
         </button>
       </div>
 
-      {/* Top 5 Summary — 3 columns */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      {/* Top 5 Summary panels */}
+      <div ref={summaryRef} className="grid grid-cols-1 gap-4 lg:grid-cols-3 scroll-mt-4">
         {/* Top 5 Areas by Pull Rate */}
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-3 text-sm font-bold text-slate-800 uppercase tracking-wide">Top 5 Areas by Pull Rate</h3>
-          <p className="mb-3 text-xs text-slate-500">{ctx.lastMonth}</p>
-          <div className="space-y-2">
+          <h3 className="mb-1 text-sm font-bold text-slate-800 uppercase tracking-wide">Top 5 Areas by Pull Rate</h3>
+          <p className="mb-3 text-xs text-slate-400">{ctx.lastMonth}</p>
+          <div className="space-y-3">
             {top5ByPullRate.map((area, i) => {
               const rate = area.total > 0 ? Math.round((area.activeLastMonth / area.total) * 100) : 0;
-              const color = rate >= 70 ? "bg-emerald-500" : rate >= 40 ? "bg-amber-400" : "bg-red-400";
+              const barColor = rate >= 70 ? "bg-emerald-500" : rate >= 40 ? "bg-amber-400" : "bg-red-400";
+              const textColor = rate >= 70 ? "text-emerald-600" : rate >= 40 ? "text-amber-600" : "text-red-500";
               return (
-                <div key={i} className="flex items-center gap-3">
-                  <span className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600 shrink-0">{i + 1}</span>
+                <div key={i} className="flex items-center gap-2">
+                  <span className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-500 shrink-0">{i + 1}</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-semibold text-slate-700 truncate">{area.area}</div>
                     <div className="mt-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full ${color}`} style={{ width: `${rate}%` }} />
+                      <div className={`h-full rounded-full ${barColor}`} style={{ width: `${rate}%` }} />
                     </div>
                   </div>
-                  <span className={`text-xs font-bold shrink-0 ${rate >= 70 ? "text-emerald-600" : rate >= 40 ? "text-amber-600" : "text-red-500"}`}>{rate}%</span>
-                  <span className="text-xs text-slate-400 shrink-0">{area.activeLastMonth}/{area.total}</span>
+                  <span className={`text-xs font-bold shrink-0 w-9 text-right ${textColor}`}>{rate}%</span>
+                  <span className="text-xs text-slate-400 shrink-0 w-12 text-right">{area.activeLastMonth}/{area.total}</span>
                 </div>
               );
             })}
           </div>
         </div>
 
-        {/* Top 5 Win-Back by Area */}
+        {/* Win-Back by Area — with pulled/total */}
         <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
-          <h3 className="mb-3 text-sm font-bold text-amber-900 uppercase tracking-wide">Win-Back by Area</h3>
-          <p className="mb-3 text-xs text-amber-700">Areas with most stores gone 3+ months</p>
+          <h3 className="mb-1 text-sm font-bold text-amber-900 uppercase tracking-wide">Win-Back by Area</h3>
+          <p className="mb-3 text-xs text-amber-600">Areas with most win-back stores · pulled/total shown</p>
           <div className="space-y-2">
-            {winBackByArea.length === 0 ? <p className="text-xs text-amber-600">No win-back candidates</p> : winBackByArea.map(([area, count], i) => (
-              <div key={i} className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-5 h-5 flex items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-700 shrink-0">{i + 1}</span>
-                  <span className="text-xs text-slate-700 truncate">{area}</span>
-                </div>
-                <span className="shrink-0 rounded-full bg-amber-200 px-2 py-0.5 text-xs font-bold text-amber-800">{count} stores</span>
-              </div>
-            ))}
+            {winBackByArea.length === 0 ? <p className="text-xs text-amber-600">No win-back candidates</p> :
+              winBackByArea.map(([areaKey, count], i) => {
+                // Find area total from areaSummaries
+                const areaSummary = ctx.areaSummaries.find((a) => `${a.retailer} · ${a.area}` === areaKey);
+                const areaTotal = areaSummary?.total ?? 0;
+                // How many actually pulled last month in that area
+                const activeLast = areaSummary?.activeLastMonth ?? 0;
+                return (
+                  <div key={i} className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-5 h-5 flex items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-700 shrink-0">{i + 1}</span>
+                      <span className="text-xs text-slate-700 truncate">{areaKey}</span>
+                    </div>
+                    <div className="shrink-0 flex items-center gap-1.5">
+                      <span className="text-xs text-slate-500">{activeLast}/{areaTotal}</span>
+                      <span className="rounded-full bg-amber-200 px-2 py-0.5 text-xs font-bold text-amber-800">{count} win-back</span>
+                    </div>
+                  </div>
+                );
+              })}
           </div>
         </div>
 
-        {/* Top 5 Declining by Area */}
+        {/* Declining by Area */}
         <div className="rounded-3xl border border-red-200 bg-red-50 p-5 shadow-sm">
-          <h3 className="mb-3 text-sm font-bold text-red-900 uppercase tracking-wide">Declining Stores by Area</h3>
-          <p className="mb-3 text-xs text-red-700">Areas with most stores declining 50%+</p>
+          <h3 className="mb-1 text-sm font-bold text-red-900 uppercase tracking-wide">Declining Stores by Area</h3>
+          <p className="mb-3 text-xs text-red-600">Areas with most stores declining 50%+</p>
           <div className="space-y-2">
-            {decliningByArea.length === 0 ? <p className="text-xs text-red-600">No declining stores</p> : decliningByArea.map(([area, count], i) => (
-              <div key={i} className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-5 h-5 flex items-center justify-center rounded-full bg-red-100 text-xs font-bold text-red-600 shrink-0">{i + 1}</span>
-                  <span className="text-xs text-slate-700 truncate">{area}</span>
+            {decliningByArea.length === 0 ? <p className="text-xs text-red-600">No declining stores</p> :
+              decliningByArea.map(([area, count], i) => (
+                <div key={i} className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-5 h-5 flex items-center justify-center rounded-full bg-red-100 text-xs font-bold text-red-600 shrink-0">{i + 1}</span>
+                    <span className="text-xs text-slate-700 truncate">{area}</span>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-red-200 px-2 py-0.5 text-xs font-bold text-red-800">{count} stores</span>
                 </div>
-                <span className="shrink-0 rounded-full bg-red-200 px-2 py-0.5 text-xs font-bold text-red-800">{count} stores</span>
-              </div>
-            ))}
+              ))}
           </div>
         </div>
       </div>
 
-      {/* Retailer Area Breakdown — sorted by pull rate highest to lowest */}
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      {/* Retailer Area Breakdown */}
+      <div ref={areaBreakdownRef} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm scroll-mt-4">
         <h3 className="mb-1 text-lg font-semibold text-slate-900">Retailer Area Breakdown</h3>
-        <p className="mb-4 text-sm text-slate-500">Click any row to expand and see all stores. Sorted by pull rate highest to lowest. Pull Rate = last month ({ctx.lastMonth}). Gone 3+ = stores with no pull for 3+ consecutive months.</p>
+        <p className="mb-4 text-sm text-slate-500">Click any row to expand stores. Sorted by pull rate highest → lowest. Pull Rate = {ctx.lastMonth}. Gone 3+ = no pull for 3+ consecutive months.</p>
         <div className="overflow-auto rounded-2xl border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50">
@@ -687,46 +787,27 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
         </div>
       </div>
 
-      {/* Win-back candidates — list style */}
+      {/* Win-Back Candidates — grouped by area, collapsible */}
       {ctx.winBackCandidates.length > 0 && (
-        <div ref={winBackRef} className="rounded-3xl border border-amber-200 bg-amber-50 p-6 shadow-sm scroll-mt-6">
-          <h3 className="mb-1 text-lg font-semibold text-amber-900">🔁 Win-Back Candidates <span className="text-sm font-normal text-amber-700 ml-1">({ctx.winBackCandidates.length} stores)</span></h3>
-          <p className="mb-4 text-sm text-amber-700">Had meaningful historical volume · zero orders last 3 months</p>
-          <div className="overflow-auto rounded-2xl border border-amber-200 bg-white">
-            <table className="min-w-full text-sm">
-              <thead className="bg-amber-50">
-                <tr>
-                  <th className="px-4 py-3 text-left font-semibold text-amber-900">Store</th>
-                  <th className="px-4 py-3 text-left font-semibold text-amber-900">Retailer</th>
-                  <th className="px-4 py-3 text-left font-semibold text-amber-900">Area</th>
-                  <th className="px-4 py-3 text-right font-semibold text-amber-900">Historical Cases</th>
-                  <th className="px-4 py-3 text-right font-semibold text-amber-900">Last Inactive</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ctx.winBackCandidates.map((s, i) => {
-                  // find last month they pulled
-                  const lastActiveMo = [...ctx.effectiveMonths].reverse().find((m) => (s.monthCases[m] || 0) > 0) ?? "—";
-                  return (
-                    <tr key={i} className="border-t border-amber-100 hover:bg-amber-50 transition-colors">
-                      <td className="px-4 py-2.5 font-medium text-slate-800">{s.customer}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{s.retailer}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{s.retailerArea}</td>
-                      <td className="px-4 py-2.5 text-right font-bold text-amber-700">{s.total}</td>
-                      <td className="px-4 py-2.5 text-right text-slate-500">{lastActiveMo}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        <div ref={winBackRef} className="rounded-3xl border border-amber-200 bg-amber-50 p-6 shadow-sm scroll-mt-4">
+          <h3 className="mb-1 text-lg font-semibold text-amber-900">🔁 Win-Back Candidates
+            <span className="ml-2 text-sm font-normal text-amber-700">({ctx.winBackCandidates.length} stores across {winBackByAreaGrouped.length} areas)</span>
+          </h3>
+          <p className="mb-4 text-sm text-amber-700">Had meaningful historical volume · zero orders last 3 months · grouped by retailer area</p>
+          <div className="space-y-3">
+            {winBackByAreaGrouped.map((group, gi) => (
+              <WinBackAreaGroup key={gi} group={group} effectiveMonths={ctx.effectiveMonths} />
+            ))}
           </div>
         </div>
       )}
 
-      {/* Declining stores — list style */}
+      {/* Declining stores */}
       {ctx.decliningStores.length > 0 && (
-        <div ref={decliningRef} className="rounded-3xl border border-red-200 bg-red-50 p-6 shadow-sm scroll-mt-6">
-          <h3 className="mb-1 text-lg font-semibold text-red-900">📉 Declining Stores <span className="text-sm font-normal text-red-700 ml-1">({ctx.decliningStores.length} stores)</span></h3>
+        <div ref={decliningRef} className="rounded-3xl border border-red-200 bg-red-50 p-6 shadow-sm scroll-mt-4">
+          <h3 className="mb-1 text-lg font-semibold text-red-900">📉 Declining Stores
+            <span className="ml-2 text-sm font-normal text-red-700">({ctx.decliningStores.length} stores)</span>
+          </h3>
           <p className="mb-4 text-sm text-red-700">Volume dropped 50%+ comparing last 2 months vs prior 2 months.</p>
           <div className="overflow-auto rounded-2xl border border-red-200 bg-white">
             <table className="min-w-full text-sm">
@@ -736,7 +817,7 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
                   <th className="px-4 py-3 text-left font-semibold text-red-900">Retailer</th>
                   <th className="px-4 py-3 text-left font-semibold text-red-900">Area</th>
                   <th className="px-4 py-3 text-right font-semibold text-red-900">Total Cases</th>
-                  <th className="px-4 py-3 text-right font-semibold text-red-900">Last Month Cases</th>
+                  <th className="px-4 py-3 text-right font-semibold text-red-900">Cases ({ctx.lastMonth})</th>
                 </tr>
               </thead>
               <tbody>
@@ -754,7 +835,6 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
           </div>
         </div>
       )}
-
     </div>
   );
 }
@@ -771,11 +851,11 @@ export default function KeheDashboardView() {
   const [bestStoreToMonth, setBestStoreToMonth] = useState(getCurrentMonthInputValue());
   const [topN, setTopN] = useState<TopN>(10);
   const [retailerFilter, setRetailerFilter] = useState("All Retailers");
-  const [monthlyCasesPeriodMode, setMonthlyCasesPeriodMode] = useState<PeriodMode>("past12Months");
-  const [monthlyCasesFromMonth, setMonthlyCasesFromMonth] = useState(getPastMonthsInputValue(11));
+  const [monthlyCasesPeriodMode, setMonthlyCasesPeriodMode] = useState<PeriodMode>("past6Months");
+  const [monthlyCasesFromMonth, setMonthlyCasesFromMonth] = useState(getPastMonthsInputValue(5));
   const [monthlyCasesToMonth, setMonthlyCasesToMonth] = useState(getCurrentMonthInputValue());
-  const [avgCakesPeriodMode, setAvgCakesPeriodMode] = useState<PeriodMode>("past12Months");
-  const [avgCakesFromMonth, setAvgCakesFromMonth] = useState(getPastMonthsInputValue(11));
+  const [avgCakesPeriodMode, setAvgCakesPeriodMode] = useState<PeriodMode>("past6Months");
+  const [avgCakesFromMonth, setAvgCakesFromMonth] = useState(getPastMonthsInputValue(5));
   const [avgCakesToMonth, setAvgCakesToMonth] = useState(getCurrentMonthInputValue());
 
   // pullout filters
