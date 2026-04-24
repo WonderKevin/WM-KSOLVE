@@ -1118,51 +1118,39 @@ export default function KeheDashboardView() {
   };
 
   return (
-    <div className="space-y-6">
-      {activeTab === "analytics" && (
-        <>
-          <div className="sticky top-0 z-20 bg-slate-100 pb-3 space-y-3">
-            {renderTabButtons()}
-            {/* Frozen header + stat cards */}
+    <div className="flex flex-col h-full min-h-screen">
+      {/* ── FROZEN TOP PANE — never moves ── */}
+      <div className="sticky top-0 z-30 bg-slate-100 flex-shrink-0">
+        {/* Tab buttons — always visible */}
+        <div className="px-0 pt-0 pb-2">
+          {renderTabButtons()}
+        </div>
+
+        {/* Analytics frozen header + stat cards */}
+        {activeTab === "analytics" && (
+          <div className="pb-3">
             <AnalyticsHeader rows={rows} loading={loading} loadError={loadError} />
           </div>
-          <AnalyticsTab rows={rows} loading={loading} loadError={loadError} />
-        </>
-      )}
+        )}
 
-      {activeTab === "velocity" && (
-        <>
-          <div className="sticky top-0 z-20 space-y-4 bg-slate-100 pb-4">
-            {renderTabButtons()}
+        {/* Velocity frozen sub-tabs + filters */}
+        {activeTab === "velocity" && (
+          <div className="pb-3">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div className="space-y-3"><h2 className="text-2xl font-bold text-slate-900">Velocity</h2>{renderVelocitySubTabs()}</div>
+                <div className="space-y-3">
+                  <h2 className="text-2xl font-bold text-slate-900">Velocity</h2>
+                  {renderVelocitySubTabs()}
+                </div>
                 {renderVelocityFilters()}
               </div>
             </div>
           </div>
-          {loading ? <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">Loading...</div> : loadError ? <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div> : (
-            <>
-              {velocitySubTab === "best-selling-store" && (
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
-                  <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="mb-4 flex items-center justify-between"><h3 className="text-xl font-semibold text-slate-900">Top Selling Store</h3><div className="rounded-xl bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">Top {topN}</div></div>
-                    <div className="space-y-3">{topSellingStores.length === 0 ? <div className="text-sm text-slate-500">No data found for the selected filters.</div> : topSellingStores.map((item, i) => (<div key={`${item.customer}-${i}`} className="flex items-start justify-between gap-4 rounded-2xl border border-slate-100 px-4 py-3"><div className="text-sm font-medium leading-5 text-slate-800">{item.customer}</div><div className="min-w-[56px] text-right text-sm font-bold text-slate-900">{item.totalCases}</div></div>))}</div>
-                  </div>
-                  <HorizontalBarChart title="Top Selling Store" data={topSellingStores.map((item) => ({ label: item.customer, value: item.totalCases }))} />
-                </div>
-              )}
-              {velocitySubTab === "total-cases-per-month" && <GroupedMonthlyChart title="Total Cases per Month per Retailer" months={monthlyCasesSeries.months} series={monthlyCasesSeries.series} />}
-              {velocitySubTab === "overall-average-cakes-per-week" && <GroupedMonthlyChart title="Overall: Average Cakes per Week" months={averageCakesPerWeekSeries.months} series={averageCakesPerWeekSeries.series} />}
-            </>
-          )}
-        </>
-      )}
+        )}
 
-      {activeTab === "pullout" && (
-        <>
-          <div className="sticky top-0 z-20 space-y-4 bg-slate-100 pb-4">
-            {renderTabButtons()}
+        {/* Pullout frozen sub-tabs + filters */}
+        {activeTab === "pullout" && (
+          <div className="pb-3">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div className="flex flex-col gap-3">{renderPulloutSubTabs()}</div>
@@ -1170,9 +1158,57 @@ export default function KeheDashboardView() {
               </div>
             </div>
           </div>
-          {renderPulloutTable()}
-        </>
-      )}
+        )}
+      </div>
+
+      {/* ── SCROLLABLE CONTENT BELOW ── */}
+      <div className="flex-1 space-y-6 pb-10">
+        {activeTab === "analytics" && (
+          <AnalyticsTab rows={rows} loading={loading} loadError={loadError} />
+        )}
+
+        {activeTab === "velocity" && (
+          <>
+            {loading ? (
+              <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">Loading...</div>
+            ) : loadError ? (
+              <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>
+            ) : (
+              <>
+                {velocitySubTab === "best-selling-store" && (
+                  <div className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
+                    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center justify-between">
+                        <h3 className="text-xl font-semibold text-slate-900">Top Selling Store</h3>
+                        <div className="rounded-xl bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">Top {topN}</div>
+                      </div>
+                      <div className="space-y-3">
+                        {topSellingStores.length === 0
+                          ? <div className="text-sm text-slate-500">No data found for the selected filters.</div>
+                          : topSellingStores.map((item, i) => (
+                            <div key={`${item.customer}-${i}`} className="flex items-start justify-between gap-4 rounded-2xl border border-slate-100 px-4 py-3">
+                              <div className="text-sm font-medium leading-5 text-slate-800">{item.customer}</div>
+                              <div className="min-w-[56px] text-right text-sm font-bold text-slate-900">{item.totalCases}</div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                    <HorizontalBarChart title="Top Selling Store" data={topSellingStores.map((item) => ({ label: item.customer, value: item.totalCases }))} />
+                  </div>
+                )}
+                {velocitySubTab === "total-cases-per-month" && (
+                  <GroupedMonthlyChart title="Total Cases per Month per Retailer" months={monthlyCasesSeries.months} series={monthlyCasesSeries.series} />
+                )}
+                {velocitySubTab === "overall-average-cakes-per-week" && (
+                  <GroupedMonthlyChart title="Overall: Average Cakes per Week" months={averageCakesPerWeekSeries.months} series={averageCakesPerWeekSeries.series} />
+                )}
+              </>
+            )}
+          </>
+        )}
+
+        {activeTab === "pullout" && renderPulloutTable()}
+      </div>
     </div>
   );
 }
