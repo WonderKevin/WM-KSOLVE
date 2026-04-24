@@ -236,6 +236,7 @@ export default function TonyVelocityView() {
   const [pendingRows, setPendingRows] = useState<TonyVelocityRow[]>([]);
   const [pendingSourceName, setPendingSourceName] = useState("");
   const [missingLocations, setMissingLocations] = useState<MissingLocation[]>([]);
+  const [showVelocityUploadOptions, setShowVelocityUploadOptions] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -317,6 +318,7 @@ export default function TonyVelocityView() {
     if (insertError) throw insertError;
 
     setNotice(`Uploaded ${uploadRows.length.toLocaleString()} Tony velocity rows.`);
+    setShowVelocityUploadOptions(false);
     await loadData();
   };
 
@@ -527,10 +529,11 @@ export default function TonyVelocityView() {
               type="button"
               onClick={exportRows}
               disabled={!filteredRows.length}
-              className="inline-flex h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              title="Export to Excel"
+              aria-label="Export to Excel"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <FileSpreadsheet className="h-4 w-4" />
-              Export to Excel
             </button>
 
             <button
@@ -545,7 +548,7 @@ export default function TonyVelocityView() {
 
             <button
               type="button"
-              onClick={() => velocityInputRef.current?.click()}
+              onClick={() => setShowVelocityUploadOptions((open) => !open)}
               className="inline-flex h-10 items-center gap-2 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={uploadingVelocity}
             >
@@ -570,35 +573,44 @@ export default function TonyVelocityView() {
           </div>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_160px_160px]">
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Month</label>
-            <select
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400"
-            >
-              {MONTHS.map((month) => (
-                <option key={month}>{month}</option>
-              ))}
-            </select>
-          </div>
+        {showVelocityUploadOptions && (
+          <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_160px_180px]">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Upload Month</label>
+                <select
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                >
+                  {MONTHS.map((month) => (
+                    <option key={month}>{month}</option>
+                  ))}
+                </select>
+              </div>
 
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Year</label>
-            <input
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value)}
-              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400"
-            />
-          </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Year</label>
+                <input
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(e.target.value)}
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                />
+              </div>
 
-          <div className="flex items-end">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              Upload month: <span className="font-bold text-slate-900">{monthLabel(selectedMonth, selectedYear)}</span>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={() => velocityInputRef.current?.click()}
+                  disabled={uploadingVelocity}
+                  className="h-11 w-full rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Choose File for {monthLabel(selectedMonth, selectedYear)}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {error && <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
         {notice && <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
