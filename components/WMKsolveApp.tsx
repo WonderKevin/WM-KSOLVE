@@ -166,19 +166,6 @@ export default function WMKsolveApp() {
   const [userEmail, setUserEmail] = useState("");
   const [permissions, setPermissions] = useState<Permissions | null>(null);
 
-  // Track the app header height so child components can offset their sticky elements
-  const [appHeaderHeight, setAppHeaderHeight] = useState(88);
-
-  useEffect(() => {
-    const header = document.getElementById("app-main-header");
-    if (!header) return;
-    const update = () => setAppHeaderHeight(header.offsetHeight);
-    update();
-    const obs = new ResizeObserver(update);
-    obs.observe(header);
-    return () => obs.disconnect();
-  }, []);
-
   useEffect(() => {
     let mounted = true;
 
@@ -387,7 +374,7 @@ export default function WMKsolveApp() {
   const renderContent = () => {
     switch (activeKey) {
       case "dashboard-kehe":
-        return <KeheDashboardView appHeaderHeight={appHeaderHeight} />;
+        return <KeheDashboardView />;
       case "dashboard-tony":
         return <PlaceholderView title="Tony's Dashboard" />;
       case "broker-commission-summary":
