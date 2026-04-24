@@ -29,6 +29,7 @@ import DeductionTypesView from "@/components/Views/DeductionTypesView";
 import UserAccountView from "@/components/Views/UserAccountView";
 import KeHeVelocityView from "@/components/Views/KeHeVelocityView";
 import KeheDashboardView from "@/components/Views/KeheDashboardView";
+import TonyVelocityView from "@/components/Views/TonyVelocityView";
 import HomeView from "@/components/Views/HomeView";
 
 type Permissions = {
@@ -45,6 +46,7 @@ type Permissions = {
 
   can_view_database_ksolve_invoices: boolean;
   can_view_database_kehe_velocity: boolean;
+  can_view_database_tony_velocity?: boolean;
   can_view_database_product_list: boolean;
   can_view_database_locations: boolean;
   can_view_database_deduction_type: boolean;
@@ -207,6 +209,7 @@ export default function WMKsolveApp() {
 
           can_view_database_ksolve_invoices: false,
           can_view_database_kehe_velocity: false,
+          can_view_database_tony_velocity: isAdmin,
           can_view_database_product_list: false,
           can_view_database_locations: false,
           can_view_database_deduction_type: false,
@@ -259,6 +262,7 @@ export default function WMKsolveApp() {
     if (permissions.can_view_accounting_check_details) allowedKeys.push("accounting-check-details");
     if (permissions.can_view_database_ksolve_invoices) allowedKeys.push("database-ksolve-invoices");
     if (permissions.can_view_database_kehe_velocity) allowedKeys.push("database-kehe-velocity");
+    if ((permissions.can_view_database_tony_velocity ?? permissions.can_view_database_kehe_velocity)) allowedKeys.push("database-tony-velocity");
     if (permissions.can_view_database_product_list) allowedKeys.push("database-product-list");
     if (permissions.can_view_database_locations) allowedKeys.push("database-locations");
     if (permissions.can_view_database_deduction_type) allowedKeys.push("database-deduction-type");
@@ -276,7 +280,7 @@ export default function WMKsolveApp() {
           ? true : prev.accounting,
       database:
         activeKey === "database-ksolve-invoices" || activeKey === "database-kehe-velocity" ||
-        activeKey === "database-product-list" || activeKey === "database-locations" || activeKey === "database-deduction-type"
+        activeKey === "database-tony-velocity" || activeKey === "database-product-list" || activeKey === "database-locations" || activeKey === "database-deduction-type"
           ? true : prev.database,
       admin: activeKey === "admin-user-account" ? true : prev.admin,
     }));
@@ -332,6 +336,7 @@ export default function WMKsolveApp() {
     const databaseChildren = [
       permissions.can_view_database_ksolve_invoices ? { label: "Ksolve Invoices", key: "database-ksolve-invoices" } : null,
       permissions.can_view_database_kehe_velocity ? { label: "KeHe Velocity", key: "database-kehe-velocity" } : null,
+      (permissions.can_view_database_tony_velocity ?? permissions.can_view_database_kehe_velocity) ? { label: "Tony\'s Velocity", key: "database-tony-velocity" } : null,
       permissions.can_view_database_product_list ? { label: "Product List", key: "database-product-list" } : null,
       permissions.can_view_database_locations ? { label: "Locations", key: "database-locations" } : null,
       permissions.can_view_database_deduction_type ? { label: "Deduction Type", key: "database-deduction-type" } : null,
@@ -363,6 +368,7 @@ export default function WMKsolveApp() {
     "accounting-wm-invoice-discrepancy": "WM Invoice Discrepancy",
     "database-ksolve-invoices": "Ksolve Invoices",
     "database-kehe-velocity": "KeHe Velocity",
+    "database-tony-velocity": "Tony\'s Velocity",
     "database-product-list": "Product List",
     "database-locations": "Locations",
     "database-deduction-type": "Deduction Type",
@@ -398,6 +404,8 @@ export default function WMKsolveApp() {
         );
       case "database-kehe-velocity":
         return <KeHeVelocityView />;
+      case "database-tony-velocity":
+        return <TonyVelocityView />;
       case "database-product-list":
         return <ProductListView />;
       case "database-locations":
