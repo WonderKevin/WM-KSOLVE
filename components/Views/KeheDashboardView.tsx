@@ -1203,7 +1203,8 @@ export default function KeheDashboardView() {
 
   const pulloutByStoreTable = useMemo(() => {
     const mc = [...pulloutSelectedMonths].sort(compareMonthLabelsAsc);
-    const selectedCustomers = new Set(pulloutCustomerFilter);\n    const filtered = pulloutRows.filter((r) => pulloutCustomerFilter.length === 0 || selectedCustomers.has(String(r.customer || "").trim()));
+    const selectedCustomers = new Set(pulloutCustomerFilter);
+    const filtered = pulloutRows.filter((r) => pulloutCustomerFilter.length === 0 || selectedCustomers.has(String(r.customer || "").trim()));
     const g = new Map<string, { retailer: string; retailer_area: string; customer: string; months: Record<string, number>; total: number }>();
     for (const row of filtered) {
       const month = normalizeMonthLabel(row.month), retailer = String(row.retailer || "").trim() || "Unknown", ra = String(row.retailer_area || "").trim() || "Unknown", cust = String(row.customer || "").trim() || "Unknown", key = `${retailer}__${ra}__${cust}`;
