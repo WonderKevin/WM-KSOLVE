@@ -480,52 +480,56 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
 
   const ctx = useMemo(() => buildAnalyticsContext(filteredRows, analyticsLastMonth), [filteredRows, analyticsLastMonth]);
 
-  if (loading) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">Loading data for analysis...</div>;
-  if (loadError) return <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>;
-  if (!ctx) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">No data available for analysis.</div>;
-
-  const totalActive = ctx.areaSummaries.reduce((s, a) => s + a.activeLastMonth, 0);
-  const totalStores = ctx.areaSummaries.reduce((s, a) => s + a.total, 0);
+  // All derived data computed as hooks — MUST be before any early returns
+  const totalActive = useMemo(() => ctx?.areaSummaries.reduce((s, a) => s + a.activeLastMonth, 0) ?? 0, [ctx]);
+  const totalStores = useMemo(() => ctx?.areaSummaries.reduce((s, a) => s + a.total, 0) ?? 0, [ctx]);
   const pct = totalStores > 0 ? Math.round((totalActive / totalStores) * 100) : 0;
 
-  // Top area by pull rate (highest pull rate with meaningful store count)
-  const topAreaByPullRate = [...ctx.areaSummaries]
-    .filter((a) => a.total >= 3)
-    .sort((a, b) => {
+  const topAreaByPullRate = useMemo(() => {
+    if (!ctx) return null;
+    return [...ctx.areaSummaries]
+      .filter((a) => a.total >= 3)
+      .sort((a, b) => {
+        const ra = a.total > 0 ? a.activeLastMonth / a.total : 0;
+        const rb = b.total > 0 ? b.activeLastMonth / b.total : 0;
+        return rb - ra;
+      })[0] ?? null;
+  }, [ctx]);
+
+  const areasByPullRate = useMemo(() => {
+    if (!ctx) return [];
+    return [...ctx.areaSummaries].sort((a, b) => {
       const ra = a.total > 0 ? a.activeLastMonth / a.total : 0;
       const rb = b.total > 0 ? b.activeLastMonth / b.total : 0;
       return rb - ra;
-    })[0];
+    });
+  }, [ctx]);
 
-  // Sorted by pull rate for breakdown table
-  const areasByPullRate = [...ctx.areaSummaries].sort((a, b) => {
-    const ra = a.total > 0 ? a.activeLastMonth / a.total : 0;
-    const rb = b.total > 0 ? b.activeLastMonth / b.total : 0;
-    return rb - ra;
-  });
+  const top5ByPullRate = useMemo(() => areasByPullRate.slice(0, 5), [areasByPullRate]);
 
-  // Top 5 by pull rate %
-  const top5ByPullRate = areasByPullRate.slice(0, 5);
-
-  // Win-back by area: count win-back candidates per area
   const winBackByArea = useMemo(() => {
+    if (!ctx) return [];
     const map = new Map<string, number>();
     for (const s of ctx.winBackCandidates) {
       const key = `${s.retailer} · ${s.retailerArea}`;
       map.set(key, (map.get(key) || 0) + 1);
     }
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  }, [ctx.winBackCandidates]);
+  }, [ctx]);
 
-  // Declining by area
   const decliningByArea = useMemo(() => {
+    if (!ctx) return [];
     const map = new Map<string, number>();
     for (const s of ctx.decliningStores) {
       const key = `${s.retailer} · ${s.retailerArea}`;
       map.set(key, (map.get(key) || 0) + 1);
     }
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  }, [ctx.decliningStores]);
+  }, [ctx]);
+
+  if (loading) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">Loading data for analysis...</div>;
+  if (loadError) return <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">{loadError}</div>;
+  if (!ctx) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">No data available for analysis.</div>;
 
   return (
     <div className="space-y-6">
