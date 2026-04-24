@@ -645,41 +645,48 @@ function AnalyticsTab({ rows, loading, loadError }: { rows: VelocityRow[]; loadi
         </div>
       </div>
 
-      {/* Stat cards — 5 across, numbers prominent */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      {/* Stat cards — 4 across, numbers inline with labels */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {/* Active Last Month */}
         <div className="rounded-3xl border bg-emerald-50 text-emerald-700 border-emerald-200 p-4 shadow-sm">
-          <div className="text-3xl font-extrabold leading-none">{totalActive}<span className="text-lg font-semibold text-emerald-500">/{totalStores}</span></div>
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="text-3xl font-extrabold leading-none">{totalActive}</span>
+            <span className="text-base font-semibold text-emerald-500">/ {totalStores}</span>
+          </div>
           <div className="mt-1.5 text-sm font-semibold">Active Last Month</div>
           <div className="mt-0.5 text-xs opacity-70">{pct}% pull rate · all areas</div>
         </div>
-        {/* Top Area — clicks to breakdown */}
+        {/* Pull Out Rate per Area — clicks to breakdown */}
         <button type="button" onClick={() => areaBreakdownRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
           className="rounded-3xl border bg-purple-50 text-purple-700 border-purple-200 p-4 shadow-sm text-left hover:bg-purple-100 transition">
-          <div className="text-lg font-extrabold leading-tight truncate">{topAreaByPullRate ? topAreaByPullRate.area : "—"}</div>
-          <div className="mt-1.5 text-sm font-semibold">Top Area ↓</div>
-          <div className="mt-0.5 text-xs opacity-70">
-            {topAreaByPullRate ? `${Math.round((topAreaByPullRate.activeLastMonth / topAreaByPullRate.total) * 100)}% pull · ${topAreaByPullRate.lastMonthCases} cases` : ""}
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="text-3xl font-extrabold leading-none">
+              {topAreaByPullRate ? `${Math.round((topAreaByPullRate.activeLastMonth / topAreaByPullRate.total) * 100)}%` : "—"}
+            </span>
+            <span className="text-sm font-semibold text-purple-400 truncate max-w-[130px]">{topAreaByPullRate?.area ?? ""}</span>
           </div>
-        </button>
-        {/* Summary — clicks to show/hide Top 5 panels */}
-        <button type="button" onClick={() => summaryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          className="rounded-3xl border bg-slate-800 text-white border-slate-700 p-4 shadow-sm text-left hover:bg-slate-700 transition">
-          <div className="text-3xl font-extrabold leading-none">{ctx.areaSummaries.length}</div>
-          <div className="mt-1.5 text-sm font-semibold">Area Summary ↓</div>
-          <div className="mt-0.5 text-xs opacity-70">Top 5 pull rate · win-back · declining</div>
+          <div className="mt-1.5 text-sm font-semibold">Pull Out Rate per Area ↓</div>
+          <div className="mt-0.5 text-xs opacity-70">
+            {topAreaByPullRate ? `${topAreaByPullRate.activeLastMonth}/${topAreaByPullRate.total} stores · ${topAreaByPullRate.lastMonthCases} cases` : ""}
+          </div>
         </button>
         {/* Win-Back Candidates */}
         <button type="button" onClick={() => winBackRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
           className="rounded-3xl border bg-amber-50 text-amber-700 border-amber-200 p-4 shadow-sm text-left hover:bg-amber-100 transition">
-          <div className="text-3xl font-extrabold leading-none">{ctx.winBackCandidates.length}</div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-extrabold leading-none">{ctx.winBackCandidates.length}</span>
+            <span className="text-sm font-semibold text-amber-500">stores</span>
+          </div>
           <div className="mt-1.5 text-sm font-semibold">Win-Back Candidates ↓</div>
           <div className="mt-0.5 text-xs opacity-70">zero last 3 months, had prior volume</div>
         </button>
         {/* Declining Stores */}
         <button type="button" onClick={() => decliningRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
           className="rounded-3xl border bg-red-50 text-red-700 border-red-200 p-4 shadow-sm text-left hover:bg-red-100 transition">
-          <div className="text-3xl font-extrabold leading-none">{ctx.decliningStores.length}</div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-extrabold leading-none">{ctx.decliningStores.length}</span>
+            <span className="text-sm font-semibold text-red-400">stores</span>
+          </div>
           <div className="mt-1.5 text-sm font-semibold">Declining Stores ↓</div>
           <div className="mt-0.5 text-xs opacity-70">volume dropped 50%+</div>
         </button>
