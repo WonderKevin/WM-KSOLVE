@@ -269,25 +269,6 @@ function GroupedMonthlyChart({ title, months, series }: { title: string; months:
   );
 }
 
-function HorizontalBarChart({ data, title }: { data: { label: string; value: number }[]; title: string }) {
-  const cW = 1120, rowH = 42, labelWidth = 400, tP = 24, bP = 24;
-  const cH = Math.max(320, tP + bP + data.length * rowH);
-  const max = Math.max(1, ...data.map((d) => d.value));
-  const iW = cW - labelWidth - 40;
-  const ticks = Array.from({ length: 5 }, (_, i) => Math.round((max / 4) * i));
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h3 className="mb-4 text-2xl font-semibold text-slate-700">{title}</h3>
-      <div className="overflow-x-auto">
-        <svg width={cW} height={cH}>
-          {ticks.map((tick) => { const x = labelWidth + (tick / max) * iW; return <g key={tick}><line x1={x} y1={tP} x2={x} y2={cH - bP} stroke="#e2e8f0" /><text x={x} y={tP - 6} textAnchor="middle" fontSize="11" fill="#64748b">{tick}</text></g>; })}
-          {data.map((item, i) => { const y = tP + i * rowH; const w = (item.value / max) * iW; return <g key={`${item.label}-${i}`}><text x={labelWidth - 12} y={y + 16} textAnchor="end" fontSize="12" fill="#334155">{truncate(item.label, 50)}<title>{item.label}</title></text><rect x={labelWidth} y={y} width={w} height={24} rx="4" fill="#4a83e7" /><text x={labelWidth + w + 8} y={y + 16} fontSize="12" fontWeight="700" fill="#2563eb">{item.value}</text></g>; })}
-        </svg>
-      </div>
-    </div>
-  );
-}
-
 function buildLocationTable(rows: TonyVelocityRow[], months: string[], prioritySet?: Set<string>) {
   const monthColumns = [...months].sort(compareMonthLabelsAsc);
   const locationMap = new Map<string, LocationMonthRow>();
@@ -370,6 +351,50 @@ function LocationCasesTable({ title, table, searchQuery, emptyText }: { title: s
   );
 }
 
+function StoreCasesTable({ title, rows, months, searchQuery, emptyText }: { title: string; rows: TonyVelocityRow[]; months: string[]; searchQuery: string; emptyText: string }) {
+  const monthColumns = [...months].sort(compareMonthLabelsAsc);
+  const q = normalize(searchQuery).toLowerCase();
+
+  const storeRows = useMemo(() => {
+    const map = new Map<string, StoreMonthRow>();
+    for (const row of rows) {
+      const store = normalize(row.customer) || "Unknown Store";
+      if (q && !store.toLowerCase().includes(q)) continue;
+      const month = normalizeMonthLabel(row.month);
+      if (!map.has(store)) map.set(store, { location: "", store, months: {}, total: 0 });
+      const item = map.get(store)!;
+      item.months[month] = (item.months[month] || 0) + getCases(row);
+      item.total += getCases(row);
+    }
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+  }, [rows, q]);
+
+  const exportRows = () => downloadCsv(
+    title.toLowerCase().replace(/\s+/g, "-"),
+    ["Store", ...monthColumns, "Total"],
+    storeRows.map((store) => [store.store, ...monthColumns.map((m) => store.months[m] || 0), store.total])
+  );
+
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div><h3 className="text-lg font-semibold text-slate-900">{title}</h3><p className="text-sm text-slate-500">Stores only. Location grouping removed.</p></div>
+        <button type="button" onClick={exportRows} disabled={!storeRows.length} className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"><FileSpreadsheet className="h-4 w-4" />Export</button>
+      </div>
+      {storeRows.length === 0 ? <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">{emptyText}</div> : (
+        <div className="overflow-hidden rounded-2xl border border-slate-200"><div className="max-h-[70vh] overflow-auto">
+          <table className="min-w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+              <tr><th className="sticky left-0 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700">Store</th>{monthColumns.map((m) => <th key={m} className="px-4 py-3 text-right font-semibold text-slate-700">{m}</th>)}<th className="px-4 py-3 text-right font-semibold text-slate-700">Total</th></tr>
+            </thead>
+            <tbody>{storeRows.map((store) => <tr key={store.store} className="border-t border-slate-200 hover:bg-slate-50"><td className="sticky left-0 bg-white px-4 py-3 font-semibold text-slate-900">{store.store}</td>{monthColumns.map((m) => <td key={m} className="px-4 py-3 text-right text-slate-700">{store.months[m] || 0}</td>)}<td className="px-4 py-3 text-right font-bold text-slate-900">{store.total}</td></tr>)}</tbody>
+          </table>
+        </div></div>
+      )}
+    </div>
+  );
+}
+
 function PriorityEditor({ list, setList }: { list: string[]; setList: (v: string[]) => void }) {
   const [draft, setDraft] = useState("");
   const addItems = () => {
@@ -444,7 +469,7 @@ export default function TonyDashboardView() {
   const [velocityMode, setVelocityMode] = useState<PeriodMode>("past6Months");
   const [velocityFrom, setVelocityFrom] = useState(getPastMonthsInputValue(5));
   const [velocityTo, setVelocityTo] = useState(getCurrentMonthInputValue());
-  const [velocitySearch, setVelocitySearch] = useState("");
+  const [selectedVelocityLocation, setSelectedVelocityLocation] = useState("All");
 
   const [pulloutMode, setPulloutMode] = useState<PeriodMode>("past6Months");
   const [pulloutFrom, setPulloutFrom] = useState(getPastMonthsInputValue(5));
@@ -584,16 +609,21 @@ export default function TonyDashboardView() {
     return { months, series: [{ name: "Total Cases", fill: "#4a83e7", values: months.map((m) => g[m] || 0) }] };
   }, [velocityRows, velocityMonths]);
 
-  const monthlyLocationBars = useMemo(() => {
-    const q = normalize(velocitySearch).toLowerCase();
-    const map = new Map<string, number>();
+  const velocityLocationOptions = useMemo(() => {
+    return ["All", ...Array.from(new Set(velocityRows.map((row) => normalize(row.location) || "Unmapped Location"))).sort((a, b) => a.localeCompare(b))];
+  }, [velocityRows]);
+
+  const selectedLocationMonthlySeries = useMemo(() => {
+    const months = [...velocityMonths].sort(compareMonthLabelsAsc);
+    const totals: Record<string, number> = Object.fromEntries(months.map((m) => [m, 0]));
     for (const row of velocityRows) {
       const location = normalize(row.location) || "Unmapped Location";
-      if (q && !location.toLowerCase().includes(q) && !normalize(row.customer).toLowerCase().includes(q)) continue;
-      map.set(location, (map.get(location) || 0) + getCases(row));
+      if (selectedVelocityLocation !== "All" && location !== selectedVelocityLocation) continue;
+      const month = normalizeMonthLabel(row.month);
+      totals[month] = (totals[month] || 0) + getCases(row);
     }
-    return Array.from(map.entries()).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
-  }, [velocityRows, velocitySearch]);
+    return { months, series: [{ name: selectedVelocityLocation === "All" ? "All Locations" : selectedVelocityLocation, fill: "#4a83e7", values: months.map((m) => totals[m] || 0) }] };
+  }, [velocityRows, velocityMonths, selectedVelocityLocation]);
 
   const pulloutTable = useMemo(() => buildLocationTable(pulloutRows, pulloutMonths), [pulloutRows, pulloutMonths]);
   const priorityTable = useMemo(() => buildLocationTable(pulloutRows, pulloutMonths, prioritySet), [pulloutRows, pulloutMonths, prioritySet]);
@@ -634,18 +664,18 @@ export default function TonyDashboardView() {
   );
 
   return (
-    <div className="h-screen flex flex-col bg-slate-100">
-      <div className="shrink-0"><div className="z-20 bg-slate-100 px-6 pb-3 pt-3 shadow-[0_2px_8px_0_rgba(0,0,0,0.06)]">
+    <div className="min-h-screen flex flex-col bg-slate-100">
+      <div className="sticky top-[92px] z-20 shrink-0"><div className="z-20 bg-slate-100 px-6 pb-3 pt-3 shadow-[0_2px_8px_0_rgba(0,0,0,0.06)]">
         <div className="pb-2">{renderTabButtons()}</div>
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-3">
               <h2 className="text-2xl font-bold text-slate-900">Tony&apos;s Dashboard</h2>
-              {activeTab === "velocity" && <div className="flex flex-wrap gap-2"><FilterButton active={velocitySubTab === "total-cases-per-month"} onClick={() => setVelocitySubTab("total-cases-per-month")}>Total Cases per Month</FilterButton><FilterButton active={velocitySubTab === "monthly-cases-per-location"} onClick={() => setVelocitySubTab("monthly-cases-per-location")}>(New) Monthly Cases per Location</FilterButton></div>}
+              {activeTab === "velocity" && <div className="flex flex-wrap gap-2"><FilterButton active={velocitySubTab === "total-cases-per-month"} onClick={() => setVelocitySubTab("total-cases-per-month")}>Total Cases per Month</FilterButton><FilterButton active={velocitySubTab === "monthly-cases-per-location"} onClick={() => setVelocitySubTab("monthly-cases-per-location")}>Monthly Cases per Location</FilterButton></div>}
               {activeTab === "analytics" && <div className="flex flex-wrap gap-2"><FilterButton active={analyticsSection === "summary"} onClick={() => setAnalyticsSection("summary")}>Summary</FilterButton><FilterButton active={analyticsSection === "priority"} onClick={() => setAnalyticsSection("priority")}>Priority</FilterButton><FilterButton active={analyticsSection === "inactive"} onClick={() => setAnalyticsSection("inactive")}>Inactive Priority</FilterButton><FilterButton active={analyticsSection === "declining"} onClick={() => setAnalyticsSection("declining")}>Declining</FilterButton></div>}
             </div>
             <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end md:justify-end">
-              {activeTab === "velocity" && <>{velocitySubTab === "monthly-cases-per-location" && <div><label className="mb-1 block text-sm font-medium text-slate-700">Search Location</label><SearchBar value={velocitySearch} onChange={setVelocitySearch} placeholder="Search location or store..." /></div>}<PeriodFilters mode={velocityMode} setMode={setVelocityMode} from={velocityFrom} setFrom={setVelocityFrom} to={velocityTo} setTo={setVelocityTo} /></>}
+              {activeTab === "velocity" && <>{velocitySubTab === "monthly-cases-per-location" && <div className="min-w-[260px]"><label className="mb-1 block text-sm font-medium text-slate-700">Location</label><input list="tony-location-options" value={selectedVelocityLocation} onChange={(e) => setSelectedVelocityLocation(e.target.value || "All")} placeholder="All" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /><datalist id="tony-location-options">{velocityLocationOptions.map((location) => <option key={location} value={location} />)}</datalist></div>}<PeriodFilters mode={velocityMode} setMode={setVelocityMode} from={velocityFrom} setFrom={setVelocityFrom} to={velocityTo} setTo={setVelocityTo} /></>}
               {(activeTab === "pullout" || activeTab === "priority-pullout") && <><div><label className="mb-1 block text-sm font-medium text-slate-700">Search</label><SearchBar value={pulloutSearch} onChange={setPulloutSearch} placeholder="Search location or store..." /></div><PeriodFilters mode={pulloutMode} setMode={setPulloutMode} from={pulloutFrom} setFrom={setPulloutFrom} to={pulloutTo} setTo={setPulloutTo} /></>}
               {activeTab === "analytics" && uploadHeader}
             </div>
@@ -664,9 +694,9 @@ export default function TonyDashboardView() {
           {analyticsSection === "inactive" && <LocationCasesTable title="Inactive Priority Stores" table={{ monthColumns: analyticsCtx.allMonths.slice(-6), rows: buildLocationTable(rows.filter((r) => prioritySet.has(normalizeKey(r.customer)) && (analyticsCtx.inactivePriority.some((s) => normalizeKey(s.store) === normalizeKey(r.customer)))), analyticsCtx.allMonths.slice(-6)).rows }} searchQuery="" emptyText="No inactive priority stores found." />}
           {analyticsSection === "declining" && <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><h3 className="mb-4 text-lg font-semibold text-slate-900">Declining Stores</h3><div className="overflow-auto rounded-2xl border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-50"><tr><th className="px-4 py-3 text-left">Store</th><th className="px-4 py-3 text-left">Location</th><th className="px-4 py-3 text-right">{analyticsCtx.prevMonth}</th><th className="px-4 py-3 text-right">{analyticsCtx.lastMonth}</th><th className="px-4 py-3 text-right">Total</th></tr></thead><tbody>{analyticsCtx.declining.map((s) => <tr key={s.store} className="border-t"><td className="px-4 py-3 font-medium">{s.store}</td><td className="px-4 py-3">{s.location}</td><td className="px-4 py-3 text-right">{s.months[analyticsCtx.prevMonth] || 0}</td><td className="px-4 py-3 text-right">{s.months[analyticsCtx.lastMonth] || 0}</td><td className="px-4 py-3 text-right font-bold">{s.total}</td></tr>)}</tbody></table></div></div>}
         </>}
-        {!loading && activeTab === "velocity" && <>{velocitySubTab === "total-cases-per-month" ? <GroupedMonthlyChart title="Total Cases per Month" months={totalCasesSeries.months} series={totalCasesSeries.series} /> : <HorizontalBarChart title="Monthly Cases per Location" data={monthlyLocationBars} />}</>}
+        {!loading && activeTab === "velocity" && <>{velocitySubTab === "total-cases-per-month" ? <GroupedMonthlyChart title="Total Cases per Month" months={totalCasesSeries.months} series={totalCasesSeries.series} /> : <GroupedMonthlyChart title={selectedVelocityLocation === "All" ? "Monthly Cases: All Locations" : `Monthly Cases: ${selectedVelocityLocation}`} months={selectedLocationMonthlySeries.months} series={selectedLocationMonthlySeries.series} />}</>}
         {!loading && activeTab === "pullout" && <LocationCasesTable title="Pull Out: Monthly Cases per Location" table={pulloutTable} searchQuery={pulloutSearch} emptyText="No pull out rows found for the selected filters." />}
-        {!loading && activeTab === "priority-pullout" && <><PriorityEditor list={priorityList} setList={setPriorityList} /><LocationCasesTable title="Priority Pull Out: Monthly Cases per Location" table={priorityTable} searchQuery={pulloutSearch} emptyText="No priority pull out rows found for the selected filters." /></>}
+        {!loading && activeTab === "priority-pullout" && <StoreCasesTable title="Priority Pull Out: Monthly Cases per Store" rows={priorityRows} months={pulloutMonths} searchQuery={pulloutSearch} emptyText="No priority pull out rows found for the selected filters." />}
       </div>
 
       {showLocationModal && <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-6"><div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"><div className="border-b border-slate-200 px-6 py-4"><h2 className="text-xl font-bold text-slate-900">Upload or Add Tony Location</h2><p className="mt-1 text-sm text-slate-500">Add one Store → Location mapping, or bulk upload Excel/CSV with columns Store/Customer and Location.</p></div><div className="space-y-5 p-6"><div className="rounded-2xl border border-slate-200 p-4"><h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">Manual Entry</h3><div className="grid grid-cols-1 gap-3 md:grid-cols-2"><div><label className="mb-1 block text-sm font-medium text-slate-700">Store</label><input value={manualCustomer} onChange={(e) => setManualCustomer(e.target.value)} placeholder="Example: ANDRONICO'S #0173" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div><div><label className="mb-1 block text-sm font-medium text-slate-700">Location</label><input value={manualLocation} onChange={(e) => setManualLocation(e.target.value)} placeholder="Example: ANDRONICO'S" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div></div><div className="mt-4 flex justify-end"><button type="button" onClick={saveManualLocation} disabled={uploadingLocations} className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">Save Location</button></div></div><div className="rounded-2xl border border-slate-200 p-4"><h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-slate-500">Bulk Upload</h3><p className="mb-3 text-sm text-slate-500">Upload an Excel or CSV file with columns Customer/Store and Location.</p><button type="button" onClick={() => locationInputRef.current?.click()} disabled={uploadingLocations} className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Upload className="h-4 w-4" />{uploadingLocations ? "Uploading..." : "Choose Location File"}</button></div></div><div className="flex justify-end border-t border-slate-200 px-6 py-4"><button type="button" onClick={() => setShowLocationModal(false)} className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Close</button></div></div></div>}
