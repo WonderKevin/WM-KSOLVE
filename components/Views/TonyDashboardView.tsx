@@ -365,7 +365,7 @@ function StoreCasesTable({ title, rows, months, searchQuery, emptyText }: { titl
       item.months[month] = (item.months[month] || 0) + getCases(row);
       item.total += getCases(row);
     }
-    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+    return Array.from(map.values()).sort((a, b) => a.store.localeCompare(b.store));
   }, [rows, q]);
 
   const exportRows = () => downloadCsv(
