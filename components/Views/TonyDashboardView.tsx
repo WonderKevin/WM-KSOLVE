@@ -687,7 +687,7 @@ export default function TonyDashboardView() {
   const velocityInputRef = useRef<HTMLInputElement>(null);
   const locationInputRef = useRef<HTMLInputElement>(null);
 
-  const [activeTab, setActiveTab] = useState<TabKey>("velocity");
+  const [activeTab, setActiveTab] = useState<TabKey>("analytics");
   const [analyticsSection, setAnalyticsSection] = useState<AnalyticsSection>("summary");
   const [analyticsSearch, setAnalyticsSearch] = useState("");
   const [analyticsLocation, setAnalyticsLocation] = useState("All Locations");
