@@ -5,7 +5,6 @@ import { FileSpreadsheet, Upload, Plus, X, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
 type TabKey = "analytics" | "velocity" | "pullout" | "priority-pullout";
-type VelocitySubTabKey = "total-cases-per-month" | "monthly-cases-per-location";
 type PeriodMode = "lastMonth" | "past6Months" | "past12Months" | "custom";
 type AnalyticsSection = "summary" | "priority" | "inactive" | "declining";
 
@@ -444,8 +443,7 @@ export default function TonyDashboardView() {
   const velocityInputRef = useRef<HTMLInputElement>(null);
   const locationInputRef = useRef<HTMLInputElement>(null);
 
-  const [activeTab, setActiveTab] = useState<TabKey>("analytics");
-  const [velocitySubTab, setVelocitySubTab] = useState<VelocitySubTabKey>("total-cases-per-month");
+  const [activeTab, setActiveTab] = useState<TabKey>("velocity");
   const [analyticsSection, setAnalyticsSection] = useState<AnalyticsSection>("summary");
 
   const [rows, setRows] = useState<TonyVelocityRow[]>([]);
@@ -602,31 +600,43 @@ export default function TonyDashboardView() {
   const pulloutRows = useMemo(() => rows.filter((r) => pulloutMonths.includes(normalizeMonthLabel(r.month))), [rows, pulloutMonths]);
   const priorityRows = useMemo(() => pulloutRows.filter((r) => prioritySet.has(normalizeKey(r.customer))), [pulloutRows, prioritySet]);
 
-  const totalCasesSeries = useMemo(() => {
-    const months = [...velocityMonths].sort(compareMonthLabelsAsc).filter((m) => velocityRows.some((r) => normalizeMonthLabel(r.month) === m));
-    const g: Record<string, number> = Object.fromEntries(months.map((m) => [m, 0]));
-    for (const row of velocityRows) g[normalizeMonthLabel(row.month)] = (g[normalizeMonthLabel(row.month)] || 0) + getCases(row);
-    return { months, series: [{ name: "Total Cases", fill: "#4a83e7", values: months.map((m) => g[m] || 0) }] };
-  }, [velocityRows, velocityMonths]);
-
   const velocityLocationOptions = useMemo(() => {
-    return ["All", ...Array.from(new Set(velocityRows.map((row) => normalize(row.location) || "Unmapped Location"))).sort((a, b) => a.localeCompare(b))];
-  }, [velocityRows]);
+    const unique = new Map<string, string>();
+    for (const row of rows) {
+      const location = normalize(row.location) || "Unmapped Location";
+      const key = normalizeKey(location);
+      if (key && !unique.has(key)) unique.set(key, location);
+    }
+    return ["All", ...Array.from(unique.values()).sort((a, b) => a.localeCompare(b))];
+  }, [rows]);
 
-  const selectedLocationMonthlySeries = useMemo(() => {
+  const selectedVelocityLocationKey = normalizeKey(selectedVelocityLocation);
+
+  const totalCasesSeries = useMemo(() => {
     const months = [...velocityMonths].sort(compareMonthLabelsAsc);
     const totals: Record<string, number> = Object.fromEntries(months.map((m) => [m, 0]));
+
     for (const row of velocityRows) {
       const location = normalize(row.location) || "Unmapped Location";
-      if (selectedVelocityLocation !== "All" && location !== selectedVelocityLocation) continue;
+      if (selectedVelocityLocationKey !== "ALL" && normalizeKey(location) !== selectedVelocityLocationKey) continue;
+
       const month = normalizeMonthLabel(row.month);
       totals[month] = (totals[month] || 0) + getCases(row);
     }
-    return { months, series: [{ name: selectedVelocityLocation === "All" ? "All Locations" : selectedVelocityLocation, fill: "#4a83e7", values: months.map((m) => totals[m] || 0) }] };
-  }, [velocityRows, velocityMonths, selectedVelocityLocation]);
+
+    return {
+      months,
+      series: [
+        {
+          name: selectedVelocityLocationKey === "ALL" ? "All Locations" : selectedVelocityLocation,
+          fill: "#4a83e7",
+          values: months.map((m) => totals[m] || 0),
+        },
+      ],
+    };
+  }, [velocityRows, velocityMonths, selectedVelocityLocation, selectedVelocityLocationKey]);
 
   const pulloutTable = useMemo(() => buildLocationTable(pulloutRows, pulloutMonths), [pulloutRows, pulloutMonths]);
-  const priorityTable = useMemo(() => buildLocationTable(pulloutRows, pulloutMonths, prioritySet), [pulloutRows, pulloutMonths, prioritySet]);
 
   const analyticsCtx = useMemo(() => {
     const allMonths = Array.from(new Set(rows.map((r) => normalizeMonthLabel(r.month)))).sort(compareMonthLabelsAsc);
@@ -671,11 +681,31 @@ export default function TonyDashboardView() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-3">
               <h2 className="text-2xl font-bold text-slate-900">Tony&apos;s Dashboard</h2>
-              {activeTab === "velocity" && <div className="flex flex-wrap gap-2"><FilterButton active={velocitySubTab === "total-cases-per-month"} onClick={() => setVelocitySubTab("total-cases-per-month")}>Total Cases per Month</FilterButton><FilterButton active={velocitySubTab === "monthly-cases-per-location"} onClick={() => setVelocitySubTab("monthly-cases-per-location")}>Monthly Cases per Location</FilterButton></div>}
+              {activeTab === "velocity" && <p className="text-sm font-medium text-slate-500">Total Cases per Month</p>}
               {activeTab === "analytics" && <div className="flex flex-wrap gap-2"><FilterButton active={analyticsSection === "summary"} onClick={() => setAnalyticsSection("summary")}>Summary</FilterButton><FilterButton active={analyticsSection === "priority"} onClick={() => setAnalyticsSection("priority")}>Priority</FilterButton><FilterButton active={analyticsSection === "inactive"} onClick={() => setAnalyticsSection("inactive")}>Inactive Priority</FilterButton><FilterButton active={analyticsSection === "declining"} onClick={() => setAnalyticsSection("declining")}>Declining</FilterButton></div>}
             </div>
             <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end md:justify-end">
-              {activeTab === "velocity" && <>{velocitySubTab === "monthly-cases-per-location" && <div className="min-w-[260px]"><label className="mb-1 block text-sm font-medium text-slate-700">Location</label><input list="tony-location-options" value={selectedVelocityLocation} onChange={(e) => setSelectedVelocityLocation(e.target.value || "All")} placeholder="All" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /><datalist id="tony-location-options">{velocityLocationOptions.map((location) => <option key={location} value={location} />)}</datalist></div>}<PeriodFilters mode={velocityMode} setMode={setVelocityMode} from={velocityFrom} setFrom={setVelocityFrom} to={velocityTo} setTo={setVelocityTo} /></>}
+              {activeTab === "velocity" && <>
+                <div className="min-w-[260px]">
+                  <label className="mb-1 block text-sm font-medium text-slate-700">Location</label>
+                  <input
+                    list="tony-location-options"
+                    value={selectedVelocityLocation}
+                    onChange={(e) => setSelectedVelocityLocation(e.target.value || "All")}
+                    onBlur={() => {
+                      const typed = normalizeKey(selectedVelocityLocation);
+                      const match = velocityLocationOptions.find((location) => normalizeKey(location) === typed);
+                      setSelectedVelocityLocation(match || "All");
+                    }}
+                    placeholder="All"
+                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                  />
+                  <datalist id="tony-location-options">
+                    {velocityLocationOptions.map((location) => <option key={location} value={location} />)}
+                  </datalist>
+                </div>
+                <PeriodFilters mode={velocityMode} setMode={setVelocityMode} from={velocityFrom} setFrom={setVelocityFrom} to={velocityTo} setTo={setVelocityTo} />
+              </>}
               {(activeTab === "pullout" || activeTab === "priority-pullout") && <><div><label className="mb-1 block text-sm font-medium text-slate-700">Search</label><SearchBar value={pulloutSearch} onChange={setPulloutSearch} placeholder="Search location or store..." /></div><PeriodFilters mode={pulloutMode} setMode={setPulloutMode} from={pulloutFrom} setFrom={setPulloutFrom} to={pulloutTo} setTo={setPulloutTo} /></>}
               {activeTab === "analytics" && uploadHeader}
             </div>
@@ -694,7 +724,7 @@ export default function TonyDashboardView() {
           {analyticsSection === "inactive" && <LocationCasesTable title="Inactive Priority Stores" table={{ monthColumns: analyticsCtx.allMonths.slice(-6), rows: buildLocationTable(rows.filter((r) => prioritySet.has(normalizeKey(r.customer)) && (analyticsCtx.inactivePriority.some((s) => normalizeKey(s.store) === normalizeKey(r.customer)))), analyticsCtx.allMonths.slice(-6)).rows }} searchQuery="" emptyText="No inactive priority stores found." />}
           {analyticsSection === "declining" && <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><h3 className="mb-4 text-lg font-semibold text-slate-900">Declining Stores</h3><div className="overflow-auto rounded-2xl border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-50"><tr><th className="px-4 py-3 text-left">Store</th><th className="px-4 py-3 text-left">Location</th><th className="px-4 py-3 text-right">{analyticsCtx.prevMonth}</th><th className="px-4 py-3 text-right">{analyticsCtx.lastMonth}</th><th className="px-4 py-3 text-right">Total</th></tr></thead><tbody>{analyticsCtx.declining.map((s) => <tr key={s.store} className="border-t"><td className="px-4 py-3 font-medium">{s.store}</td><td className="px-4 py-3">{s.location}</td><td className="px-4 py-3 text-right">{s.months[analyticsCtx.prevMonth] || 0}</td><td className="px-4 py-3 text-right">{s.months[analyticsCtx.lastMonth] || 0}</td><td className="px-4 py-3 text-right font-bold">{s.total}</td></tr>)}</tbody></table></div></div>}
         </>}
-        {!loading && activeTab === "velocity" && <>{velocitySubTab === "total-cases-per-month" ? <GroupedMonthlyChart title="Total Cases per Month" months={totalCasesSeries.months} series={totalCasesSeries.series} /> : <GroupedMonthlyChart title={selectedVelocityLocation === "All" ? "Monthly Cases: All Locations" : `Monthly Cases: ${selectedVelocityLocation}`} months={selectedLocationMonthlySeries.months} series={selectedLocationMonthlySeries.series} />}</>}
+        {!loading && activeTab === "velocity" && <GroupedMonthlyChart title={selectedVelocityLocation === "All" ? "Total Cases per Month" : `Total Cases per Month: ${selectedVelocityLocation}`} months={totalCasesSeries.months} series={totalCasesSeries.series} />}
         {!loading && activeTab === "pullout" && <LocationCasesTable title="Pull Out: Monthly Cases per Location" table={pulloutTable} searchQuery={pulloutSearch} emptyText="No pull out rows found for the selected filters." />}
         {!loading && activeTab === "priority-pullout" && <StoreCasesTable title="Priority Pull Out: Monthly Cases per Store" rows={priorityRows} months={pulloutMonths} searchQuery={pulloutSearch} emptyText="No priority pull out rows found for the selected filters." />}
       </div>
