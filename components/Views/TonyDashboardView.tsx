@@ -676,38 +676,26 @@ export default function TonyDashboardView() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-100">
       <div className="sticky top-[92px] z-20 shrink-0"><div className="z-20 bg-slate-100 px-6 pb-3 pt-3 shadow-[0_2px_8px_0_rgba(0,0,0,0.06)]">
-        <div className="pb-2">{renderTabButtons()}</div>
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-3">
+            <div className="space-y-1">
               <h2 className="text-2xl font-bold text-slate-900">Tony&apos;s Dashboard</h2>
-              {activeTab === "velocity" && <p className="text-sm font-medium text-slate-500">Total Cases per Month</p>}
-              {activeTab === "analytics" && <div className="flex flex-wrap gap-2"><FilterButton active={analyticsSection === "summary"} onClick={() => setAnalyticsSection("summary")}>Summary</FilterButton><FilterButton active={analyticsSection === "priority"} onClick={() => setAnalyticsSection("priority")}>Priority</FilterButton><FilterButton active={analyticsSection === "inactive"} onClick={() => setAnalyticsSection("inactive")}>Inactive Priority</FilterButton><FilterButton active={analyticsSection === "declining"} onClick={() => setAnalyticsSection("declining")}>Declining</FilterButton></div>}
+              <p className="text-sm font-medium text-slate-500">Total Cases per Month</p>
             </div>
             <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end md:justify-end">
-              {activeTab === "velocity" && <>
-                <div className="min-w-[260px]">
-                  <label className="mb-1 block text-sm font-medium text-slate-700">Location</label>
-                  <input
-                    list="tony-location-options"
-                    value={selectedVelocityLocation}
-                    onChange={(e) => setSelectedVelocityLocation(e.target.value || "All")}
-                    onBlur={() => {
-                      const typed = normalizeKey(selectedVelocityLocation);
-                      const match = velocityLocationOptions.find((location) => normalizeKey(location) === typed);
-                      setSelectedVelocityLocation(match || "All");
-                    }}
-                    placeholder="All"
-                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-                  />
-                  <datalist id="tony-location-options">
-                    {velocityLocationOptions.map((location) => <option key={location} value={location} />)}
-                  </datalist>
-                </div>
-                <PeriodFilters mode={velocityMode} setMode={setVelocityMode} from={velocityFrom} setFrom={setVelocityFrom} to={velocityTo} setTo={setVelocityTo} />
-              </>}
-              {(activeTab === "pullout" || activeTab === "priority-pullout") && <><div><label className="mb-1 block text-sm font-medium text-slate-700">Search</label><SearchBar value={pulloutSearch} onChange={setPulloutSearch} placeholder="Search location or store..." /></div><PeriodFilters mode={pulloutMode} setMode={setPulloutMode} from={pulloutFrom} setFrom={setPulloutFrom} to={pulloutTo} setTo={setPulloutTo} /></>}
-              {activeTab === "analytics" && uploadHeader}
+              <div className="min-w-[260px]">
+                <label className="mb-1 block text-sm font-medium text-slate-700">Location</label>
+                <select
+                  value={selectedVelocityLocation}
+                  onChange={(e) => setSelectedVelocityLocation(e.target.value)}
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                >
+                  {velocityLocationOptions.map((location) => (
+                    <option key={location} value={location}>{location}</option>
+                  ))}
+                </select>
+              </div>
+              <PeriodFilters mode={velocityMode} setMode={setVelocityMode} from={velocityFrom} setFrom={setVelocityFrom} to={velocityTo} setTo={setVelocityTo} />
             </div>
           </div>
           {showVelocityUploadOptions && <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4"><div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_160px_180px]"><div><label className="mb-1 block text-sm font-medium text-slate-700">Upload Month</label><select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">{MONTHS.map((month) => <option key={month}>{month}</option>)}</select></div><div><label className="mb-1 block text-sm font-medium text-slate-700">Year</label><input value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div><div className="flex items-end"><button type="button" onClick={() => velocityInputRef.current?.click()} disabled={uploadingVelocity} className="h-11 w-full rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">Choose File for {monthLabel(selectedMonth, selectedYear)}</button></div></div></div>}
@@ -718,15 +706,7 @@ export default function TonyDashboardView() {
 
       <div className="flex-1 overflow-y-auto space-y-6 px-6 pb-10 pt-4">
         {loading && <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">Loading Tony dashboard data...</div>}
-        {!loading && activeTab === "analytics" && <>
-          {analyticsSection === "summary" && <div className="grid grid-cols-1 gap-4 lg:grid-cols-4"><div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><div className="text-sm font-semibold text-slate-500">Total Stores</div><div className="mt-2 text-3xl font-extrabold text-slate-900">{analyticsCtx.stores.length}</div></div><div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><div className="text-sm font-semibold text-slate-500">Active ({analyticsCtx.lastMonth || "Latest"})</div><div className="mt-2 text-3xl font-extrabold text-emerald-600">{analyticsCtx.activeLastMonth}</div></div><div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><div className="text-sm font-semibold text-slate-500">Priority Stores</div><div className="mt-2 text-3xl font-extrabold text-slate-900">{priorityList.length}</div></div><div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><div className="text-sm font-semibold text-slate-500">Inactive Priority</div><div className="mt-2 text-3xl font-extrabold text-amber-600">{analyticsCtx.inactivePriority.length}</div></div></div>}
-          {analyticsSection === "priority" && <PriorityEditor list={priorityList} setList={setPriorityList} />}
-          {analyticsSection === "inactive" && <LocationCasesTable title="Inactive Priority Stores" table={{ monthColumns: analyticsCtx.allMonths.slice(-6), rows: buildLocationTable(rows.filter((r) => prioritySet.has(normalizeKey(r.customer)) && (analyticsCtx.inactivePriority.some((s) => normalizeKey(s.store) === normalizeKey(r.customer)))), analyticsCtx.allMonths.slice(-6)).rows }} searchQuery="" emptyText="No inactive priority stores found." />}
-          {analyticsSection === "declining" && <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><h3 className="mb-4 text-lg font-semibold text-slate-900">Declining Stores</h3><div className="overflow-auto rounded-2xl border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-50"><tr><th className="px-4 py-3 text-left">Store</th><th className="px-4 py-3 text-left">Location</th><th className="px-4 py-3 text-right">{analyticsCtx.prevMonth}</th><th className="px-4 py-3 text-right">{analyticsCtx.lastMonth}</th><th className="px-4 py-3 text-right">Total</th></tr></thead><tbody>{analyticsCtx.declining.map((s) => <tr key={s.store} className="border-t"><td className="px-4 py-3 font-medium">{s.store}</td><td className="px-4 py-3">{s.location}</td><td className="px-4 py-3 text-right">{s.months[analyticsCtx.prevMonth] || 0}</td><td className="px-4 py-3 text-right">{s.months[analyticsCtx.lastMonth] || 0}</td><td className="px-4 py-3 text-right font-bold">{s.total}</td></tr>)}</tbody></table></div></div>}
-        </>}
-        {!loading && activeTab === "velocity" && <GroupedMonthlyChart title={selectedVelocityLocation === "All" ? "Total Cases per Month" : `Total Cases per Month: ${selectedVelocityLocation}`} months={totalCasesSeries.months} series={totalCasesSeries.series} />}
-        {!loading && activeTab === "pullout" && <LocationCasesTable title="Pull Out: Monthly Cases per Location" table={pulloutTable} searchQuery={pulloutSearch} emptyText="No pull out rows found for the selected filters." />}
-        {!loading && activeTab === "priority-pullout" && <StoreCasesTable title="Priority Pull Out: Monthly Cases per Store" rows={priorityRows} months={pulloutMonths} searchQuery={pulloutSearch} emptyText="No priority pull out rows found for the selected filters." />}
+        {!loading && <GroupedMonthlyChart title={selectedVelocityLocation === "All" ? "Total Cases per Month" : `Total Cases per Month: ${selectedVelocityLocation}`} months={totalCasesSeries.months} series={totalCasesSeries.series} />}
       </div>
 
       {showLocationModal && <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-6"><div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"><div className="border-b border-slate-200 px-6 py-4"><h2 className="text-xl font-bold text-slate-900">Upload or Add Tony Location</h2><p className="mt-1 text-sm text-slate-500">Add one Store → Location mapping, or bulk upload Excel/CSV with columns Store/Customer and Location.</p></div><div className="space-y-5 p-6"><div className="rounded-2xl border border-slate-200 p-4"><h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">Manual Entry</h3><div className="grid grid-cols-1 gap-3 md:grid-cols-2"><div><label className="mb-1 block text-sm font-medium text-slate-700">Store</label><input value={manualCustomer} onChange={(e) => setManualCustomer(e.target.value)} placeholder="Example: ANDRONICO'S #0173" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div><div><label className="mb-1 block text-sm font-medium text-slate-700">Location</label><input value={manualLocation} onChange={(e) => setManualLocation(e.target.value)} placeholder="Example: ANDRONICO'S" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" /></div></div><div className="mt-4 flex justify-end"><button type="button" onClick={saveManualLocation} disabled={uploadingLocations} className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">Save Location</button></div></div><div className="rounded-2xl border border-slate-200 p-4"><h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-slate-500">Bulk Upload</h3><p className="mb-3 text-sm text-slate-500">Upload an Excel or CSV file with columns Customer/Store and Location.</p><button type="button" onClick={() => locationInputRef.current?.click()} disabled={uploadingLocations} className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Upload className="h-4 w-4" />{uploadingLocations ? "Uploading..." : "Choose Location File"}</button></div></div><div className="flex justify-end border-t border-slate-200 px-6 py-4"><button type="button" onClick={() => setShowLocationModal(false)} className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Close</button></div></div></div>}
