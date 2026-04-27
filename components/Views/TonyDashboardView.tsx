@@ -5,6 +5,7 @@ import { FileSpreadsheet, Upload, Plus, X, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
 type TabKey = "analytics" | "velocity" | "pullout" | "priority-pullout";
+type PulloutSubTabKey = "by-location" | "by-store";
 type PeriodMode = "lastMonth" | "past6Months" | "past12Months" | "custom";
 type AnalyticsSection = "summary" | "pull-rate" | "win-back" | "declining";
 
@@ -688,6 +689,7 @@ export default function TonyDashboardView() {
   const locationInputRef = useRef<HTMLInputElement>(null);
 
   const [activeTab, setActiveTab] = useState<TabKey>("analytics");
+  const [pulloutSubTab, setPulloutSubTab] = useState<PulloutSubTabKey>("by-location");
   const [analyticsSection, setAnalyticsSection] = useState<AnalyticsSection>("summary");
   const [analyticsSearch, setAnalyticsSearch] = useState("");
   const [analyticsLocation, setAnalyticsLocation] = useState("All Locations");
@@ -716,10 +718,12 @@ export default function TonyDashboardView() {
   const [velocityTo, setVelocityTo] = useState(getCurrentMonthInputValue());
   const [selectedVelocityLocation, setSelectedVelocityLocation] = useState("All");
 
-  const [pulloutMode, setPulloutMode] = useState<PeriodMode>("past6Months");
-  const [pulloutFrom, setPulloutFrom] = useState(getPastMonthsInputValue(5));
+  const [pulloutMode, setPulloutMode] = useState<PeriodMode>("past12Months");
+  const [pulloutFrom, setPulloutFrom] = useState(getPastMonthsInputValue(11));
   const [pulloutTo, setPulloutTo] = useState(getCurrentMonthInputValue());
   const [pulloutSearch, setPulloutSearch] = useState("");
+
+  useEffect(() => { setPulloutSearch(""); }, [pulloutSubTab]);
 
   const [priorityList, setPriorityListRaw] = useState<string[]>(DEFAULT_PRIORITY_STORES);
   const setPriorityList = (items: string[]) => setPriorityListRaw(Array.from(new Map(items.map((x) => [normalizeKey(x), normalize(x)])).values()).filter(Boolean));
@@ -908,6 +912,17 @@ export default function TonyDashboardView() {
 
   const renderTabButtons = () => <div className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm"><div className="flex flex-wrap gap-2">{(["analytics", "velocity", "pullout", "priority-pullout"] as TabKey[]).map((tab) => <FilterButton key={tab} active={activeTab === tab} onClick={() => setActiveTab(tab)}>{tab === "pullout" ? "Pull out" : tab === "priority-pullout" ? "Priority Pull out" : tab === "analytics" ? "Analytics" : tab.charAt(0).toUpperCase() + tab.slice(1)}</FilterButton>)}</div></div>;
 
+  const renderPulloutSubTabs = () => (
+    <div className="flex flex-wrap gap-2">
+      <FilterButton active={pulloutSubTab === "by-location"} onClick={() => setPulloutSubTab("by-location")}>
+        Pull Out: Monthly Cases per Location
+      </FilterButton>
+      <FilterButton active={pulloutSubTab === "by-store"} onClick={() => setPulloutSubTab("by-store")}>
+        Pull Out: Monthly Cases per Store
+      </FilterButton>
+    </div>
+  );
+
   const uploadHeader = (
     <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-end lg:justify-end">
       <button type="button" onClick={() => setShowLocationModal(true)} className="inline-flex h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50" disabled={uploadingLocations}><Upload className="h-4 w-4" />{uploadingLocations ? "Uploading..." : "Upload Location"}</button>
@@ -945,6 +960,7 @@ export default function TonyDashboardView() {
                   {activeTab === "velocity" && (
                     <p className="text-sm font-medium text-slate-500">Total Cases per Month</p>
                   )}
+                  {activeTab === "pullout" && renderPulloutSubTabs()}
                 </div>
 
                 <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end md:justify-end">
@@ -970,7 +986,7 @@ export default function TonyDashboardView() {
                     <>
                       <div>
                         <label className="mb-1 block text-sm font-medium text-slate-700">Search</label>
-                        <SearchBar value={pulloutSearch} onChange={setPulloutSearch} placeholder="Search store..." />
+                        <SearchBar value={pulloutSearch} onChange={setPulloutSearch} placeholder={pulloutSubTab === "by-location" ? "Search location or store..." : "Search store or location..."} />
                       </div>
                       <PeriodFilters mode={pulloutMode} setMode={setPulloutMode} from={pulloutFrom} setFrom={setPulloutFrom} to={pulloutTo} setTo={setPulloutTo} />
                     </>
@@ -1023,12 +1039,24 @@ export default function TonyDashboardView() {
         )}
 
         {!loading && activeTab === "pullout" && (
-          <LocationCasesTable
-            title="Pull Out: Monthly Cases per Location"
-            table={pulloutTable}
-            searchQuery={pulloutSearch}
-            emptyText="No pull out rows found for the selected filters."
-          />
+          <>
+            {pulloutSubTab === "by-location" ? (
+              <LocationCasesTable
+                title="Pull Out: Monthly Cases per Location"
+                table={pulloutTable}
+                searchQuery={pulloutSearch}
+                emptyText="No pull out rows found for the selected filters."
+              />
+            ) : (
+              <StoreCasesTable
+                title="Pull Out: Monthly Cases per Store"
+                rows={pulloutRows}
+                months={pulloutMonths}
+                searchQuery={pulloutSearch}
+                emptyText="No store rows found for the selected filters."
+              />
+            )}
+          </>
         )}
 
         {!loading && activeTab === "priority-pullout" && (
