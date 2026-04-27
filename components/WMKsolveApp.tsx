@@ -29,6 +29,7 @@ import DeductionTypesView from "@/components/Views/DeductionTypesView";
 import UserAccountView from "@/components/Views/UserAccountView";
 import KeHeVelocityView from "@/components/Views/KeHeVelocityView";
 import KeheDashboardView from "@/components/Views/KeheDashboardView";
+import TonyDashboardView from "@/components/Views/TonyDashboardView";
 import TonyVelocityView from "@/components/Views/TonyVelocityView";
 import HomeView from "@/components/Views/HomeView";
 
@@ -336,7 +337,7 @@ export default function WMKsolveApp() {
     const databaseChildren = [
       permissions.can_view_database_ksolve_invoices ? { label: "Ksolve Invoices", key: "database-ksolve-invoices" } : null,
       permissions.can_view_database_kehe_velocity ? { label: "KeHe Velocity", key: "database-kehe-velocity" } : null,
-      (permissions.can_view_database_tony_velocity ?? permissions.can_view_database_kehe_velocity) ? { label: "Tony\'s Velocity", key: "database-tony-velocity" } : null,
+      (permissions.can_view_database_tony_velocity ?? permissions.can_view_database_kehe_velocity) ? { label: "Tony's Velocity", key: "database-tony-velocity" } : null,
       permissions.can_view_database_product_list ? { label: "Product List", key: "database-product-list" } : null,
       permissions.can_view_database_locations ? { label: "Locations", key: "database-locations" } : null,
       permissions.can_view_database_deduction_type ? { label: "Deduction Type", key: "database-deduction-type" } : null,
@@ -368,7 +369,7 @@ export default function WMKsolveApp() {
     "accounting-wm-invoice-discrepancy": "WM Invoice Discrepancy",
     "database-ksolve-invoices": "Ksolve Invoices",
     "database-kehe-velocity": "KeHe Velocity",
-    "database-tony-velocity": "Tony\'s Velocity",
+    "database-tony-velocity": "Tony's Velocity",
     "database-product-list": "Product List",
     "database-locations": "Locations",
     "database-deduction-type": "Deduction Type",
@@ -382,7 +383,7 @@ export default function WMKsolveApp() {
       case "dashboard-kehe":
         return <KeheDashboardView />;
       case "dashboard-tony":
-        return <PlaceholderView title="Tony's Dashboard" />;
+        return <TonyDashboardView />;
       case "broker-commission-summary":
         return <BrokerCommissionSummaryView />;
       case "broker-commission-data-sets":
@@ -453,9 +454,7 @@ export default function WMKsolveApp() {
         </aside>
       )}
 
-      {/* Main scroll container */}
       <main className="flex-1 h-screen overflow-y-auto">
-        {/* App-level sticky header — measured via id */}
         <div
           id="app-main-header"
           className="sticky top-0 z-30 bg-slate-100 px-6 pt-5 pb-4 border-b border-slate-200"
@@ -519,7 +518,6 @@ export default function WMKsolveApp() {
           </div>
         </div>
 
-        {/* Page content — no extra padding-top for Kehe Dashboard (it manages its own sticky) */}
         <div className={isKeheDashboard ? "px-6 pb-10" : "px-6 py-5"}>
           {renderContent()}
         </div>
