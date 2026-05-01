@@ -176,6 +176,20 @@ function buildPastNMonthsRange(n: number) {
     monthLabelFromDate(new Date(now.getFullYear(), now.getMonth() - n + i, 1))
   );
 }
+
+function buildTrailingMonthsEndingAt(monthLabelValue: string, count: number) {
+  const normalized = normalizeMonthLabel(monthLabelValue);
+  const m = normalized.match(/^([A-Za-z]+)\s+'(\d{2})$/);
+  if (!m) return [];
+  const monthIndex = new Date(`${m[1]} 1, 2000`).getMonth();
+  if (Number.isNaN(monthIndex)) return [];
+  const year = 2000 + Number(m[2]);
+  const end = new Date(year, monthIndex, 1);
+  return Array.from({ length: count }, (_, i) =>
+    monthLabelFromDate(new Date(end.getFullYear(), end.getMonth() - (count - 1 - i), 1))
+  ).map(normalizeMonthLabel);
+}
+
 function selectedMonthsFromMode(mode: PeriodMode, from: string, to: string) {
   if (mode === "lastMonth") return [normalizeMonthLabel(getLastMonthLabel())];
   if (mode === "past12Months") return buildPastNMonthsRange(12).map(normalizeMonthLabel);
@@ -889,8 +903,11 @@ export default function TonyDashboardView() {
   const velocityMonths = useMemo(() => selectedMonthsFromMode(velocityMode, velocityFrom, velocityTo), [velocityMode, velocityFrom, velocityTo]);
   const pulloutMonths = useMemo(() => selectedMonthsFromMode(pulloutMode, pulloutFrom, pulloutTo), [pulloutMode, pulloutFrom, pulloutTo]);
   const prioritySet = useMemo(() => new Set(priorityList.map(normalizeKey)), [priorityList]);
-  const runningAverageMonths = useMemo(() => buildPastNMonthsRange(3).map(normalizeMonthLabel), []);
-  const showPulloutRunningAverage = pulloutMode === "lastMonth";
+  const showPulloutRunningAverage = pulloutMonths.length === 1;
+  const runningAverageMonths = useMemo(() => {
+    if (!showPulloutRunningAverage) return [];
+    return buildTrailingMonthsEndingAt(pulloutMonths[0], 3);
+  }, [pulloutMonths, showPulloutRunningAverage]);
   const pulloutRunningAverages = useMemo(() => buildRunningAverageMaps(rows, runningAverageMonths), [rows, runningAverageMonths]);
   const priorityRunningAverages = useMemo(() => buildRunningAverageMaps(rows, runningAverageMonths, prioritySet), [rows, runningAverageMonths, prioritySet]);
 
