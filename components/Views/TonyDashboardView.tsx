@@ -170,7 +170,11 @@ function buildMonthRange(from: string, to: string) {
 }
 function buildPastNMonthsRange(n: number) {
   const now = new Date();
-  return Array.from({ length: n }, (_, i) => monthLabelFromDate(new Date(now.getFullYear(), now.getMonth() - (n - 1 - i), 1)));
+  // Use complete months only. Example: if today is in May,
+  // Past 6 Months = November through April, and Past 12 Months = May through April.
+  return Array.from({ length: n }, (_, i) =>
+    monthLabelFromDate(new Date(now.getFullYear(), now.getMonth() - n + i, 1))
+  );
 }
 function selectedMonthsFromMode(mode: PeriodMode, from: string, to: string) {
   if (mode === "lastMonth") return [normalizeMonthLabel(getLastMonthLabel())];
@@ -713,12 +717,12 @@ export default function TonyDashboardView() {
   const [pendingSourceName, setPendingSourceName] = useState("");
   const [missingLocations, setMissingLocations] = useState<MissingLocation[]>([]);
 
-  const [velocityMode, setVelocityMode] = useState<PeriodMode>("past6Months");
+  const [velocityMode, setVelocityMode] = useState<PeriodMode>("lastMonth");
   const [velocityFrom, setVelocityFrom] = useState(getPastMonthsInputValue(5));
   const [velocityTo, setVelocityTo] = useState(getCurrentMonthInputValue());
   const [selectedVelocityLocation, setSelectedVelocityLocation] = useState("All");
 
-  const [pulloutMode, setPulloutMode] = useState<PeriodMode>("past12Months");
+  const [pulloutMode, setPulloutMode] = useState<PeriodMode>("lastMonth");
   const [pulloutFrom, setPulloutFrom] = useState(getPastMonthsInputValue(11));
   const [pulloutTo, setPulloutTo] = useState(getCurrentMonthInputValue());
   const [pulloutSearch, setPulloutSearch] = useState("");
