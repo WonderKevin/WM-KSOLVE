@@ -756,7 +756,7 @@ export default function TonyDashboardView() {
   const [pendingSourceName, setPendingSourceName] = useState("");
   const [missingLocations, setMissingLocations] = useState<MissingLocation[]>([]);
 
-  const [velocityMode, setVelocityMode] = useState<PeriodMode>("lastMonth");
+  const [velocityMode, setVelocityMode] = useState<PeriodMode>("past6Months");
   const [velocityFrom, setVelocityFrom] = useState(getPastMonthsInputValue(5));
   const [velocityTo, setVelocityTo] = useState(getCurrentMonthInputValue());
   const [selectedVelocityLocation, setSelectedVelocityLocation] = useState("All");
