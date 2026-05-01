@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabase/client";
 type WMRow = {
   month: string | null;
   check_date: string | null;
+  invoice_date: string | null;
   invoice: string | null;
   type: string | null;
   amt: number | null;
@@ -22,6 +23,7 @@ type KsolveRow = {
 
 type DiscrepancyRow = {
   month: string;
+  invoiceDate: string;
   checkDate: string;
   checkNo: string;
   invoice: string;
@@ -142,7 +144,7 @@ async function fetchAllWmDatasetRows(): Promise<WMRow[]> {
   while (keepGoing) {
     const { data, error } = await supabase
       .from("broker_commission_datasets")
-      .select("month, check_date, invoice, type, amt")
+      .select("month, check_date, invoice_date, invoice, type, amt")
       .order("check_date", { ascending: false, nullsFirst: false })
       .order("invoice", { ascending: false, nullsFirst: false })
       .range(from, from + PAGE_SIZE - 1);
@@ -237,6 +239,7 @@ export default function WMInvoiceDiscrepancyView() {
         string,
         {
           month: string;
+          invoiceDate: string;
           checkDate: string;
           invoice: string;
           type: string;
@@ -314,6 +317,7 @@ export default function WMInvoiceDiscrepancyView() {
 
         return {
           month: wm?.month || ks?.month || "",
+          invoiceDate: wm?.invoiceDate || "",
           checkDate: wm?.checkDate || ks?.checkDate || "",
           checkNo: ks?.checkNo || "",
           invoice,
@@ -360,6 +364,7 @@ export default function WMInvoiceDiscrepancyView() {
 
       const haystack = [
         row.month,
+        row.invoiceDate,
         row.checkDate,
         row.checkNo,
         row.invoice,
@@ -429,7 +434,7 @@ export default function WMInvoiceDiscrepancyView() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search month, check date, check #, invoice, type..."
+              placeholder="Search month, invoice date, check date, check #, invoice, type..."
               className="h-full min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white py-2 pl-10 pr-10 text-sm outline-none transition focus:border-slate-300"
             />
             {search && (
@@ -475,6 +480,7 @@ export default function WMInvoiceDiscrepancyView() {
               <thead className="bg-slate-50">
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold text-slate-700">Month</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Invoice Date</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-700">Check Date</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-700">Check #</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-700">Invoice</th>
@@ -491,6 +497,7 @@ export default function WMInvoiceDiscrepancyView() {
                     <td className="px-4 py-3 text-slate-700">
                       {formatMonthShort(row.month)}
                     </td>
+                    <td className="px-4 py-3 text-slate-700">{row.invoiceDate || "-"}</td>
                     <td className="px-4 py-3 text-slate-700">{row.checkDate || "-"}</td>
                     <td className="px-4 py-3 text-slate-700">{row.checkNo || "-"}</td>
                     <td className="px-4 py-3 font-medium text-slate-900">{row.invoice}</td>

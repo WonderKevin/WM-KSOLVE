@@ -59,6 +59,7 @@ type DatasetRow = {
 type DatasetInsert = {
   month: string;
   check_date: string | null;
+  invoice_date?: string | null;
   invoice: string;
   type: string;
   upc: string;
@@ -1891,6 +1892,7 @@ function buildDatasetInsert(
   productLookup: Map<string, string>,
   month: string,
   checkDate: string | null,
+  invoiceDate: string | null,
   invoiceNorm: string,
   type: string
 ): DatasetInsert {
@@ -1900,6 +1902,7 @@ function buildDatasetInsert(
   return {
     month,
     check_date: checkDate,
+    invoice_date: invoiceDate,
     invoice: invoiceNorm,
     type: normalizedType,
     upc,
@@ -1914,13 +1917,14 @@ function buildDatasetInsert(
 async function replaceDatasetRowsForInvoice(
   invoice: string,
   file: File,
-  options?: { categoryFallback?: string }
+  options?: { categoryFallback?: string; invoiceDate?: string }
 ) {
   const ni = normalizeInvoiceNumber(invoice);
   if (!ni) return 0;
 
   let detailRows: DatasetRow[] = [];
   let categoryFallback = options?.categoryFallback || "";
+  let invoiceDateRaw = options?.invoiceDate || "";
   const detectedType = await detectFileTypeFromContent(file);
 
   if (detectedType === "excel") {
@@ -1930,10 +1934,9 @@ async function replaceDatasetRowsForInvoice(
     detailRows = await parseDetailRows(file, fullText);
     console.log("[replaceDatasetRowsForInvoice] detailRows:", detailRows);
     console.log("PARSED DETAIL ROWS", { invoice: ni, count: detailRows.length, rows: detailRows.slice(0, 10) });
-    if (!categoryFallback) {
-      const pm = parseMetadataFromText(fullText);
-      if (pm.category !== "Unknown") categoryFallback = pm.category;
-    }
+    const pm = parseMetadataFromText(fullText);
+    if (!categoryFallback && pm.category !== "Unknown") categoryFallback = pm.category;
+    if (!invoiceDateRaw && pm.pdf_date !== "Unknown") invoiceDateRaw = pm.pdf_date;
   } else {
     throw new Error(`Unsupported document type for ${file.name}.`);
   }
@@ -1974,6 +1977,9 @@ async function replaceDatasetRowsForInvoice(
 
   const datasetMonth = formatMonthLabelFromDate(invoiceCheckDate);
   const datasetCheckDate = parseIsoDateFromMmDdYyyy(invoiceCheckDate);
+  const datasetInvoiceDate = isWmInvoiceType(finalType)
+    ? parseIsoDateFromMmDdYyyy(invoiceDateRaw)
+    : null;
 
   const inserts: DatasetInsert[] = detailRows
     .filter((r) => {
@@ -1981,7 +1987,7 @@ async function replaceDatasetRowsForInvoice(
       const u = normalizeSku(r.upc);
       return u !== "MA2" && u !== "MA2%" && !/^ma\s*2%?$/i.test(r.upc);
     })
-    .map((r) => buildDatasetInsert(r, pl, datasetMonth, datasetCheckDate, ni, finalType));
+    .map((r) => buildDatasetInsert(r, pl, datasetMonth, datasetCheckDate, datasetInvoiceDate, ni, finalType));
 
   console.log("[replaceDatasetRowsForInvoice] inserts:", inserts);
 
@@ -2032,7 +2038,10 @@ async function reprocessAllUploads(
       const inferredType = detectStoredFileType(u.file_name, u.file_type);
       const mimeType = inferredType === "excel" ? getExcelMimeType(u.file_name) : "application/pdf";
       const f = new File([fd], u.file_name || "upload", { type: mimeType });
-      const inserted = await replaceDatasetRowsForInvoice(u.invoice, f, { categoryFallback: u.category || "" });
+      const inserted = await replaceDatasetRowsForInvoice(u.invoice, f, {
+        categoryFallback: u.category || "",
+        invoiceDate: u.pdf_date || "",
+      });
 
       totalRows += inserted;
       processed++;
@@ -2441,12 +2450,18 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
           if (existingUpload) {
             const r = await replaceExistingDocument(existingUpload, file, finalMeta);
             if (r.skipped) { skip++; continue; }
-            savedRows += await replaceDatasetRowsForInvoice(finalMeta.invoice, file, { categoryFallback: finalMeta.category || "" });
+            savedRows += await replaceDatasetRowsForInvoice(finalMeta.invoice, file, {
+              categoryFallback: finalMeta.category || "",
+              invoiceDate: finalMeta.pdf_date || "",
+            });
             rep++;
             checkAndPromptUnknownUpcs(finalMeta.invoice, new Date().toISOString(), file, finalMeta.category || "").catch(console.error);
           } else {
             await uploadNewDocument(file, finalMeta);
-            savedRows += await replaceDatasetRowsForInvoice(finalMeta.invoice, file, { categoryFallback: finalMeta.category || "" });
+            savedRows += await replaceDatasetRowsForInvoice(finalMeta.invoice, file, {
+              categoryFallback: finalMeta.category || "",
+              invoiceDate: finalMeta.pdf_date || "",
+            });
             ok++;
             checkAndPromptUnknownUpcs(finalMeta.invoice, new Date().toISOString(), file, finalMeta.category || "").catch(console.error);
           }
@@ -2476,10 +2491,16 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
       const fm = { ...pendingMeta, category: deductionName.trim() };
       if (pendingIsReplace && pendingExistingUpload) {
         const r = await replaceExistingDocument(pendingExistingUpload, pendingFile, fm);
-        if (!r.skipped) await replaceDatasetRowsForInvoice(fm.invoice, pendingFile, { categoryFallback: fm.category });
+        if (!r.skipped) await replaceDatasetRowsForInvoice(fm.invoice, pendingFile, {
+          categoryFallback: fm.category,
+          invoiceDate: fm.pdf_date || "",
+        });
       } else {
         await uploadNewDocument(pendingFile, fm);
-        await replaceDatasetRowsForInvoice(fm.invoice, pendingFile, { categoryFallback: fm.category });
+        await replaceDatasetRowsForInvoice(fm.invoice, pendingFile, {
+          categoryFallback: fm.category,
+          invoiceDate: fm.pdf_date || "",
+        });
       }
       checkAndPromptUnknownUpcs(fm.invoice, new Date().toISOString(), pendingFile, fm.category).catch(console.error);
       setDeductionModal((p) => ({ ...p, open: false }));
@@ -2498,7 +2519,10 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
         if (entry.upc && desc.trim()) await saveProductListEntry(entry.upc, desc.trim());
       }
       if (pendingFile && pendingInvoice) {
-        await replaceDatasetRowsForInvoice(pendingInvoice, pendingFile, { categoryFallback: pendingCategory });
+        await replaceDatasetRowsForInvoice(pendingInvoice, pendingFile, {
+          categoryFallback: pendingCategory,
+          invoiceDate: upcModal.pendingPdfDate || "",
+        });
       }
       const newMap = await fetchProductLookup();
       setExistingDescriptions(Array.from(new Set(Array.from(newMap.values()).filter(Boolean))).sort());
