@@ -32,6 +32,7 @@ type DiscrepancyRow = {
   wmAmount: number;
   discrepancy: number;
   percentage: number;
+  discountTerms: "Yes" | "No" | "-";
 };
 
 const PAGE_SIZE = 1000;
@@ -104,6 +105,37 @@ function formatDisplayDate(value: string | null | undefined) {
   }
 
   return raw;
+}
+
+function parseDateForTerms(value: string | null | undefined) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  }
+
+  const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) {
+    return new Date(Number(mdy[3]), Number(mdy[1]) - 1, Number(mdy[2]));
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
+function getDiscountTermsStatus(checkDate: string, invoiceDate: string): "Yes" | "No" | "-" {
+  const check = parseDateForTerms(checkDate);
+  const invoice = parseDateForTerms(invoiceDate);
+
+  if (!check || !invoice) return "-";
+
+  const deadline = new Date(invoice);
+  deadline.setDate(deadline.getDate() + 10);
+
+  return check.getTime() <= deadline.getTime() ? "Yes" : "No";
 }
 
 function parseMonthOrder(value: string) {
@@ -256,9 +288,10 @@ export default function WMInvoiceDiscrepancyView() {
         if (!current) {
           wmByInvoice.set(invoice, {
             month:
-              formatMonthFromDate(row.check_date ?? "") ||
+              formatMonthFromDate(row.invoice_date ?? row.check_date ?? "") ||
               String(row.month || "").trim() ||
               "",
+            invoiceDate: formatDisplayDate(row.invoice_date),
             checkDate: formatDisplayDate(row.check_date),
             invoice,
             type: row.type ?? "WM Invoice",
@@ -326,6 +359,7 @@ export default function WMInvoiceDiscrepancyView() {
           wmAmount,
           discrepancy,
           percentage,
+          discountTerms: getDiscountTermsStatus(wm?.checkDate || ks?.checkDate || "", wm?.invoiceDate || ""),
         };
       });
 
@@ -367,7 +401,9 @@ export default function WMInvoiceDiscrepancyView() {
         row.invoiceDate,
         row.checkDate,
         row.checkNo,
+        row.invoiceDate,
         row.invoice,
+        row.discountTerms,
         row.type,
       ]
         .join(" ")
@@ -480,10 +516,11 @@ export default function WMInvoiceDiscrepancyView() {
               <thead className="bg-slate-50">
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold text-slate-700">Month</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Invoice Date</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-700">Check Date</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-700">Check #</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Invoice Date</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-700">Invoice</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">2% 10 / NET 30</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-700">Type</th>
                   <th className="px-4 py-3 text-right font-semibold text-slate-700">Ksolve Amount</th>
                   <th className="px-4 py-3 text-right font-semibold text-slate-700">WM Amount</th>
@@ -497,10 +534,23 @@ export default function WMInvoiceDiscrepancyView() {
                     <td className="px-4 py-3 text-slate-700">
                       {formatMonthShort(row.month)}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">{row.invoiceDate || "-"}</td>
                     <td className="px-4 py-3 text-slate-700">{row.checkDate || "-"}</td>
                     <td className="px-4 py-3 text-slate-700">{row.checkNo || "-"}</td>
+                    <td className="px-4 py-3 text-slate-700">{row.invoiceDate || "-"}</td>
                     <td className="px-4 py-3 font-medium text-slate-900">{row.invoice}</td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          row.discountTerms === "Yes"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : row.discountTerms === "No"
+                              ? "bg-red-50 text-red-600"
+                              : "bg-slate-100 text-slate-500"
+                        }`}
+                      >
+                        {row.discountTerms}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-slate-700">{row.type}</td>
                     <td className="px-4 py-3 text-right text-slate-700">
                       {formatMoney(row.ksolveAmount)}
