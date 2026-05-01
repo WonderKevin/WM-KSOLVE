@@ -299,7 +299,44 @@ function buildLocationTable(rows: TonyVelocityRow[], months: string[], priorityS
   return { monthColumns, rows: rowsOut };
 }
 
-function ExpandableLocationRow({ row, monthColumns }: { row: LocationMonthRow; monthColumns: string[] }) {
+function averageFromMonths(monthsRecord: Record<string, number>, months: string[]) {
+  if (!months.length) return 0;
+  const total = months.reduce((sum, month) => sum + (monthsRecord[month] || 0), 0);
+  return Math.round(total / months.length);
+}
+
+function buildRunningAverageMaps(rows: TonyVelocityRow[], months: string[], prioritySet?: Set<string>) {
+  const selected = new Set(months.map(normalizeMonthLabel));
+  const locationMap = new Map<string, Record<string, number>>();
+  const storeMap = new Map<string, Record<string, number>>();
+
+  for (const row of rows) {
+    const store = normalize(row.customer) || "Unknown Store";
+    if (prioritySet && !prioritySet.has(normalizeKey(store))) continue;
+
+    const month = normalizeMonthLabel(row.month);
+    if (!selected.has(month)) continue;
+
+    const location = normalize(row.location) || "Unmapped Location";
+    const cases = getCases(row);
+
+    if (!locationMap.has(location)) locationMap.set(location, {});
+    if (!storeMap.has(store)) storeMap.set(store, {});
+
+    const locMonths = locationMap.get(location)!;
+    const storeMonths = storeMap.get(store)!;
+
+    locMonths[month] = (locMonths[month] || 0) + cases;
+    storeMonths[month] = (storeMonths[month] || 0) + cases;
+  }
+
+  return {
+    locations: new Map(Array.from(locationMap.entries()).map(([key, value]) => [key, averageFromMonths(value, months)])),
+    stores: new Map(Array.from(storeMap.entries()).map(([key, value]) => [key, averageFromMonths(value, months)])),
+  };
+}
+
+function ExpandableLocationRow({ row, monthColumns, showRunningAverage = false, locationRunningAverages, storeRunningAverages }: { row: LocationMonthRow; monthColumns: string[]; showRunningAverage?: boolean; locationRunningAverages?: Map<string, number>; storeRunningAverages?: Map<string, number> }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -308,12 +345,14 @@ function ExpandableLocationRow({ row, monthColumns }: { row: LocationMonthRow; m
           <span className="inline-flex items-center gap-2"><ChevronRight className={`h-4 w-4 text-slate-400 transition ${open ? "rotate-90" : ""}`} />{row.location}</span>
         </td>
         {monthColumns.map((m) => <td key={m} className="px-4 py-3 text-right text-slate-700">{row.months[m] || 0}</td>)}
+        {showRunningAverage && <td className="px-4 py-3 text-right font-semibold text-slate-900">{locationRunningAverages?.get(row.location) ?? 0}</td>}
         <td className="px-4 py-3 text-right font-bold text-slate-900">{row.total}</td>
       </tr>
       {open && row.stores.map((store) => (
         <tr key={`${row.location}-${store.store}`} className="border-t border-slate-100 bg-slate-50">
           <td className="sticky left-0 bg-slate-50 py-2 pl-12 pr-4 text-sm font-medium text-slate-700">{store.store}</td>
           {monthColumns.map((m) => <td key={m} className="px-4 py-2 text-right text-slate-600">{store.months[m] || 0}</td>)}
+          {showRunningAverage && <td className="px-4 py-2 text-right font-semibold text-slate-800">{storeRunningAverages?.get(store.store) ?? 0}</td>}
           <td className="px-4 py-2 text-right font-semibold text-slate-800">{store.total}</td>
         </tr>
       ))}
@@ -321,7 +360,7 @@ function ExpandableLocationRow({ row, monthColumns }: { row: LocationMonthRow; m
   );
 }
 
-function LocationCasesTable({ title, table, searchQuery, emptyText }: { title: string; table: { monthColumns: string[]; rows: LocationMonthRow[] }; searchQuery: string; emptyText: string }) {
+function LocationCasesTable({ title, table, searchQuery, emptyText, showRunningAverage = false, locationRunningAverages, storeRunningAverages }: { title: string; table: { monthColumns: string[]; rows: LocationMonthRow[] }; searchQuery: string; emptyText: string; showRunningAverage?: boolean; locationRunningAverages?: Map<string, number>; storeRunningAverages?: Map<string, number> }) {
   const q = normalize(searchQuery).toLowerCase();
   const rows = useMemo(() => {
     if (!q) return table.rows;
@@ -329,10 +368,10 @@ function LocationCasesTable({ title, table, searchQuery, emptyText }: { title: s
   }, [table.rows, q]);
   const exportRows = () => downloadCsv(
     title.toLowerCase().replace(/\s+/g, "-"),
-    ["Location", "Store", ...table.monthColumns, "Total"],
+    ["Location", "Store", ...table.monthColumns, ...(showRunningAverage ? ["Running 3 Mo Avg"] : []), "Total"],
     rows.flatMap((loc) => [
-      [loc.location, "", ...table.monthColumns.map((m) => loc.months[m] || 0), loc.total],
-      ...loc.stores.map((s) => [loc.location, s.store, ...table.monthColumns.map((m) => s.months[m] || 0), s.total]),
+      [loc.location, "", ...table.monthColumns.map((m) => loc.months[m] || 0), ...(showRunningAverage ? [locationRunningAverages?.get(loc.location) ?? 0] : []), loc.total],
+      ...loc.stores.map((s) => [loc.location, s.store, ...table.monthColumns.map((m) => s.months[m] || 0), ...(showRunningAverage ? [storeRunningAverages?.get(s.store) ?? 0] : []), s.total]),
     ])
   );
   return (
@@ -345,9 +384,9 @@ function LocationCasesTable({ title, table, searchQuery, emptyText }: { title: s
         <div className="overflow-hidden rounded-2xl border border-slate-200"><div className="max-h-[70vh] overflow-auto">
           <table className="min-w-full text-sm">
             <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
-              <tr><th className="sticky left-0 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700">Location / Store</th>{table.monthColumns.map((m) => <th key={m} className="px-4 py-3 text-right font-semibold text-slate-700">{m}</th>)}<th className="px-4 py-3 text-right font-semibold text-slate-700">Total</th></tr>
+              <tr><th className="sticky left-0 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700">Location / Store</th>{table.monthColumns.map((m) => <th key={m} className="px-4 py-3 text-right font-semibold text-slate-700">{m}</th>)}{showRunningAverage && <th className="px-4 py-3 text-right font-semibold text-slate-700">Running 3 Mo Avg</th>}<th className="px-4 py-3 text-right font-semibold text-slate-700">Total</th></tr>
             </thead>
-            <tbody>{rows.map((row) => <ExpandableLocationRow key={row.location} row={row} monthColumns={table.monthColumns} />)}</tbody>
+            <tbody>{rows.map((row) => <ExpandableLocationRow key={row.location} row={row} monthColumns={table.monthColumns} showRunningAverage={showRunningAverage} locationRunningAverages={locationRunningAverages} storeRunningAverages={storeRunningAverages} />)}</tbody>
           </table>
         </div></div>
       )}
@@ -355,7 +394,7 @@ function LocationCasesTable({ title, table, searchQuery, emptyText }: { title: s
   );
 }
 
-function StoreCasesTable({ title, rows, months, searchQuery, emptyText }: { title: string; rows: TonyVelocityRow[]; months: string[]; searchQuery: string; emptyText: string }) {
+function StoreCasesTable({ title, rows, months, searchQuery, emptyText, showRunningAverage = false, runningAverages }: { title: string; rows: TonyVelocityRow[]; months: string[]; searchQuery: string; emptyText: string; showRunningAverage?: boolean; runningAverages?: Map<string, number> }) {
   const monthColumns = [...months].sort(compareMonthLabelsAsc);
   const q = normalize(searchQuery).toLowerCase();
 
@@ -375,8 +414,8 @@ function StoreCasesTable({ title, rows, months, searchQuery, emptyText }: { titl
 
   const exportRows = () => downloadCsv(
     title.toLowerCase().replace(/\s+/g, "-"),
-    ["Store", ...monthColumns, "Total"],
-    storeRows.map((store) => [store.store, ...monthColumns.map((m) => store.months[m] || 0), store.total])
+    ["Store", ...monthColumns, ...(showRunningAverage ? ["Running 3 Mo Avg"] : []), "Total"],
+    storeRows.map((store) => [store.store, ...monthColumns.map((m) => store.months[m] || 0), ...(showRunningAverage ? [runningAverages?.get(store.store) ?? 0] : []), store.total])
   );
 
   return (
@@ -389,9 +428,9 @@ function StoreCasesTable({ title, rows, months, searchQuery, emptyText }: { titl
         <div className="overflow-hidden rounded-2xl border border-slate-200"><div className="max-h-[70vh] overflow-auto">
           <table className="min-w-full text-sm">
             <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
-              <tr><th className="sticky left-0 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700">Store</th>{monthColumns.map((m) => <th key={m} className="px-4 py-3 text-right font-semibold text-slate-700">{m}</th>)}<th className="px-4 py-3 text-right font-semibold text-slate-700">Total</th></tr>
+              <tr><th className="sticky left-0 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700">Store</th>{monthColumns.map((m) => <th key={m} className="px-4 py-3 text-right font-semibold text-slate-700">{m}</th>)}{showRunningAverage && <th className="px-4 py-3 text-right font-semibold text-slate-700">Running 3 Mo Avg</th>}<th className="px-4 py-3 text-right font-semibold text-slate-700">Total</th></tr>
             </thead>
-            <tbody>{storeRows.map((store) => <tr key={store.store} className="border-t border-slate-200 hover:bg-slate-50"><td className="sticky left-0 bg-white px-4 py-3 font-semibold text-slate-900">{store.store}</td>{monthColumns.map((m) => <td key={m} className="px-4 py-3 text-right text-slate-700">{store.months[m] || 0}</td>)}<td className="px-4 py-3 text-right font-bold text-slate-900">{store.total}</td></tr>)}</tbody>
+            <tbody>{storeRows.map((store) => <tr key={store.store} className="border-t border-slate-200 hover:bg-slate-50"><td className="sticky left-0 bg-white px-4 py-3 font-semibold text-slate-900">{store.store}</td>{monthColumns.map((m) => <td key={m} className="px-4 py-3 text-right text-slate-700">{store.months[m] || 0}</td>)}{showRunningAverage && <td className="px-4 py-3 text-right font-semibold text-slate-900">{runningAverages?.get(store.store) ?? 0}</td>}<td className="px-4 py-3 text-right font-bold text-slate-900">{store.total}</td></tr>)}</tbody>
           </table>
         </div></div>
       )}
@@ -850,6 +889,10 @@ export default function TonyDashboardView() {
   const velocityMonths = useMemo(() => selectedMonthsFromMode(velocityMode, velocityFrom, velocityTo), [velocityMode, velocityFrom, velocityTo]);
   const pulloutMonths = useMemo(() => selectedMonthsFromMode(pulloutMode, pulloutFrom, pulloutTo), [pulloutMode, pulloutFrom, pulloutTo]);
   const prioritySet = useMemo(() => new Set(priorityList.map(normalizeKey)), [priorityList]);
+  const runningAverageMonths = useMemo(() => buildPastNMonthsRange(3).map(normalizeMonthLabel), []);
+  const showPulloutRunningAverage = pulloutMode === "lastMonth";
+  const pulloutRunningAverages = useMemo(() => buildRunningAverageMaps(rows, runningAverageMonths), [rows, runningAverageMonths]);
+  const priorityRunningAverages = useMemo(() => buildRunningAverageMaps(rows, runningAverageMonths, prioritySet), [rows, runningAverageMonths, prioritySet]);
 
   const velocityRows = useMemo(() => rows.filter((r) => velocityMonths.includes(normalizeMonthLabel(r.month))), [rows, velocityMonths]);
   const pulloutRows = useMemo(() => rows.filter((r) => pulloutMonths.includes(normalizeMonthLabel(r.month))), [rows, pulloutMonths]);
@@ -1050,6 +1093,9 @@ export default function TonyDashboardView() {
                 table={pulloutTable}
                 searchQuery={pulloutSearch}
                 emptyText="No pull out rows found for the selected filters."
+                showRunningAverage={showPulloutRunningAverage}
+                locationRunningAverages={pulloutRunningAverages.locations}
+                storeRunningAverages={pulloutRunningAverages.stores}
               />
             ) : (
               <StoreCasesTable
@@ -1058,6 +1104,8 @@ export default function TonyDashboardView() {
                 months={pulloutMonths}
                 searchQuery={pulloutSearch}
                 emptyText="No store rows found for the selected filters."
+                showRunningAverage={showPulloutRunningAverage}
+                runningAverages={pulloutRunningAverages.stores}
               />
             )}
           </>
@@ -1070,6 +1118,8 @@ export default function TonyDashboardView() {
             months={pulloutMonths}
             searchQuery={pulloutSearch}
             emptyText="No priority pull out rows found for the selected filters."
+            showRunningAverage={showPulloutRunningAverage}
+            runningAverages={priorityRunningAverages.stores}
           />
         )}
       </div>
