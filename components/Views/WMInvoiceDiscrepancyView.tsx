@@ -22,6 +22,8 @@ type KsolveRow = {
   invoice_amt: number | null;
 };
 
+type ReconciliationStatus = "Submitted" | "Ongoing" | "Closed" | "Needs Review";
+
 type DiscrepancyRow = {
   month: string;
   invoiceDate: string;
@@ -35,6 +37,7 @@ type DiscrepancyRow = {
   percentage: number;
   discountTerms: "Yes" | "No" | "-";
   daysToPay: number | null;
+  status: ReconciliationStatus;
 };
 
 const PAGE_SIZE = 1000;
@@ -51,9 +54,7 @@ function formatPercent(value: number) {
 }
 
 function normalizeInvoice(value: string | number | null | undefined) {
-  const raw = String(value ?? "")
-    .trim()
-    .toUpperCase();
+  const raw = String(value ?? "").trim().toUpperCase();
   if (!raw) return "";
 
   return raw
@@ -65,9 +66,7 @@ function normalizeInvoice(value: string | number | null | undefined) {
 }
 
 function normalizeType(value: string) {
-  return String(value || "")
-    .trim()
-    .toUpperCase();
+  return String(value || "").trim().toUpperCase();
 }
 
 function isWmInvoiceType(value: string) {
@@ -106,7 +105,9 @@ function formatMonthFromDate(value: string | null | undefined) {
   const parsed = parseLocalDate(value);
   if (!parsed) return "";
 
-  return `${parsed.toLocaleString("en-US", { month: "long" })} ${parsed.getFullYear()}`;
+  return `${parsed.toLocaleString("en-US", {
+    month: "long",
+  })} ${parsed.getFullYear()}`;
 }
 
 function formatDisplayDate(value: string | null | undefined) {
@@ -174,6 +175,19 @@ function parseMonthOrder(value: string) {
   return year * 100 + monthIndex;
 }
 
+function statusClass(status: ReconciliationStatus) {
+  switch (status) {
+    case "Submitted":
+      return "border-blue-200 bg-blue-50 text-blue-700";
+    case "Ongoing":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    case "Closed":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    default:
+      return "border-red-200 bg-red-50 text-red-600";
+  }
+}
+
 async function fetchAllWmDatasetRows(): Promise<WMRow[]> {
   let allRows: WMRow[] = [];
   let from = 0;
@@ -210,9 +224,7 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveRow[]> {
   while (keepGoing) {
     const { data, error } = await supabase
       .from("invoices")
-      .select(
-        "month, check_date, check_number, invoice_number, invoice_amt, type",
-      )
+      .select("month, check_date, check_number, invoice_number, invoice_amt, type")
       .eq("type", "WM Invoice")
       .order("check_date", { ascending: false, nullsFirst: false })
       .order("invoice_number", { ascending: false, nullsFirst: false })
@@ -375,6 +387,7 @@ export default function WMInvoiceDiscrepancyView() {
             wm?.checkDate || ks?.checkDate || "",
             wm?.invoiceDate || "",
           ),
+          status: "Needs Review",
         };
       });
 
@@ -416,11 +429,11 @@ export default function WMInvoiceDiscrepancyView() {
         row.invoiceDate,
         row.checkDate,
         row.checkNo,
-        row.invoiceDate,
         row.invoice,
         row.discountTerms,
         row.daysToPay ?? "",
         row.type,
+        row.status,
       ]
         .join(" ")
         .toLowerCase();
@@ -445,6 +458,12 @@ export default function WMInvoiceDiscrepancyView() {
     );
   }, [filteredRows]);
 
+  const updateStatus = (invoice: string, status: ReconciliationStatus) => {
+    setRows((prev) =>
+      prev.map((row) => (row.invoice === invoice ? { ...row, status } : row)),
+    );
+  };
+
   const exportToExcel = () => {
     const exportRows = filteredRows.map((row) => ({
       Month: formatMonthShort(row.month),
@@ -459,6 +478,7 @@ export default function WMInvoiceDiscrepancyView() {
       "WM Amount": row.wmAmount,
       Discrepancy: row.discrepancy,
       Percentage: row.percentage,
+      Status: row.status,
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
@@ -506,7 +526,7 @@ export default function WMInvoiceDiscrepancyView() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search month, invoice date, check date, check #, invoice, type..."
+              placeholder="Search month, invoice date, check date, check #, invoice, type, status..."
               className="h-full min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white py-2 pl-10 pr-10 text-sm outline-none transition focus:border-slate-300"
             />
             {search && (
@@ -548,7 +568,7 @@ export default function WMInvoiceDiscrepancyView() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+      <div className="w-full overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
         {loading ? (
           <div className="p-6 text-sm text-slate-500">
             Loading discrepancy data...
@@ -558,8 +578,8 @@ export default function WMInvoiceDiscrepancyView() {
             No WM invoice discrepancy rows found.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-[1500px] text-sm">
+          <div className="w-full overflow-x-auto">
+            <table className="w-full min-w-[1500px] text-sm">
               <thead className="bg-slate-50">
                 <tr>
                   <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
@@ -598,6 +618,9 @@ export default function WMInvoiceDiscrepancyView() {
                   <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
                     Percentage
                   </th>
+                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
+                    Status
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -634,7 +657,9 @@ export default function WMInvoiceDiscrepancyView() {
                     <td className="whitespace-nowrap px-5 py-3 text-right font-medium text-slate-700">
                       {row.daysToPay ?? "-"}
                     </td>
-                    <td className="whitespace-nowrap px-5 py-3 text-slate-700">{row.type}</td>
+                    <td className="whitespace-nowrap px-5 py-3 text-slate-700">
+                      {row.type}
+                    </td>
                     <td className="whitespace-nowrap px-5 py-3 text-right text-slate-700">
                       {formatMoney(row.ksolveAmount)}
                     </td>
@@ -662,6 +687,25 @@ export default function WMInvoiceDiscrepancyView() {
                       }`}
                     >
                       {formatPercent(row.percentage)}
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3">
+                      <select
+                        value={row.status}
+                        onChange={(e) =>
+                          updateStatus(
+                            row.invoice,
+                            e.target.value as ReconciliationStatus,
+                          )
+                        }
+                        className={`rounded-xl border px-3 py-1.5 text-xs font-semibold outline-none ${statusClass(
+                          row.status,
+                        )}`}
+                      >
+                        <option value="Needs Review">Needs Review</option>
+                        <option value="Submitted">Submitted</option>
+                        <option value="Ongoing">Ongoing</option>
+                        <option value="Closed">Closed</option>
+                      </select>
                     </td>
                   </tr>
                 ))}
