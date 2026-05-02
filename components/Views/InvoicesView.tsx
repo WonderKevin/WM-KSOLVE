@@ -1955,7 +1955,7 @@ async function replaceDatasetRowsForInvoice(
     throw new Error(`No check date found in invoices for ${ni}. Upload the invoice Excel first.`);
   }
 
-  const finalType = normalizeType(it || categoryFallback || "WM Invoice");
+  const finalType = normalizeType(categoryFallback || it || "WM Invoice");
   console.log("[replaceDatasetRowsForInvoice] finalType normalized:", finalType);
 
   if (!detailRows.length) {
@@ -2009,6 +2009,7 @@ async function replaceDatasetRowsForInvoice(
 
 async function reprocessAllUploads(
   onProgress: (msg: string) => void,
+  deductionTypes: DeductionTypeRecord[],
   fromDate?: string,
   toDate?: string
 ): Promise<{ processed: number; failed: number; totalRows: number }> {
@@ -2038,9 +2039,38 @@ async function reprocessAllUploads(
       const inferredType = detectStoredFileType(u.file_name, u.file_type);
       const mimeType = inferredType === "excel" ? getExcelMimeType(u.file_name) : "application/pdf";
       const f = new File([fd], u.file_name || "upload", { type: mimeType });
+
+      // Re-read the document against the CURRENT Deduction Type Mapping.
+      // This lets Reprocess update old uploads when document_type -> deduction_type changes.
+      let effectiveCategory = String(u.category || "").trim();
+      let effectivePdfDate = String(u.pdf_date || "").trim();
+      try {
+        const meta = await extractDocumentMetadata(f, deductionTypes);
+        if (meta.category && meta.category !== "Unknown") effectiveCategory = meta.category;
+        if (meta.pdf_date && meta.pdf_date !== "Unknown") effectivePdfDate = meta.pdf_date;
+      } catch (metaErr) {
+        console.warn(`[reprocess] Metadata refresh failed for ${u.file_name}; using stored upload values.`, metaErr);
+      }
+
+      if (effectiveCategory && effectiveCategory !== u.category) {
+        const { error: updateUploadError } = await supabase
+          .from("uploads")
+          .update({ category: effectiveCategory, pdf_date: effectivePdfDate || u.pdf_date || null })
+          .eq("id", u.id);
+        if (updateUploadError) throw new Error(`Failed updating upload category: ${updateUploadError.message}`);
+      } else if (effectivePdfDate && effectivePdfDate !== u.pdf_date) {
+        const { error: updateUploadError } = await supabase
+          .from("uploads")
+          .update({ pdf_date: effectivePdfDate })
+          .eq("id", u.id);
+        if (updateUploadError) throw new Error(`Failed updating upload date: ${updateUploadError.message}`);
+      }
+
+      await syncInvoiceFromUpload(u.invoice, effectiveCategory || "");
+
       const inserted = await replaceDatasetRowsForInvoice(u.invoice, f, {
-        categoryFallback: u.category || "",
-        invoiceDate: u.pdf_date || "",
+        categoryFallback: effectiveCategory || "",
+        invoiceDate: effectivePdfDate || "",
       });
 
       totalRows += inserted;
@@ -2539,8 +2569,11 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
     setReprocessing(true);
     showToast("Reprocessing uploads...", "info");
     try {
+      const refreshedDeductionTypes = await fetchDeductionTypes();
+      setDeductionTypes(refreshedDeductionTypes);
       const { processed, failed, totalRows } = await reprocessAllUploads(
         (msg) => showToast(msg, "info"),
+        refreshedDeductionTypes,
         reprocessFrom || undefined,
         reprocessTo || undefined
       );
