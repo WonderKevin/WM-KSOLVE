@@ -17,6 +17,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
+
 import BrokerCommissionSummaryView from "@/components/Views/BrokerCommissionSummaryView";
 import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDataSetsView";
 import AccountingSummaryView from "@/components/Views/AccountingSummaryView";
@@ -27,6 +28,7 @@ import ProductListView from "@/components/Views/ProductListView";
 import LocationsView from "@/components/Views/LocationsView";
 import DeductionTypesView from "@/components/Views/DeductionTypesView";
 import UserAccountView from "@/components/Views/UserAccountView";
+import AutomationView from "@/components/Views/AutomationView";
 import KeHeVelocityView from "@/components/Views/KeHeVelocityView";
 import KeheDashboardView from "@/components/Views/KeheDashboardView";
 import TonyDashboardView from "@/components/Views/TonyDashboardView";
@@ -139,17 +141,6 @@ function SidebarItem({
   );
 }
 
-function PlaceholderView({ title }: { title: string }) {
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="text-lg font-semibold text-slate-900">{title}</div>
-      <p className="mt-2 text-sm text-slate-500">
-        This page is ready for the next build.
-      </p>
-    </div>
-  );
-}
-
 export default function WMKsolveApp() {
   const router = useRouter();
 
@@ -254,36 +245,62 @@ export default function WMKsolveApp() {
 
     if (canViewKeheDashboard) allowedKeys.push("dashboard-kehe");
     if (canViewTonyDashboard) allowedKeys.push("dashboard-tony");
-    if (permissions.can_view_broker_commission_summary) allowedKeys.push("broker-commission-summary");
-    if (permissions.can_view_broker_commission_data_sets) allowedKeys.push("broker-commission-data-sets");
+    if (permissions.can_view_broker_commission_summary)
+      allowedKeys.push("broker-commission-summary");
+    if (permissions.can_view_broker_commission_data_sets)
+      allowedKeys.push("broker-commission-data-sets");
     if (permissions.can_view_accounting_summary) {
       allowedKeys.push("accounting-summary");
       allowedKeys.push("accounting-wm-invoice-discrepancy");
     }
-    if (permissions.can_view_accounting_check_details) allowedKeys.push("accounting-check-details");
-    if (permissions.can_view_database_ksolve_invoices) allowedKeys.push("database-ksolve-invoices");
-    if (permissions.can_view_database_kehe_velocity) allowedKeys.push("database-kehe-velocity");
-    if ((permissions.can_view_database_tony_velocity ?? permissions.can_view_database_kehe_velocity)) allowedKeys.push("database-tony-velocity");
-    if (permissions.can_view_database_product_list) allowedKeys.push("database-product-list");
-    if (permissions.can_view_database_locations) allowedKeys.push("database-locations");
-    if (permissions.can_view_database_deduction_type) allowedKeys.push("database-deduction-type");
+    if (permissions.can_view_accounting_check_details)
+      allowedKeys.push("accounting-check-details");
+    if (permissions.can_view_database_ksolve_invoices)
+      allowedKeys.push("database-ksolve-invoices");
+    if (permissions.can_view_database_kehe_velocity)
+      allowedKeys.push("database-kehe-velocity");
+    if (
+      permissions.can_view_database_tony_velocity ??
+      permissions.can_view_database_kehe_velocity
+    )
+      allowedKeys.push("database-tony-velocity");
+    if (permissions.can_view_database_product_list)
+      allowedKeys.push("database-product-list");
+    if (permissions.can_view_database_locations)
+      allowedKeys.push("database-locations");
+    if (permissions.can_view_database_deduction_type)
+      allowedKeys.push("database-deduction-type");
     if (permissions.can_view_user_account) allowedKeys.push("admin-user-account");
+    if (permissions.can_view_admin) allowedKeys.push("admin-automation");
 
     if (activeKey && !allowedKeys.includes(activeKey)) setActiveKey("");
 
     setOpenGroups((prev) => ({
       ...prev,
       "broker-commission":
-        activeKey === "broker-commission-summary" || activeKey === "broker-commission-data-sets"
-          ? true : prev["broker-commission"],
+        activeKey === "broker-commission-summary" ||
+        activeKey === "broker-commission-data-sets"
+          ? true
+          : prev["broker-commission"],
       accounting:
-        activeKey === "accounting-summary" || activeKey === "accounting-check-details" || activeKey === "accounting-wm-invoice-discrepancy"
-          ? true : prev.accounting,
+        activeKey === "accounting-summary" ||
+        activeKey === "accounting-check-details" ||
+        activeKey === "accounting-wm-invoice-discrepancy"
+          ? true
+          : prev.accounting,
       database:
-        activeKey === "database-ksolve-invoices" || activeKey === "database-kehe-velocity" ||
-        activeKey === "database-tony-velocity" || activeKey === "database-product-list" || activeKey === "database-locations" || activeKey === "database-deduction-type"
-          ? true : prev.database,
-      admin: activeKey === "admin-user-account" ? true : prev.admin,
+        activeKey === "database-ksolve-invoices" ||
+        activeKey === "database-kehe-velocity" ||
+        activeKey === "database-tony-velocity" ||
+        activeKey === "database-product-list" ||
+        activeKey === "database-locations" ||
+        activeKey === "database-deduction-type"
+          ? true
+          : prev.database,
+      admin:
+        activeKey === "admin-user-account" || activeKey === "admin-automation"
+          ? true
+          : prev.admin,
     }));
   }, [permissions, activeKey]);
 
@@ -303,56 +320,121 @@ export default function WMKsolveApp() {
 
     const items: any[] = [];
 
-    const canViewKeheDashboard = permissions.can_view_dashboard_kehe ?? permissions.can_view_dashboard;
-    const canViewTonyDashboard = permissions.can_view_dashboard_tony ?? permissions.can_view_dashboard;
+    const canViewKeheDashboard =
+      permissions.can_view_dashboard_kehe ?? permissions.can_view_dashboard;
+    const canViewTonyDashboard =
+      permissions.can_view_dashboard_tony ?? permissions.can_view_dashboard;
 
     const dashboardChildren = [
-      canViewKeheDashboard ? { label: "Kehe Dashboard", key: "dashboard-kehe" } : null,
-      canViewTonyDashboard ? { label: "Tony's Dashboard", key: "dashboard-tony" } : null,
+      canViewKeheDashboard
+        ? { label: "Kehe Dashboard", key: "dashboard-kehe" }
+        : null,
+      canViewTonyDashboard
+        ? { label: "Tony's Dashboard", key: "dashboard-tony" }
+        : null,
     ].filter(Boolean);
 
     if (dashboardChildren.length) {
-      items.push({ label: "Dashboard", icon: LayoutDashboard, key: "dashboard", children: dashboardChildren });
+      items.push({
+        label: "Dashboard",
+        icon: LayoutDashboard,
+        key: "dashboard",
+        children: dashboardChildren,
+      });
     }
 
     const brokerChildren = [
-      permissions.can_view_broker_commission_summary ? { label: "Broker Commission Summary", key: "broker-commission-summary" } : null,
-      permissions.can_view_broker_commission_data_sets ? { label: "Data Sets", key: "broker-commission-data-sets" } : null,
+      permissions.can_view_broker_commission_summary
+        ? {
+            label: "Broker Commission Summary",
+            key: "broker-commission-summary",
+          }
+        : null,
+      permissions.can_view_broker_commission_data_sets
+        ? { label: "Data Sets", key: "broker-commission-data-sets" }
+        : null,
     ].filter(Boolean);
 
     if (brokerChildren.length) {
-      items.push({ label: "Broker Commission", icon: Receipt, key: "broker-commission", children: brokerChildren });
+      items.push({
+        label: "Broker Commission",
+        icon: Receipt,
+        key: "broker-commission",
+        children: brokerChildren,
+      });
     }
 
     const accountingChildren = [
-      permissions.can_view_accounting_summary ? { label: "Summary", key: "accounting-summary" } : null,
-      permissions.can_view_accounting_check_details ? { label: "Check Details", key: "accounting-check-details" } : null,
-      permissions.can_view_accounting_summary ? { label: "WM Invoice Discrepancy", key: "accounting-wm-invoice-discrepancy" } : null,
+      permissions.can_view_accounting_summary
+        ? { label: "Summary", key: "accounting-summary" }
+        : null,
+      permissions.can_view_accounting_check_details
+        ? { label: "Check Details", key: "accounting-check-details" }
+        : null,
+      permissions.can_view_accounting_summary
+        ? {
+            label: "WM Invoice Discrepancy",
+            key: "accounting-wm-invoice-discrepancy",
+          }
+        : null,
     ].filter(Boolean);
 
     if (accountingChildren.length) {
-      items.push({ label: "Accounting", icon: BadgeDollarSign, key: "accounting", children: accountingChildren });
+      items.push({
+        label: "Accounting",
+        icon: BadgeDollarSign,
+        key: "accounting",
+        children: accountingChildren,
+      });
     }
 
     const databaseChildren = [
-      permissions.can_view_database_ksolve_invoices ? { label: "Ksolve Invoices", key: "database-ksolve-invoices" } : null,
-      permissions.can_view_database_kehe_velocity ? { label: "KeHe Velocity", key: "database-kehe-velocity" } : null,
-      (permissions.can_view_database_tony_velocity ?? permissions.can_view_database_kehe_velocity) ? { label: "Tony's Velocity", key: "database-tony-velocity" } : null,
-      permissions.can_view_database_product_list ? { label: "Product List", key: "database-product-list" } : null,
-      permissions.can_view_database_locations ? { label: "Locations", key: "database-locations" } : null,
-      permissions.can_view_database_deduction_type ? { label: "Deduction Type", key: "database-deduction-type" } : null,
+      permissions.can_view_database_ksolve_invoices
+        ? { label: "Ksolve Invoices", key: "database-ksolve-invoices" }
+        : null,
+      permissions.can_view_database_kehe_velocity
+        ? { label: "KeHe Velocity", key: "database-kehe-velocity" }
+        : null,
+      permissions.can_view_database_tony_velocity ??
+      permissions.can_view_database_kehe_velocity
+        ? { label: "Tony's Velocity", key: "database-tony-velocity" }
+        : null,
+      permissions.can_view_database_product_list
+        ? { label: "Product List", key: "database-product-list" }
+        : null,
+      permissions.can_view_database_locations
+        ? { label: "Locations", key: "database-locations" }
+        : null,
+      permissions.can_view_database_deduction_type
+        ? { label: "Deduction Type", key: "database-deduction-type" }
+        : null,
     ].filter(Boolean);
 
     if (databaseChildren.length) {
-      items.push({ label: "Database", icon: Database, key: "database", children: databaseChildren });
+      items.push({
+        label: "Database",
+        icon: Database,
+        key: "database",
+        children: databaseChildren,
+      });
     }
 
     const adminChildren = [
-      permissions.can_view_user_account ? { label: "User Account", key: "admin-user-account" } : null,
+      permissions.can_view_user_account
+        ? { label: "User Account", key: "admin-user-account" }
+        : null,
+      permissions.can_view_admin
+        ? { label: "Automation", key: "admin-automation" }
+        : null,
     ].filter(Boolean);
 
     if (permissions.can_view_admin && adminChildren.length) {
-      items.push({ label: "Admin", icon: Shield, key: "admin", children: adminChildren });
+      items.push({
+        label: "Admin",
+        icon: Shield,
+        key: "admin",
+        children: adminChildren,
+      });
     }
 
     return items;
@@ -374,6 +456,7 @@ export default function WMKsolveApp() {
     "database-locations": "Locations",
     "database-deduction-type": "Deduction Type",
     "admin-user-account": "User Account",
+    "admin-automation": "Automation",
   };
 
   const isKeheDashboard = activeKey === "dashboard-kehe";
@@ -415,6 +498,8 @@ export default function WMKsolveApp() {
         return <DeductionTypesView />;
       case "admin-user-account":
         return <UserAccountView />;
+      case "admin-automation":
+        return <AutomationView />;
       default:
         return <HomeView />;
     }
@@ -496,7 +581,9 @@ export default function WMKsolveApp() {
                     <Button
                       type="button"
                       className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-                      onClick={() => setDocumentUploadSignal((prev) => prev + 1)}
+                      onClick={() =>
+                        setDocumentUploadSignal((prev) => prev + 1)
+                      }
                     >
                       <Upload className="mr-2 h-4 w-4" />
                       Upload Files
