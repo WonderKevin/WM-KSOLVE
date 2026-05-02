@@ -539,11 +539,11 @@ export default function WMInvoiceDiscrepancyView() {
             type="button"
             onClick={exportToExcel}
             disabled={filteredRows.length === 0}
-            className="flex min-h-[72px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex min-h-[72px] w-[72px] items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             title="Export to Excel"
+            aria-label="Export to Excel"
           >
-            <FileSpreadsheet className="h-4 w-4" />
-            Export
+            <FileSpreadsheet className="h-5 w-5" />
           </button>
         </div>
       </div>
@@ -559,43 +559,43 @@ export default function WMInvoiceDiscrepancyView() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <table className="min-w-[1500px] text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
                     Month
                   </th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
                     Check Date
                   </th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
                     Check #
                   </th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
                     Invoice Date
                   </th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
                     Invoice
                   </th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-center font-semibold text-slate-700">
                     2% 10 / NET 30
                   </th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
                     # of Days
                   </th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
                     Type
                   </th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
                     Ksolve Amount
                   </th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
                     WM Amount
                   </th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
                     Discrepancy
                   </th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                  <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
                     Percentage
                   </th>
                 </tr>
@@ -603,22 +603,22 @@ export default function WMInvoiceDiscrepancyView() {
               <tbody>
                 {filteredRows.map((row) => (
                   <tr key={row.invoice} className="border-t border-slate-100">
-                    <td className="px-4 py-3 text-slate-700">
+                    <td className="whitespace-nowrap px-5 py-3 text-slate-700">
                       {formatMonthShort(row.month)}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">
+                    <td className="whitespace-nowrap px-5 py-3 text-slate-700">
                       {row.checkDate || "-"}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">
+                    <td className="whitespace-nowrap px-5 py-3 text-slate-700">
                       {row.checkNo || "-"}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">
+                    <td className="whitespace-nowrap px-5 py-3 text-slate-700">
                       {row.invoiceDate || "-"}
                     </td>
-                    <td className="px-4 py-3 font-medium text-slate-900">
+                    <td className="whitespace-nowrap px-5 py-3 font-medium text-slate-900">
                       {row.invoice}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="whitespace-nowrap px-5 py-3 text-center">
                       <span
                         className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
                           row.discountTerms === "Yes"
@@ -631,18 +631,18 @@ export default function WMInvoiceDiscrepancyView() {
                         {row.discountTerms}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right font-medium text-slate-700">
+                    <td className="whitespace-nowrap px-5 py-3 text-right font-medium text-slate-700">
                       {row.daysToPay ?? "-"}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">{row.type}</td>
-                    <td className="px-4 py-3 text-right text-slate-700">
+                    <td className="whitespace-nowrap px-5 py-3 text-slate-700">{row.type}</td>
+                    <td className="whitespace-nowrap px-5 py-3 text-right text-slate-700">
                       {formatMoney(row.ksolveAmount)}
                     </td>
-                    <td className="px-4 py-3 text-right text-slate-700">
+                    <td className="whitespace-nowrap px-5 py-3 text-right text-slate-700">
                       {formatMoney(row.wmAmount)}
                     </td>
                     <td
-                      className={`px-4 py-3 text-right font-medium ${
+                      className={`whitespace-nowrap px-5 py-3 text-right font-medium ${
                         row.discrepancy === 0
                           ? "text-slate-900"
                           : row.discrepancy > 0
@@ -653,7 +653,7 @@ export default function WMInvoiceDiscrepancyView() {
                       {formatMoney(row.discrepancy)}
                     </td>
                     <td
-                      className={`px-4 py-3 text-right font-medium ${
+                      className={`whitespace-nowrap px-5 py-3 text-right font-medium ${
                         row.discrepancy === 0
                           ? "text-slate-900"
                           : row.discrepancy > 0
