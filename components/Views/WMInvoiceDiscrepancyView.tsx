@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Search, X } from "lucide-react";
+import { FileSpreadsheet, Search, X } from "lucide-react";
+import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
 
 type WMRow = {
@@ -33,6 +34,7 @@ type DiscrepancyRow = {
   discrepancy: number;
   percentage: number;
   discountTerms: "Yes" | "No" | "-";
+  daysToPay: number | null;
 };
 
 const PAGE_SIZE = 1000;
@@ -49,7 +51,9 @@ function formatPercent(value: number) {
 }
 
 function normalizeInvoice(value: string | number | null | undefined) {
-  const raw = String(value ?? "").trim().toUpperCase();
+  const raw = String(value ?? "")
+    .trim()
+    .toUpperCase();
   if (!raw) return "";
 
   return raw
@@ -61,7 +65,9 @@ function normalizeInvoice(value: string | number | null | undefined) {
 }
 
 function normalizeType(value: string) {
-  return String(value || "").trim().toUpperCase();
+  return String(value || "")
+    .trim()
+    .toUpperCase();
 }
 
 function isWmInvoiceType(value: string) {
@@ -79,35 +85,7 @@ function formatMonthShort(value: string): string {
   return value;
 }
 
-function formatMonthFromDate(value: string) {
-  if (!value) return "";
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "";
-
-  return parsed.toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
-}
-
-function formatDisplayDate(value: string | null | undefined) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-
-  const parsed = new Date(raw);
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-  }
-
-  return raw;
-}
-
-function parseDateForTerms(value: string | null | undefined) {
+function parseLocalDate(value: string | null | undefined) {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
 
@@ -121,21 +99,49 @@ function parseDateForTerms(value: string | null | undefined) {
     return new Date(Number(mdy[3]), Number(mdy[1]) - 1, Number(mdy[2]));
   }
 
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  return null;
 }
 
-function getDiscountTermsStatus(checkDate: string, invoiceDate: string): "Yes" | "No" | "-" {
-  const check = parseDateForTerms(checkDate);
-  const invoice = parseDateForTerms(invoiceDate);
+function formatMonthFromDate(value: string | null | undefined) {
+  const parsed = parseLocalDate(value);
+  if (!parsed) return "";
 
-  if (!check || !invoice) return "-";
+  return `${parsed.toLocaleString("en-US", { month: "long" })} ${parsed.getFullYear()}`;
+}
 
-  const deadline = new Date(invoice);
-  deadline.setDate(deadline.getDate() + 10);
+function formatDisplayDate(value: string | null | undefined) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
 
-  return check.getTime() <= deadline.getTime() ? "Yes" : "No";
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[2]}/${iso[3]}/${iso[1]}`;
+
+  const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy)
+    return `${mdy[1].padStart(2, "0")}/${mdy[2].padStart(2, "0")}/${mdy[3]}`;
+
+  return raw;
+}
+
+function getDaysToPay(
+  checkDate: string | null | undefined,
+  invoiceDate: string | null | undefined,
+) {
+  const check = parseLocalDate(checkDate);
+  const invoice = parseLocalDate(invoiceDate);
+  if (!check || !invoice) return null;
+
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.round((check.getTime() - invoice.getTime()) / msPerDay);
+}
+
+function getDiscountTermsStatus(
+  checkDate: string,
+  invoiceDate: string,
+): "Yes" | "No" | "-" {
+  const daysToPay = getDaysToPay(checkDate, invoiceDate);
+  if (daysToPay === null) return "-";
+  return daysToPay <= 10 ? "Yes" : "No";
 }
 
 function parseMonthOrder(value: string) {
@@ -204,7 +210,9 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveRow[]> {
   while (keepGoing) {
     const { data, error } = await supabase
       .from("invoices")
-      .select("month, check_date, check_number, invoice_number, invoice_amt, type")
+      .select(
+        "month, check_date, check_number, invoice_number, invoice_amt, type",
+      )
       .eq("type", "WM Invoice")
       .order("check_date", { ascending: false, nullsFirst: false })
       .order("invoice_number", { ascending: false, nullsFirst: false })
@@ -262,7 +270,7 @@ export default function WMInvoiceDiscrepancyView() {
       }
 
       const wmRows = ((wmData ?? []) as WMRow[]).filter((row) =>
-        isWmInvoiceType(row.type ?? "")
+        isWmInvoiceType(row.type ?? ""),
       );
 
       const ksolveRows = (ksolveData ?? []) as KsolveRow[];
@@ -336,7 +344,7 @@ export default function WMInvoiceDiscrepancyView() {
       }
 
       const allInvoices = Array.from(
-        new Set([...wmByInvoice.keys(), ...ksolveByInvoice.keys()])
+        new Set([...wmByInvoice.keys(), ...ksolveByInvoice.keys()]),
       );
 
       const merged: DiscrepancyRow[] = allInvoices.map((invoice) => {
@@ -359,13 +367,20 @@ export default function WMInvoiceDiscrepancyView() {
           wmAmount,
           discrepancy,
           percentage,
-          discountTerms: getDiscountTermsStatus(wm?.checkDate || ks?.checkDate || "", wm?.invoiceDate || ""),
+          discountTerms: getDiscountTermsStatus(
+            wm?.checkDate || ks?.checkDate || "",
+            wm?.invoiceDate || "",
+          ),
+          daysToPay: getDaysToPay(
+            wm?.checkDate || ks?.checkDate || "",
+            wm?.invoiceDate || "",
+          ),
         };
       });
 
       merged.sort((a, b) => {
-        const aTime = a.checkDate ? new Date(a.checkDate).getTime() : 0;
-        const bTime = b.checkDate ? new Date(b.checkDate).getTime() : 0;
+        const aTime = parseLocalDate(a.checkDate)?.getTime() ?? 0;
+        const bTime = parseLocalDate(b.checkDate)?.getTime() ?? 0;
         return bTime - aTime;
       });
 
@@ -380,7 +395,7 @@ export default function WMInvoiceDiscrepancyView() {
     return [
       "All Months",
       ...Array.from(new Set(rows.map((r) => r.month).filter(Boolean))).sort(
-        (a, b) => parseMonthOrder(b) - parseMonthOrder(a)
+        (a, b) => parseMonthOrder(b) - parseMonthOrder(a),
       ),
     ];
   }, [rows]);
@@ -404,6 +419,7 @@ export default function WMInvoiceDiscrepancyView() {
         row.invoiceDate,
         row.invoice,
         row.discountTerms,
+        row.daysToPay ?? "",
         row.type,
       ]
         .join(" ")
@@ -425,16 +441,36 @@ export default function WMInvoiceDiscrepancyView() {
         ksolveAmount: 0,
         wmAmount: 0,
         discrepancy: 0,
-      }
+      },
     );
   }, [filteredRows]);
 
+  const exportToExcel = () => {
+    const exportRows = filteredRows.map((row) => ({
+      Month: formatMonthShort(row.month),
+      "Check Date": row.checkDate,
+      "Check #": row.checkNo,
+      "Invoice Date": row.invoiceDate,
+      Invoice: row.invoice,
+      "2% 10 / NET 30": row.discountTerms,
+      "# of Days": row.daysToPay ?? "",
+      Type: row.type,
+      "Ksolve Amount": row.ksolveAmount,
+      "WM Amount": row.wmAmount,
+      Discrepancy: row.discrepancy,
+      Percentage: row.percentage,
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "WM Invoice Discrepancy");
+    XLSX.writeFile(workbook, "wm-invoice-discrepancy.xlsx");
+  };
+
   return (
     <div className="space-y-4">
-      
-
       <div className="sticky top-[116px] z-20 rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr_1fr_1.8fr_220px]">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr_1fr_1.8fr_220px_auto]">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-sm text-slate-500">Ksolve Amount</div>
             <div className="mt-1 text-xl font-semibold text-slate-900">
@@ -498,6 +534,17 @@ export default function WMInvoiceDiscrepancyView() {
               ))}
             </select>
           </div>
+
+          <button
+            type="button"
+            onClick={exportToExcel}
+            disabled={filteredRows.length === 0}
+            className="flex min-h-[72px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Export to Excel"
+          >
+            <FileSpreadsheet className="h-4 w-4" />
+            Export
+          </button>
         </div>
       </div>
 
@@ -515,17 +562,42 @@ export default function WMInvoiceDiscrepancyView() {
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Month</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Check Date</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Check #</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Invoice Date</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Invoice</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">2% 10 / NET 30</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Type</th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-700">Ksolve Amount</th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-700">WM Amount</th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-700">Discrepancy</th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-700">Percentage</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                    Month
+                  </th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                    Check Date
+                  </th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                    Check #
+                  </th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                    Invoice Date
+                  </th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                    Invoice
+                  </th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                    2% 10 / NET 30
+                  </th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                    # of Days
+                  </th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                    Type
+                  </th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                    Ksolve Amount
+                  </th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                    WM Amount
+                  </th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                    Discrepancy
+                  </th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                    Percentage
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -534,10 +606,18 @@ export default function WMInvoiceDiscrepancyView() {
                     <td className="px-4 py-3 text-slate-700">
                       {formatMonthShort(row.month)}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">{row.checkDate || "-"}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.checkNo || "-"}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.invoiceDate || "-"}</td>
-                    <td className="px-4 py-3 font-medium text-slate-900">{row.invoice}</td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {row.checkDate || "-"}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {row.checkNo || "-"}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {row.invoiceDate || "-"}
+                    </td>
+                    <td className="px-4 py-3 font-medium text-slate-900">
+                      {row.invoice}
+                    </td>
                     <td className="px-4 py-3">
                       <span
                         className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
@@ -550,6 +630,9 @@ export default function WMInvoiceDiscrepancyView() {
                       >
                         {row.discountTerms}
                       </span>
+                    </td>
+                    <td className="px-4 py-3 text-right font-medium text-slate-700">
+                      {row.daysToPay ?? "-"}
                     </td>
                     <td className="px-4 py-3 text-slate-700">{row.type}</td>
                     <td className="px-4 py-3 text-right text-slate-700">
