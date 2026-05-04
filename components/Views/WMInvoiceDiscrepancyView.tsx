@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { FileSpreadsheet, Search, X } from "lucide-react";
+import { FileSpreadsheet, MessageSquare, Search, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
 
@@ -22,7 +22,7 @@ type KsolveRow = {
   invoice_amt: number | null;
 };
 
-type ReconciliationStatus = "Submitted" | "Ongoing" | "Closed" | "Needs Review";
+type ReconciliationStatus = "Needs Review" | "Submitted" | "Resolved" | "Rejected";
 
 type DiscrepancyRow = {
   month: string;
@@ -38,9 +38,16 @@ type DiscrepancyRow = {
   discountTerms: "Yes" | "No" | "-";
   daysToPay: number | null;
   status: ReconciliationStatus;
+  statusNote: string;
 };
 
 const PAGE_SIZE = 1000;
+const STATUS_OPTIONS: ReconciliationStatus[] = [
+  "Needs Review",
+  "Submitted",
+  "Resolved",
+  "Rejected",
+];
 
 function formatMoney(value: number) {
   return value.toLocaleString("en-US", {
@@ -89,14 +96,10 @@ function parseLocalDate(value: string | null | undefined) {
   if (!raw) return null;
 
   const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) {
-    return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
-  }
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
 
   const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (mdy) {
-    return new Date(Number(mdy[3]), Number(mdy[1]) - 1, Number(mdy[2]));
-  }
+  if (mdy) return new Date(Number(mdy[3]), Number(mdy[1]) - 1, Number(mdy[2]));
 
   return null;
 }
@@ -105,9 +108,7 @@ function formatMonthFromDate(value: string | null | undefined) {
   const parsed = parseLocalDate(value);
   if (!parsed) return "";
 
-  return `${parsed.toLocaleString("en-US", {
-    month: "long",
-  })} ${parsed.getFullYear()}`;
+  return `${parsed.toLocaleString("en-US", { month: "long" })} ${parsed.getFullYear()}`;
 }
 
 function formatDisplayDate(value: string | null | undefined) {
@@ -118,16 +119,12 @@ function formatDisplayDate(value: string | null | undefined) {
   if (iso) return `${iso[2]}/${iso[3]}/${iso[1]}`;
 
   const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (mdy)
-    return `${mdy[1].padStart(2, "0")}/${mdy[2].padStart(2, "0")}/${mdy[3]}`;
+  if (mdy) return `${mdy[1].padStart(2, "0")}/${mdy[2].padStart(2, "0")}/${mdy[3]}`;
 
   return raw;
 }
 
-function getDaysToPay(
-  checkDate: string | null | undefined,
-  invoiceDate: string | null | undefined,
-) {
+function getDaysToPay(checkDate: string | null | undefined, invoiceDate: string | null | undefined) {
   const check = parseLocalDate(checkDate);
   const invoice = parseLocalDate(invoiceDate);
   if (!check || !invoice) return null;
@@ -136,10 +133,7 @@ function getDaysToPay(
   return Math.round((check.getTime() - invoice.getTime()) / msPerDay);
 }
 
-function getDiscountTermsStatus(
-  checkDate: string,
-  invoiceDate: string,
-): "Yes" | "No" | "-" {
+function getDiscountTermsStatus(checkDate: string, invoiceDate: string): "Yes" | "No" | "-" {
   const daysToPay = getDaysToPay(checkDate, invoiceDate);
   if (daysToPay === null) return "-";
   return daysToPay <= 10 ? "Yes" : "No";
@@ -165,12 +159,10 @@ function parseMonthOrder(value: string) {
   const match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
   if (!match) return -1;
 
-  const monthName = match[1].toLowerCase();
-  const yearRaw = match[2];
-  const monthIndex = monthMap[monthName];
-
+  const monthIndex = monthMap[match[1].toLowerCase()];
   if (monthIndex === undefined) return -1;
 
+  const yearRaw = match[2];
   const year = yearRaw.length === 2 ? Number(`20${yearRaw}`) : Number(yearRaw);
   return year * 100 + monthIndex;
 }
@@ -179,12 +171,12 @@ function statusClass(status: ReconciliationStatus) {
   switch (status) {
     case "Submitted":
       return "border-blue-200 bg-blue-50 text-blue-700";
-    case "Ongoing":
-      return "border-amber-200 bg-amber-50 text-amber-700";
-    case "Closed":
+    case "Resolved":
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    default:
+    case "Rejected":
       return "border-red-200 bg-red-50 text-red-600";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
   }
 }
 
@@ -206,11 +198,8 @@ async function fetchAllWmDatasetRows(): Promise<WMRow[]> {
     const batch = (data ?? []) as WMRow[];
     allRows = allRows.concat(batch);
 
-    if (batch.length < PAGE_SIZE) {
-      keepGoing = false;
-    } else {
-      from += PAGE_SIZE;
-    }
+    if (batch.length < PAGE_SIZE) keepGoing = false;
+    else from += PAGE_SIZE;
   }
 
   return allRows;
@@ -235,11 +224,8 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveRow[]> {
     const batch = (data ?? []) as KsolveRow[];
     allRows = allRows.concat(batch);
 
-    if (batch.length < PAGE_SIZE) {
-      keepGoing = false;
-    } else {
-      from += PAGE_SIZE;
-    }
+    if (batch.length < PAGE_SIZE) keepGoing = false;
+    else from += PAGE_SIZE;
   }
 
   return allRows;
@@ -250,42 +236,30 @@ export default function WMInvoiceDiscrepancyView() {
   const [rows, setRows] = useState<DiscrepancyRow[]>([]);
   const [search, setSearch] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("All Months");
+  const [selectedStatus, setSelectedStatus] = useState("All Statuses");
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
 
       let wmData: WMRow[] = [];
-      let wmError: any = null;
+      let ksolveData: KsolveRow[] = [];
 
       try {
         wmData = await fetchAllWmDatasetRows();
       } catch (error) {
-        wmError = error;
+        console.error("Failed to load WM dataset rows:", error);
       }
-
-      if (wmError) {
-        console.error("Failed to load WM dataset rows:", wmError);
-      }
-
-      let ksolveData: KsolveRow[] = [];
-      let ksolveError: any = null;
 
       try {
         ksolveData = await fetchAllKsolveInvoiceRows();
       } catch (error) {
-        ksolveError = error;
-      }
-
-      if (ksolveError) {
-        console.error("Failed to load Ksolve invoice rows:", ksolveError);
+        console.error("Failed to load Ksolve invoice rows:", error);
       }
 
       const wmRows = ((wmData ?? []) as WMRow[]).filter((row) =>
         isWmInvoiceType(row.type ?? ""),
       );
-
-      const ksolveRows = (ksolveData ?? []) as KsolveRow[];
 
       const wmByInvoice = new Map<
         string,
@@ -333,7 +307,7 @@ export default function WMInvoiceDiscrepancyView() {
         }
       >();
 
-      for (const row of ksolveRows) {
+      for (const row of ksolveData) {
         const invoice = normalizeInvoice(row.invoice_number);
         if (!invoice) continue;
 
@@ -388,6 +362,7 @@ export default function WMInvoiceDiscrepancyView() {
             wm?.invoiceDate || "",
           ),
           status: "Needs Review",
+          statusNote: "",
         };
       });
 
@@ -420,8 +395,10 @@ export default function WMInvoiceDiscrepancyView() {
       const monthMatch =
         selectedMonth === "All Months" || row.month === selectedMonth;
 
-      if (!monthMatch) return false;
+      const statusMatch =
+        selectedStatus === "All Statuses" || row.status === selectedStatus;
 
+      if (!monthMatch || !statusMatch) return false;
       if (!q) return true;
 
       const haystack = [
@@ -434,13 +411,14 @@ export default function WMInvoiceDiscrepancyView() {
         row.daysToPay ?? "",
         row.type,
         row.status,
+        row.statusNote,
       ]
         .join(" ")
         .toLowerCase();
 
       return haystack.includes(q);
     });
-  }, [rows, search, selectedMonth]);
+  }, [rows, search, selectedMonth, selectedStatus]);
 
   const totals = useMemo(() => {
     return filteredRows.reduce(
@@ -450,17 +428,46 @@ export default function WMInvoiceDiscrepancyView() {
         acc.discrepancy += row.discrepancy;
         return acc;
       },
-      {
-        ksolveAmount: 0,
-        wmAmount: 0,
-        discrepancy: 0,
-      },
+      { ksolveAmount: 0, wmAmount: 0, discrepancy: 0 },
     );
   }, [filteredRows]);
 
   const updateStatus = (invoice: string, status: ReconciliationStatus) => {
     setRows((prev) =>
-      prev.map((row) => (row.invoice === invoice ? { ...row, status } : row)),
+      prev.map((row) => {
+        if (row.invoice !== invoice) return row;
+
+        if (status === "Rejected") {
+          const note = window.prompt(
+            "Add a rejection note for this discrepancy:",
+            row.statusNote || "",
+          );
+
+          return {
+            ...row,
+            status,
+            statusNote: note === null ? row.statusNote : note.trim(),
+          };
+        }
+
+        return { ...row, status };
+      }),
+    );
+  };
+
+  const updateRejectedNote = (invoice: string) => {
+    const current = rows.find((row) => row.invoice === invoice);
+    const note = window.prompt(
+      "Add or update rejection note:",
+      current?.statusNote || "",
+    );
+
+    if (note === null) return;
+
+    setRows((prev) =>
+      prev.map((row) =>
+        row.invoice === invoice ? { ...row, statusNote: note.trim() } : row,
+      ),
     );
   };
 
@@ -479,6 +486,7 @@ export default function WMInvoiceDiscrepancyView() {
       Discrepancy: row.discrepancy,
       Percentage: row.percentage,
       Status: row.status,
+      "Status Note": row.statusNote,
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
@@ -490,7 +498,7 @@ export default function WMInvoiceDiscrepancyView() {
   return (
     <div className="space-y-4">
       <div className="sticky top-[116px] z-20 rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr_1fr_1.8fr_220px_auto]">
+        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[1fr_1fr_1fr_1.8fr_220px_220px_auto]">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-sm text-slate-500">Ksolve Amount</div>
             <div className="mt-1 text-xl font-semibold text-slate-900">
@@ -541,19 +549,30 @@ export default function WMInvoiceDiscrepancyView() {
             )}
           </div>
 
-          <div className="flex items-stretch">
-            <select
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
-            >
-              {monthOptions.map((month) => (
-                <option key={month} value={month}>
-                  {month === "All Months" ? month : formatMonthShort(month)}
-                </option>
-              ))}
-            </select>
-          </div>
+          <select
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+          >
+            {monthOptions.map((month) => (
+              <option key={month} value={month}>
+                {month === "All Months" ? month : formatMonthShort(month)}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={selectedStatus}
+            onChange={(e) => setSelectedStatus(e.target.value)}
+            className="min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+          >
+            <option value="All Statuses">All Statuses</option>
+            {STATUS_OPTIONS.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
 
           <button
             type="button"
@@ -570,57 +589,44 @@ export default function WMInvoiceDiscrepancyView() {
 
       <div className="w-full overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
         {loading ? (
-          <div className="p-6 text-sm text-slate-500">
-            Loading discrepancy data...
-          </div>
+          <div className="p-6 text-sm text-slate-500">Loading discrepancy data...</div>
         ) : filteredRows.length === 0 ? (
           <div className="p-6 text-sm text-slate-500">
             No WM invoice discrepancy rows found.
           </div>
         ) : (
           <div className="w-full overflow-x-auto">
-            <table className="w-full min-w-[1500px] text-sm">
+            <table className="w-full min-w-[1650px] text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
-                    Month
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
-                    Check Date
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
-                    Check #
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
-                    Invoice Date
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
-                    Invoice
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-center font-semibold text-slate-700">
-                    2% 10 / NET 30
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
-                    # of Days
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
-                    Type
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
-                    Ksolve Amount
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
-                    WM Amount
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
-                    Discrepancy
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-right font-semibold text-slate-700">
-                    Percentage
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3 text-left font-semibold text-slate-700">
-                    Status
-                  </th>
+                  {[
+                    "Month",
+                    "Check Date",
+                    "Check #",
+                    "Invoice Date",
+                    "Invoice",
+                    "2% 10 / NET 30",
+                    "# of Days",
+                    "Type",
+                    "Ksolve Amount",
+                    "WM Amount",
+                    "Discrepancy",
+                    "Percentage",
+                    "Status",
+                  ].map((header) => (
+                    <th
+                      key={header}
+                      className={`whitespace-nowrap px-5 py-3 font-semibold text-slate-700 ${
+                        ["# of Days", "Ksolve Amount", "WM Amount", "Discrepancy", "Percentage"].includes(header)
+                          ? "text-right"
+                          : header === "2% 10 / NET 30"
+                            ? "text-center"
+                            : "text-left"
+                      }`}
+                    >
+                      {header}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -689,23 +695,44 @@ export default function WMInvoiceDiscrepancyView() {
                       {formatPercent(row.percentage)}
                     </td>
                     <td className="whitespace-nowrap px-5 py-3">
-                      <select
-                        value={row.status}
-                        onChange={(e) =>
-                          updateStatus(
-                            row.invoice,
-                            e.target.value as ReconciliationStatus,
-                          )
-                        }
-                        className={`rounded-xl border px-3 py-1.5 text-xs font-semibold outline-none ${statusClass(
-                          row.status,
-                        )}`}
-                      >
-                        <option value="Needs Review">Needs Review</option>
-                        <option value="Submitted">Submitted</option>
-                        <option value="Ongoing">Ongoing</option>
-                        <option value="Closed">Closed</option>
-                      </select>
+                      <div className="group flex items-center gap-2">
+                        <select
+                          value={row.status}
+                          onChange={(e) =>
+                            updateStatus(
+                              row.invoice,
+                              e.target.value as ReconciliationStatus,
+                            )
+                          }
+                          className={`rounded-xl border px-3 py-1.5 text-xs font-semibold outline-none ${statusClass(
+                            row.status,
+                          )}`}
+                        >
+                          {STATUS_OPTIONS.map((status) => (
+                            <option key={status} value={status}>
+                              {status}
+                            </option>
+                          ))}
+                        </select>
+
+                        {row.status === "Rejected" && (
+                          <button
+                            type="button"
+                            onClick={() => updateRejectedNote(row.invoice)}
+                            title={row.statusNote || "Add rejection note"}
+                            className="inline-flex items-center gap-1 rounded-xl border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-600 opacity-70 transition hover:bg-red-50 hover:opacity-100 group-hover:opacity-100"
+                          >
+                            <MessageSquare className="h-3.5 w-3.5" />
+                            Note
+                          </button>
+                        )}
+                      </div>
+
+                      {row.status === "Rejected" && row.statusNote && (
+                        <div className="mt-1 max-w-[260px] truncate text-xs text-slate-500">
+                          {row.statusNote}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
