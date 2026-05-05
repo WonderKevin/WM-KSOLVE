@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { Upload, Search, X } from "lucide-react";
+import { Upload, Search, X, Plus } from "lucide-react";
 
 import { supabase } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -32,10 +32,13 @@ type MissingLocationEntry = {
   retailer_area: string;
   customer: string;
   retailer: string;
+  isAddingRetailer?: boolean;
+  newRetailer?: string;
 };
 
 const SHIP_DIVISOR = 36.03;
-const RETAILER_OPTIONS = ["INFRA & Others", "Kroger", "Fresh Thyme"];
+const DEFAULT_RETAILER_OPTIONS = ["INFRA & Others", "Kroger", "Fresh Thyme", "HEB"];
+const ADD_NEW_RETAILER_VALUE = "__ADD_NEW_RETAILER__";
 
 function formatMonthLabel(monthNumber: number, year: number) {
   const date = new Date(year, monthNumber - 1, 1);
@@ -137,6 +140,32 @@ async function fetchAllLocations(): Promise<LocationRow[]> {
   }
 
   return allRows;
+}
+
+function getRetailerOptionsFromLocations(locations: LocationRow[]) {
+  const values = new Set<string>();
+
+  for (const option of DEFAULT_RETAILER_OPTIONS) {
+    if (option.trim()) values.add(option.trim());
+  }
+
+  for (const row of locations) {
+    const retailer = String(
+      row.retailer ||
+        row.chain ||
+        row.banner ||
+        row.parent ||
+        row.account_name ||
+        ""
+    )
+      .replace(/ /g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (retailer) values.add(retailer);
+  }
+
+  return Array.from(values).sort((a, b) => a.localeCompare(b));
 }
 
 async function fetchAllVelocityRows(): Promise<VelocityRow[]> {
@@ -349,6 +378,7 @@ export default function KeHeVelocityView() {
   const [missingLocations, setMissingLocations] = useState<MissingLocationEntry[]>([]);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [pendingRows, setPendingRows] = useState<VelocityRow[]>([]);
+  const [retailerOptionsForModal, setRetailerOptionsForModal] = useState<string[]>(DEFAULT_RETAILER_OPTIONS);
 
   const loadRows = async () => {
     try {
@@ -374,6 +404,12 @@ export default function KeHeVelocityView() {
 
   useEffect(() => {
     loadRows();
+  }, []);
+
+  useEffect(() => {
+    fetchAllLocations()
+      .then((locations) => setRetailerOptionsForModal(getRetailerOptionsFromLocations(locations)))
+      .catch((error) => console.error("Failed to load retailer options:", error));
   }, []);
 
   const retailerOptions = useMemo(() => {
@@ -506,6 +542,8 @@ export default function KeHeVelocityView() {
 
       if (productRes.error) throw productRes.error;
 
+      setRetailerOptionsForModal(getRetailerOptionsFromLocations(locations));
+
       const productMap = new Map<string, string>();
       ((productRes.data || []) as ProductRow[]).forEach((row) => {
         productMap.set(String(row.upc), row.item_description || "");
@@ -556,14 +594,21 @@ export default function KeHeVelocityView() {
 
   const handleSaveMissingLocations = async () => {
     try {
-      for (const item of missingLocations) {
+      const normalizedMissingLocations = missingLocations.map((item) => ({
+        ...item,
+        retailer: item.isAddingRetailer
+          ? String(item.newRetailer || "").replace(/ /g, " ").replace(/\s+/g, " ").trim()
+          : String(item.retailer || "").replace(/ /g, " ").replace(/\s+/g, " ").trim(),
+      }));
+
+      for (const item of normalizedMissingLocations) {
         if (!item.retailer) {
-          alert("Please choose a retailer for every new location.");
+          alert("Please choose or enter a retailer for every new location.");
           return;
         }
       }
 
-      const rowsToInsert = missingLocations.map((item) => ({
+      const rowsToInsert = normalizedMissingLocations.map((item) => ({
         retailer_area: item.retailer_area,
         customer: item.customer,
         retailer: item.retailer,
@@ -573,6 +618,7 @@ export default function KeHeVelocityView() {
       if (error) throw error;
 
       const refreshedLocations = await fetchAllLocations();
+      setRetailerOptionsForModal(getRetailerOptionsFromLocations(refreshedLocations));
       await finishInsert(pendingRows, refreshedLocations);
 
       setShowLocationModal(false);
@@ -731,7 +777,7 @@ export default function KeHeVelocityView() {
             </h3>
             <p className="mt-1 text-sm text-slate-500">
               These Retailer Area / Customer combinations are not in the Locations database yet.
-              Choose a retailer, then save them before continuing.
+              Choose an existing retailer or add a new one, then save them before continuing.
             </p>
 
             <div className="mt-5 max-h-[420px] space-y-3 overflow-auto">
@@ -758,25 +804,51 @@ export default function KeHeVelocityView() {
                     <label className="mb-1 block text-xs font-medium text-slate-600">
                       Retailer
                     </label>
-                    <select
-                      value={item.retailer}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        setMissingLocations((prev) =>
-                          prev.map((row, i) =>
-                            i === index ? { ...row, retailer: value } : row
-                          )
-                        );
-                      }}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    >
-                      <option value="">Select retailer</option>
-                      {RETAILER_OPTIONS.map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="space-y-2">
+                      <select
+                        value={item.isAddingRetailer ? ADD_NEW_RETAILER_VALUE : item.retailer}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setMissingLocations((prev) =>
+                            prev.map((row, i) =>
+                              i === index
+                                ? value === ADD_NEW_RETAILER_VALUE
+                                  ? { ...row, retailer: "", isAddingRetailer: true, newRetailer: row.newRetailer || "" }
+                                  : { ...row, retailer: value, isAddingRetailer: false, newRetailer: "" }
+                                : row
+                            )
+                          );
+                        }}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="">Select retailer</option>
+                        {retailerOptionsForModal.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                        <option value={ADD_NEW_RETAILER_VALUE}>+ Add new retailer</option>
+                      </select>
+
+                      {item.isAddingRetailer && (
+                        <div className="relative">
+                          <Plus className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <Input
+                            value={item.newRetailer || ""}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setMissingLocations((prev) =>
+                                prev.map((row, i) =>
+                                  i === index ? { ...row, newRetailer: value } : row
+                                )
+                              );
+                            }}
+                            placeholder="Enter new retailer"
+                            className="rounded-xl pl-10"
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
