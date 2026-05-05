@@ -22,7 +22,7 @@ type KsolveRow = {
   invoice_amt: number | null;
 };
 
-type ReconciliationStatus = "Needs Review" | "Submitted" | "Resolved" | "Rejected";
+type ReconciliationStatus = "No Action" | "Submitted" | "Resolved" | "Rejected";
 
 type DiscrepancyRow = {
   month: string;
@@ -43,7 +43,7 @@ type DiscrepancyRow = {
 
 const PAGE_SIZE = 1000;
 const STATUS_OPTIONS: ReconciliationStatus[] = [
-  "Needs Review",
+  "No Action",
   "Submitted",
   "Resolved",
   "Rejected",
@@ -136,7 +136,7 @@ function getDaysToPay(checkDate: string | null | undefined, invoiceDate: string 
 function getDiscountTermsStatus(checkDate: string, invoiceDate: string): "Yes" | "No" | "-" {
   const daysToPay = getDaysToPay(checkDate, invoiceDate);
   if (daysToPay === null) return "-";
-  return daysToPay <= 10 ? "Yes" : "No";
+  return daysToPay <= 15 ? "Yes" : "No";
 }
 
 function parseMonthOrder(value: string) {
@@ -361,7 +361,7 @@ export default function WMInvoiceDiscrepancyView() {
             wm?.checkDate || ks?.checkDate || "",
             wm?.invoiceDate || "",
           ),
-          status: "Needs Review",
+          status: "No Action",
           statusNote: "",
         };
       });
