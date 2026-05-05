@@ -22,7 +22,7 @@ type KsolveRow = {
   invoice_amt: number | null;
 };
 
-type ReconciliationStatus = "No Action" | "Submitted" | "Resolved" | "Rejected";
+type ReconciliationStatus = "No Action" | "Needs Review" | "Submitted" | "Resolved" | "Rejected";
 
 type DiscrepancyRow = {
   month: string;
@@ -44,6 +44,7 @@ type DiscrepancyRow = {
 const PAGE_SIZE = 1000;
 const STATUS_OPTIONS: ReconciliationStatus[] = [
   "No Action",
+  "Needs Review",
   "Submitted",
   "Resolved",
   "Rejected",
@@ -137,6 +138,14 @@ function getDiscountTermsStatus(checkDate: string, invoiceDate: string): "Yes" |
   const daysToPay = getDaysToPay(checkDate, invoiceDate);
   if (daysToPay === null) return "-";
   return daysToPay <= 15 ? "Yes" : "No";
+}
+
+function getDefaultStatus(discountTerms: "Yes" | "No" | "-", discrepancy: number): ReconciliationStatus {
+  const hasDiscrepancy = Math.abs(discrepancy) > 0.005;
+
+  if (!hasDiscrepancy) return "No Action";
+  if (discountTerms === "Yes") return "No Action";
+  return "Needs Review";
 }
 
 function parseMonthOrder(value: string) {
@@ -342,10 +351,15 @@ export default function WMInvoiceDiscrepancyView() {
         const discrepancy = ksolveAmount - wmAmount;
         const percentage = wmAmount !== 0 ? (discrepancy / wmAmount) * 100 : 0;
 
+        const checkDate = wm?.checkDate || ks?.checkDate || "";
+        const invoiceDate = wm?.invoiceDate || "";
+        const discountTerms = getDiscountTermsStatus(checkDate, invoiceDate);
+        const daysToPay = getDaysToPay(checkDate, invoiceDate);
+
         return {
           month: wm?.month || ks?.month || "",
-          invoiceDate: wm?.invoiceDate || "",
-          checkDate: wm?.checkDate || ks?.checkDate || "",
+          invoiceDate,
+          checkDate,
           checkNo: ks?.checkNo || "",
           invoice,
           type: wm?.type || "WM Invoice",
@@ -353,15 +367,9 @@ export default function WMInvoiceDiscrepancyView() {
           wmAmount,
           discrepancy,
           percentage,
-          discountTerms: getDiscountTermsStatus(
-            wm?.checkDate || ks?.checkDate || "",
-            wm?.invoiceDate || "",
-          ),
-          daysToPay: getDaysToPay(
-            wm?.checkDate || ks?.checkDate || "",
-            wm?.invoiceDate || "",
-          ),
-          status: "No Action",
+          discountTerms,
+          daysToPay,
+          status: getDefaultStatus(discountTerms, discrepancy),
           statusNote: "",
         };
       });
