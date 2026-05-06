@@ -23,6 +23,18 @@ type KsolveRow = {
 };
 
 type ReconciliationStatus = "No Action" | "Needs Review" | "Submitted" | "Resolved" | "Rejected";
+type ClaimStatus = "No Action" | "Not Submitted" | "Submitted" | "Follow Up" | "Resolved" | "Rejected";
+
+type ClaimRow = {
+  invoice: string | null;
+  claim_status: string | null;
+  claim_amount: number | null;
+  recovered_amount: number | null;
+  claim_date: string | null;
+  resolved_date: string | null;
+  claim_ref: string | null;
+  notes: string | null;
+};
 
 type DiscrepancyRow = {
   month: string;
@@ -39,6 +51,14 @@ type DiscrepancyRow = {
   daysToPay: number | null;
   status: ReconciliationStatus;
   statusNote: string;
+  claimStatus: ClaimStatus;
+  claimAmount: number;
+  recoveredAmount: number;
+  openBalance: number;
+  claimDate: string;
+  resolvedDate: string;
+  claimRef: string;
+  claimNotes: string;
 };
 
 const PAGE_SIZE = 1000;
@@ -46,6 +66,15 @@ const STATUS_OPTIONS: ReconciliationStatus[] = [
   "No Action",
   "Needs Review",
   "Submitted",
+  "Resolved",
+  "Rejected",
+];
+
+const CLAIM_STATUS_OPTIONS: ClaimStatus[] = [
+  "No Action",
+  "Not Submitted",
+  "Submitted",
+  "Follow Up",
   "Resolved",
   "Rejected",
 ];
@@ -148,6 +177,20 @@ function getDefaultStatus(discountTerms: "Yes" | "No" | "-", discrepancy: number
   return "Needs Review";
 }
 
+function getDefaultClaimStatus(defaultStatus: ReconciliationStatus): ClaimStatus {
+  return defaultStatus === "Needs Review" ? "Not Submitted" : "No Action";
+}
+
+function todayIsoDate() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function toNumber(value: unknown) {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function parseMonthOrder(value: string) {
   const monthMap: Record<string, number> = {
     january: 0,
@@ -176,7 +219,7 @@ function parseMonthOrder(value: string) {
   return year * 100 + monthIndex;
 }
 
-function statusClass(status: ReconciliationStatus) {
+function statusClass(status: ReconciliationStatus | ClaimStatus) {
   switch (status) {
     case "Submitted":
       return "border-blue-200 bg-blue-50 text-blue-700";
@@ -184,6 +227,8 @@ function statusClass(status: ReconciliationStatus) {
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
     case "Rejected":
       return "border-red-200 bg-red-50 text-red-600";
+    case "Needs Review":
+      return "border-amber-200 bg-amber-50 text-amber-700";
     default:
       return "border-slate-200 bg-slate-50 text-slate-700";
   }
@@ -240,6 +285,30 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveRow[]> {
   return allRows;
 }
 
+async function fetchAllClaimRows(): Promise<ClaimRow[]> {
+  let allRows: ClaimRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("wm_invoice_claims")
+      .select("invoice, claim_status, claim_amount, recovered_amount, claim_date, resolved_date, claim_ref, notes")
+      .order("updated_at", { ascending: false, nullsFirst: false })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as ClaimRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) keepGoing = false;
+    else from += PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
 export default function WMInvoiceDiscrepancyView() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<DiscrepancyRow[]>([]);
@@ -253,6 +322,7 @@ export default function WMInvoiceDiscrepancyView() {
 
       let wmData: WMRow[] = [];
       let ksolveData: KsolveRow[] = [];
+      let claimsData: ClaimRow[] = [];
 
       try {
         wmData = await fetchAllWmDatasetRows();
@@ -264,6 +334,12 @@ export default function WMInvoiceDiscrepancyView() {
         ksolveData = await fetchAllKsolveInvoiceRows();
       } catch (error) {
         console.error("Failed to load Ksolve invoice rows:", error);
+      }
+
+      try {
+        claimsData = await fetchAllClaimRows();
+      } catch (error) {
+        console.error("Failed to load WM invoice claim rows:", error);
       }
 
       const wmRows = ((wmData ?? []) as WMRow[]).filter((row) =>
@@ -338,8 +414,14 @@ export default function WMInvoiceDiscrepancyView() {
         }
       }
 
+      const claimsByInvoice = new Map<string, ClaimRow>();
+      for (const claim of claimsData) {
+        const invoice = normalizeInvoice(claim.invoice);
+        if (invoice) claimsByInvoice.set(invoice, claim);
+      }
+
       const allInvoices = Array.from(
-        new Set([...wmByInvoice.keys(), ...ksolveByInvoice.keys()]),
+        new Set([...wmByInvoice.keys(), ...ksolveByInvoice.keys(), ...claimsByInvoice.keys()]),
       );
 
       const merged: DiscrepancyRow[] = allInvoices.map((invoice) => {
@@ -355,6 +437,12 @@ export default function WMInvoiceDiscrepancyView() {
         const invoiceDate = wm?.invoiceDate || "";
         const discountTerms = getDiscountTermsStatus(checkDate, invoiceDate);
         const daysToPay = getDaysToPay(checkDate, invoiceDate);
+        const status = getDefaultStatus(discountTerms, discrepancy);
+        const claim = claimsByInvoice.get(invoice);
+        const defaultClaimAmount = status === "Needs Review" ? Math.abs(discrepancy) : 0;
+        const claimAmount = claim ? toNumber(claim.claim_amount) : defaultClaimAmount;
+        const recoveredAmount = claim ? toNumber(claim.recovered_amount) : 0;
+        const openBalance = Math.max(0, claimAmount - recoveredAmount);
 
         return {
           month: wm?.month || ks?.month || "",
@@ -369,8 +457,16 @@ export default function WMInvoiceDiscrepancyView() {
           percentage,
           discountTerms,
           daysToPay,
-          status: getDefaultStatus(discountTerms, discrepancy),
+          status,
           statusNote: "",
+          claimStatus: (claim?.claim_status as ClaimStatus) || getDefaultClaimStatus(status),
+          claimAmount,
+          recoveredAmount,
+          openBalance,
+          claimDate: claim?.claim_date || "",
+          resolvedDate: claim?.resolved_date || "",
+          claimRef: claim?.claim_ref || "",
+          claimNotes: claim?.notes || "",
         };
       });
 
@@ -420,6 +516,14 @@ export default function WMInvoiceDiscrepancyView() {
         row.type,
         row.status,
         row.statusNote,
+        row.claimStatus,
+        row.claimAmount,
+        row.recoveredAmount,
+        row.openBalance,
+        row.claimDate,
+        row.resolvedDate,
+        row.claimRef,
+        row.claimNotes,
       ]
         .join(" ")
         .toLowerCase();
@@ -434,9 +538,15 @@ export default function WMInvoiceDiscrepancyView() {
         acc.ksolveAmount += row.ksolveAmount;
         acc.wmAmount += row.wmAmount;
         acc.discrepancy += row.discrepancy;
+        acc.claimAmount += row.claimAmount;
+        acc.recoveredAmount += row.recoveredAmount;
+        acc.openBalance += row.openBalance;
+        if (["Submitted", "Follow Up", "Resolved", "Rejected"].includes(row.claimStatus)) {
+          acc.submittedAmount += row.claimAmount;
+        }
         return acc;
       },
-      { ksolveAmount: 0, wmAmount: 0, discrepancy: 0 },
+      { ksolveAmount: 0, wmAmount: 0, discrepancy: 0, claimAmount: 0, submittedAmount: 0, recoveredAmount: 0, openBalance: 0 },
     );
   }, [filteredRows]);
 
@@ -479,6 +589,63 @@ export default function WMInvoiceDiscrepancyView() {
     );
   };
 
+  const persistClaim = async (row: DiscrepancyRow) => {
+    const { error } = await supabase.from("wm_invoice_claims").upsert(
+      {
+        invoice: row.invoice,
+        claim_status: row.claimStatus,
+        claim_amount: row.claimAmount,
+        recovered_amount: row.recoveredAmount,
+        claim_date: parseLocalDate(row.claimDate) ? row.claimDate : row.claimDate || null,
+        resolved_date: parseLocalDate(row.resolvedDate) ? row.resolvedDate : row.resolvedDate || null,
+        claim_ref: row.claimRef || null,
+        notes: row.claimNotes || null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "invoice" },
+    );
+
+    if (error) {
+      console.error("Failed to save claim:", error);
+      alert(error.message || "Failed to save claim.");
+    }
+  };
+
+  const updateClaim = (invoice: string, patch: Partial<DiscrepancyRow>, saveNow = true) => {
+    const current = rows.find((row) => row.invoice === invoice);
+    if (!current) return;
+
+    const next = { ...current, ...patch };
+    next.claimAmount = toNumber(next.claimAmount);
+    next.recoveredAmount = toNumber(next.recoveredAmount);
+    next.openBalance = Math.max(0, next.claimAmount - next.recoveredAmount);
+
+    setRows((prev) => prev.map((row) => (row.invoice === invoice ? next : row)));
+
+    if (saveNow) persistClaim(next);
+  };
+
+  const updateClaimStatus = (invoice: string, claimStatus: ClaimStatus) => {
+    const current = rows.find((row) => row.invoice === invoice);
+    if (!current) return;
+
+    const patch: Partial<DiscrepancyRow> = { claimStatus };
+
+    if ((claimStatus === "Submitted" || claimStatus === "Follow Up") && !current.claimDate) {
+      patch.claimDate = todayIsoDate();
+    }
+
+    if (claimStatus === "Submitted" && current.claimAmount === 0) {
+      patch.claimAmount = Math.abs(current.discrepancy);
+    }
+
+    if (claimStatus === "Resolved" && !current.resolvedDate) {
+      patch.resolvedDate = todayIsoDate();
+    }
+
+    updateClaim(invoice, patch, true);
+  };
+
   const exportToExcel = () => {
     const exportRows = filteredRows.map((row) => ({
       Month: formatMonthShort(row.month),
@@ -495,6 +662,14 @@ export default function WMInvoiceDiscrepancyView() {
       Percentage: row.percentage,
       Status: row.status,
       "Status Note": row.statusNote,
+      "Claim Status": row.claimStatus,
+      "Claim Amount": row.claimAmount,
+      "Recovered Amount": row.recoveredAmount,
+      "Open Balance": row.openBalance,
+      "Claim Date": formatDisplayDate(row.claimDate),
+      "Resolved Date": formatDisplayDate(row.resolvedDate),
+      "Claim Ref #": row.claimRef,
+      "Claim Notes": row.claimNotes,
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
@@ -506,7 +681,7 @@ export default function WMInvoiceDiscrepancyView() {
   return (
     <div className="space-y-4">
       <div className="sticky top-[116px] z-20 rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
-        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[1fr_1fr_1fr_1.8fr_220px_220px_auto]">
+        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1.8fr_180px_180px_auto]">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-sm text-slate-500">Ksolve Amount</div>
             <div className="mt-1 text-xl font-semibold text-slate-900">
@@ -533,6 +708,28 @@ export default function WMInvoiceDiscrepancyView() {
               }`}
             >
               {formatMoney(totals.discrepancy)}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4">
+            <div className="text-sm text-amber-700">Claimable</div>
+            <div className="mt-1 text-xl font-semibold text-amber-800">
+              {formatMoney(totals.claimAmount)}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-blue-200 bg-blue-50/40 p-4">
+            <div className="text-sm text-blue-700">Submitted Claims</div>
+            <div className="mt-1 text-xl font-semibold text-blue-800">
+              {formatMoney(totals.submittedAmount)}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4">
+            <div className="text-sm text-emerald-700">Recovered / Open</div>
+            <div className="mt-1 text-xl font-semibold text-emerald-800">
+              {formatMoney(totals.recoveredAmount)}
+              <span className="ml-2 text-sm font-medium text-slate-500">/ {formatMoney(totals.openBalance)}</span>
             </div>
           </div>
 
@@ -604,7 +801,7 @@ export default function WMInvoiceDiscrepancyView() {
           </div>
         ) : (
           <div className="w-full overflow-x-auto">
-            <table className="w-full min-w-[1650px] text-sm">
+            <table className="w-full min-w-[2400px] text-sm">
               <thead className="bg-slate-50">
                 <tr>
                   {[
@@ -621,11 +818,18 @@ export default function WMInvoiceDiscrepancyView() {
                     "Discrepancy",
                     "Percentage",
                     "Status",
+                    "Claim Status",
+                    "Claim Amount",
+                    "Recovered",
+                    "Open Balance",
+                    "Claim Date",
+                    "Claim Ref #",
+                    "Notes",
                   ].map((header) => (
                     <th
                       key={header}
                       className={`whitespace-nowrap px-5 py-3 font-semibold text-slate-700 ${
-                        ["# of Days", "Ksolve Amount", "WM Amount", "Discrepancy", "Percentage"].includes(header)
+                        ["# of Days", "Ksolve Amount", "WM Amount", "Discrepancy", "Percentage", "Claim Amount", "Recovered", "Open Balance"].includes(header)
                           ? "text-right"
                           : header === "2% 10 / NET 30"
                             ? "text-center"
@@ -741,6 +945,68 @@ export default function WMInvoiceDiscrepancyView() {
                           {row.statusNote}
                         </div>
                       )}
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3">
+                      <select
+                        value={row.claimStatus}
+                        onChange={(e) => updateClaimStatus(row.invoice, e.target.value as ClaimStatus)}
+                        className={`rounded-xl border px-3 py-1.5 text-xs font-semibold outline-none ${statusClass(row.claimStatus as ReconciliationStatus)}`}
+                      >
+                        {CLAIM_STATUS_OPTIONS.map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3 text-right">
+                      <input
+                        type="number"
+                        value={row.claimAmount}
+                        onChange={(e) => updateClaim(row.invoice, { claimAmount: Number(e.target.value) }, false)}
+                        onBlur={() => persistClaim(rows.find((r) => r.invoice === row.invoice) || row)}
+                        className="w-32 rounded-xl border border-slate-200 px-3 py-1.5 text-right text-sm outline-none focus:border-slate-300"
+                      />
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3 text-right">
+                      <input
+                        type="number"
+                        value={row.recoveredAmount}
+                        onChange={(e) => updateClaim(row.invoice, { recoveredAmount: Number(e.target.value) }, false)}
+                        onBlur={() => persistClaim(rows.find((r) => r.invoice === row.invoice) || row)}
+                        className="w-32 rounded-xl border border-slate-200 px-3 py-1.5 text-right text-sm outline-none focus:border-slate-300"
+                      />
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3 text-right font-medium text-slate-700">
+                      {formatMoney(row.openBalance)}
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3">
+                      <input
+                        type="date"
+                        value={parseLocalDate(row.claimDate) ? row.claimDate : ""}
+                        onChange={(e) => updateClaim(row.invoice, { claimDate: e.target.value }, true)}
+                        className="w-36 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-slate-300"
+                      />
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3">
+                      <input
+                        type="text"
+                        value={row.claimRef}
+                        onChange={(e) => updateClaim(row.invoice, { claimRef: e.target.value }, false)}
+                        onBlur={() => persistClaim(rows.find((r) => r.invoice === row.invoice) || row)}
+                        placeholder="Claim ref"
+                        className="w-36 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-slate-300"
+                      />
+                    </td>
+                    <td className="px-5 py-3">
+                      <input
+                        type="text"
+                        value={row.claimNotes}
+                        onChange={(e) => updateClaim(row.invoice, { claimNotes: e.target.value }, false)}
+                        onBlur={() => persistClaim(rows.find((r) => r.invoice === row.invoice) || row)}
+                        placeholder="Notes"
+                        className="w-56 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-slate-300"
+                      />
                     </td>
                   </tr>
                 ))}
