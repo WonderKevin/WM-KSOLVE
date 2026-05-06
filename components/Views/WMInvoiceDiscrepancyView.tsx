@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { FileSpreadsheet, MessageSquare, Search, X } from "lucide-react";
+import { FileSpreadsheet, Search, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
 
@@ -150,19 +150,6 @@ function formatDisplayDate(value: string | null | undefined) {
   return raw;
 }
 
-function toDateInputValue(value: string | null | undefined) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-
-  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-
-  const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (mdy) return `${mdy[3]}-${mdy[1].padStart(2, "0")}-${mdy[2].padStart(2, "0")}`;
-
-  return "";
-}
-
 function getDaysToPay(checkDate: string | null | undefined, invoiceDate: string | null | undefined) {
   const check = parseLocalDate(checkDate);
   const invoice = parseLocalDate(invoiceDate);
@@ -192,13 +179,6 @@ function normalizeClaimStatus(value: string | null | undefined, fallback: ClaimS
   const raw = String(value || "").trim();
   if (raw === "Not Submitted") return fallback === "No Action" ? "No Action" : "Needs Review";
   return CLAIM_STATUS_OPTIONS.includes(raw as ClaimStatus) ? (raw as ClaimStatus) : fallback;
-}
-
-function parseNumericInput(value: string) {
-  const cleaned = String(value || "").replace(/[$,]/g, "").trim();
-  if (!cleaned) return 0;
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function parseMonthOrder(value: string) {
@@ -597,15 +577,22 @@ export default function WMInvoiceDiscrepancyView() {
     if (!current) return;
 
     const claimAmount = claimStatus === "No Action" ? 0 : current.claimAmount || Math.abs(current.discrepancy);
+    const recoveredAmount =
+      claimStatus === "Resolved"
+        ? claimAmount
+        : claimStatus === "No Action" || claimStatus === "Rejected"
+          ? 0
+          : current.recoveredAmount || 0;
+
     const patch: Partial<ClaimRow> = {
       claim_status: claimStatus,
       claim_amount: claimAmount,
-      recovered_amount: current.recoveredAmount || 0,
+      recovered_amount: recoveredAmount,
       claim_ref: current.claimRef || null,
       notes: current.notes || null,
     };
 
-    const rowPatch: Partial<DiscrepancyRow> = { claimStatus, claimAmount };
+    const rowPatch: Partial<DiscrepancyRow> = { claimStatus, claimAmount, recoveredAmount };
 
     if ((claimStatus === "Submitted" || claimStatus === "Follow Up") && !current.claimDate) {
       patch.claim_date = todayIsoDate();
@@ -630,49 +617,6 @@ export default function WMInvoiceDiscrepancyView() {
     } finally {
       setSavingInvoice(null);
     }
-  };
-
-  const saveClaimField = async (
-    invoice: string,
-    field: "claim_amount" | "recovered_amount" | "claim_ref" | "notes" | "claim_date" | "resolved_date",
-    value: string | number | null,
-  ) => {
-    const current = rows.find((row) => row.invoice === invoice);
-    if (!current) return;
-
-    const patch: Partial<ClaimRow> = {
-      claim_status: current.claimStatus,
-      claim_amount: current.claimAmount,
-      recovered_amount: current.recoveredAmount,
-      claim_date: current.claimDate ? null : null,
-      resolved_date: current.resolvedDate ? null : null,
-      claim_ref: current.claimRef || null,
-      notes: current.notes || null,
-    };
-
-    delete patch.claim_date;
-    delete patch.resolved_date;
-
-    (patch as any)[field] = value;
-
-    try {
-      setSavingInvoice(invoice);
-      await upsertClaim(invoice, patch);
-    } catch (error: any) {
-      alert(error?.message || "Failed to save claim field.");
-    } finally {
-      setSavingInvoice(null);
-    }
-  };
-
-  const updateNotes = async (invoice: string) => {
-    const current = rows.find((row) => row.invoice === invoice);
-    const note = window.prompt("Add or update claim notes:", current?.notes || "");
-
-    if (note === null) return;
-
-    setRowClaimValues(invoice, { notes: note.trim() });
-    await saveClaimField(invoice, "notes", note.trim() || null);
   };
 
   const exportToExcel = () => {
@@ -784,7 +728,7 @@ export default function WMInvoiceDiscrepancyView() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search month, invoice date, check date, check #, invoice, claim ref, notes..."
+              placeholder="Search month, invoice date, check date, check #, invoice, type, claim status..."
               className="h-12 w-full rounded-2xl border border-slate-200 bg-white py-2 pl-10 pr-10 text-sm outline-none transition focus:border-slate-300"
             />
             {search && (
@@ -835,7 +779,7 @@ export default function WMInvoiceDiscrepancyView() {
           </div>
         ) : (
           <div className="w-full overflow-x-auto">
-            <table className="w-full min-w-[2050px] text-sm">
+            <table className="w-full min-w-[1550px] text-sm">
               <thead className="bg-slate-50">
                 <tr>
                   {[
@@ -852,17 +796,11 @@ export default function WMInvoiceDiscrepancyView() {
                     "Discrepancy",
                     "Percentage",
                     "Claim Status",
-                    "Claim Amount",
-                    "Recovered",
-                    "Open Balance",
-                    "Claim Date",
-                    "Claim Ref #",
-                    "Notes",
                   ].map((header) => (
                     <th
                       key={header}
                       className={`whitespace-nowrap px-4 py-3 font-semibold text-slate-700 ${
-                        ["# of Days", "Ksolve Amount", "WM Amount", "Discrepancy", "Percentage", "Claim Amount", "Recovered", "Open Balance"].includes(header)
+                        ["# of Days", "Ksolve Amount", "WM Amount", "Discrepancy", "Percentage"].includes(header)
                           ? "text-right"
                           : ["2% 10 / NET 30", "Claim Status"].includes(header)
                             ? "text-center"
@@ -952,66 +890,6 @@ export default function WMInvoiceDiscrepancyView() {
                           </option>
                         ))}
                       </select>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right">
-                      <input
-                        type="text"
-                        value={row.claimAmount ? row.claimAmount.toFixed(2) : ""}
-                        onChange={(e) => setRowClaimValues(row.invoice, { claimAmount: parseNumericInput(e.target.value) })}
-                        onBlur={(e) => saveClaimField(row.invoice, "claim_amount", parseNumericInput(e.target.value))}
-                        className="w-28 rounded-xl border border-slate-200 px-2 py-1 text-right text-sm outline-none focus:border-slate-300"
-                      />
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right">
-                      <input
-                        type="text"
-                        value={row.recoveredAmount ? row.recoveredAmount.toFixed(2) : ""}
-                        onChange={(e) => setRowClaimValues(row.invoice, { recoveredAmount: parseNumericInput(e.target.value) })}
-                        onBlur={(e) => saveClaimField(row.invoice, "recovered_amount", parseNumericInput(e.target.value))}
-                        className="w-28 rounded-xl border border-slate-200 px-2 py-1 text-right text-sm outline-none focus:border-slate-300"
-                      />
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">
-                      {formatMoney(row.openBalance)}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3">
-                      <input
-                        type="date"
-                        value={toDateInputValue(row.claimDate)}
-                        onChange={(e) => setRowClaimValues(row.invoice, { claimDate: formatDisplayDate(e.target.value) })}
-                        onBlur={(e) => saveClaimField(row.invoice, "claim_date", e.target.value || null)}
-                        className="w-36 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-slate-300"
-                      />
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3">
-                      <input
-                        type="text"
-                        value={row.claimRef}
-                        onChange={(e) => setRowClaimValues(row.invoice, { claimRef: e.target.value })}
-                        onBlur={(e) => saveClaimField(row.invoice, "claim_ref", e.target.value.trim() || null)}
-                        placeholder="Ref #"
-                        className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-slate-300"
-                      />
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => updateNotes(row.invoice)}
-                        title={row.notes || "Add claim note"}
-                        className={`inline-flex items-center gap-1 rounded-xl border px-2 py-1 text-xs font-medium transition hover:bg-slate-50 ${
-                          row.notes
-                            ? "border-slate-300 bg-slate-50 text-slate-700"
-                            : "border-slate-200 bg-white text-slate-500"
-                        }`}
-                      >
-                        <MessageSquare className="h-3.5 w-3.5" />
-                        {row.notes ? "View/Edit" : "Add"}
-                      </button>
-                      {row.notes && (
-                        <div className="mt-1 max-w-[220px] truncate text-xs text-slate-500">
-                          {row.notes}
-                        </div>
-                      )}
                     </td>
                   </tr>
                 ))}
