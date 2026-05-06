@@ -35,7 +35,7 @@ type ClaimRow = {
   updated_at?: string | null;
 };
 
-type ClaimStatus = "No Action" | "Needs Review" | "Submitted" | "Follow Up" | "Resolved" | "Rejected";
+type ClaimStatus = "No Action" | "Needs Review" | "Submitted" | "Follow Up" | "Recovered" | "Rejected";
 
 type DiscrepancyRow = {
   month: string;
@@ -66,7 +66,7 @@ const CLAIM_STATUS_OPTIONS: ClaimStatus[] = [
   "Needs Review",
   "Submitted",
   "Follow Up",
-  "Resolved",
+  "Recovered",
   "Rejected",
 ];
 
@@ -178,6 +178,7 @@ function getDefaultClaimStatus(discountTerms: "Yes" | "No" | "-", discrepancy: n
 function normalizeClaimStatus(value: string | null | undefined, fallback: ClaimStatus): ClaimStatus {
   const raw = String(value || "").trim();
   if (raw === "Not Submitted") return fallback === "No Action" ? "No Action" : "Needs Review";
+  if (raw === "Resolved") return "Recovered";
   return CLAIM_STATUS_OPTIONS.includes(raw as ClaimStatus) ? (raw as ClaimStatus) : fallback;
 }
 
@@ -217,7 +218,7 @@ function claimClass(status: ClaimStatus) {
       return "border-blue-200 bg-blue-50 text-blue-700";
     case "Follow Up":
       return "border-amber-200 bg-amber-50 text-amber-700";
-    case "Resolved":
+    case "Recovered":
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
     case "Rejected":
       return "border-red-200 bg-red-50 text-red-600";
@@ -447,9 +448,10 @@ export default function WMInvoiceDiscrepancyView() {
       const discountTerms = getDiscountTermsStatus(checkDate, invoiceDate);
       const daysToPay = getDaysToPay(checkDate, invoiceDate);
       const defaultClaimStatus = getDefaultClaimStatus(discountTerms, discrepancy);
+      const claimStatus = normalizeClaimStatus(claim?.claim_status, defaultClaimStatus);
       const defaultClaimAmount = defaultClaimStatus === "Needs Review" ? Math.abs(discrepancy) : 0;
       const claimAmount = Number(claim?.claim_amount ?? defaultClaimAmount ?? 0);
-      const recoveredAmount = Number(claim?.recovered_amount ?? 0);
+      const recoveredAmount = claimStatus === "Recovered" ? claimAmount : Number(claim?.recovered_amount ?? 0);
 
       return {
         month: wm?.month || ks?.month || "",
@@ -464,7 +466,7 @@ export default function WMInvoiceDiscrepancyView() {
         percentage,
         discountTerms,
         daysToPay,
-        claimStatus: normalizeClaimStatus(claim?.claim_status, defaultClaimStatus),
+        claimStatus,
         claimAmount,
         recoveredAmount,
         openBalance: Math.max(claimAmount - recoveredAmount, 0),
@@ -541,9 +543,10 @@ export default function WMInvoiceDiscrepancyView() {
         acc.discrepancy += row.discrepancy;
 
         if (row.claimStatus !== "No Action") acc.claimable += row.claimAmount;
-        if (["Submitted", "Follow Up", "Resolved", "Rejected"].includes(row.claimStatus)) acc.submitted += row.claimAmount;
+        if (["Submitted", "Follow Up"].includes(row.claimStatus)) acc.submitted += row.claimAmount;
+        if (row.claimStatus === "Rejected") acc.rejected += row.claimAmount;
         acc.recovered += row.recoveredAmount;
-        acc.openBalance += row.openBalance;
+        if (["Needs Review", "Submitted", "Follow Up"].includes(row.claimStatus)) acc.openBalance += row.openBalance;
 
         return acc;
       },
@@ -554,6 +557,7 @@ export default function WMInvoiceDiscrepancyView() {
         claimable: 0,
         submitted: 0,
         recovered: 0,
+        rejected: 0,
         openBalance: 0,
       },
     );
@@ -578,11 +582,9 @@ export default function WMInvoiceDiscrepancyView() {
 
     const claimAmount = claimStatus === "No Action" ? 0 : current.claimAmount || Math.abs(current.discrepancy);
     const recoveredAmount =
-      claimStatus === "Resolved"
+      claimStatus === "Recovered"
         ? claimAmount
-        : claimStatus === "No Action" || claimStatus === "Rejected"
-          ? 0
-          : current.recoveredAmount || 0;
+        : 0;
 
     const patch: Partial<ClaimRow> = {
       claim_status: claimStatus,
@@ -590,6 +592,7 @@ export default function WMInvoiceDiscrepancyView() {
       recovered_amount: recoveredAmount,
       claim_ref: current.claimRef || null,
       notes: current.notes || null,
+      ...(claimStatus !== "Recovered" ? { resolved_date: null } : {}),
     };
 
     const rowPatch: Partial<DiscrepancyRow> = { claimStatus, claimAmount, recoveredAmount };
@@ -599,7 +602,7 @@ export default function WMInvoiceDiscrepancyView() {
       rowPatch.claimDate = formatDisplayDate(patch.claim_date);
     }
 
-    if (claimStatus === "Resolved" && !current.resolvedDate) {
+    if (claimStatus === "Recovered" && !current.resolvedDate) {
       patch.resolved_date = todayIsoDate();
       rowPatch.resolvedDate = formatDisplayDate(patch.resolved_date);
       if (!current.claimDate) {
@@ -614,6 +617,27 @@ export default function WMInvoiceDiscrepancyView() {
       setRowClaimValues(invoice, rowPatch);
     } catch (error: any) {
       alert(error?.message || "Failed to save claim status.");
+    } finally {
+      setSavingInvoice(null);
+    }
+  };
+
+  const updateNotes = async (invoice: string, notes: string) => {
+    const current = rows.find((row) => row.invoice === invoice);
+    if (!current) return;
+
+    try {
+      setSavingInvoice(invoice);
+      await upsertClaim(invoice, {
+        claim_status: current.claimStatus,
+        claim_amount: current.claimAmount,
+        recovered_amount: current.recoveredAmount,
+        claim_ref: current.claimRef || null,
+        notes: notes || null,
+      });
+      setRowClaimValues(invoice, { notes });
+    } catch (error: any) {
+      alert(error?.message || "Failed to save notes.");
     } finally {
       setSavingInvoice(null);
     }
@@ -651,7 +675,7 @@ export default function WMInvoiceDiscrepancyView() {
   return (
     <div className="space-y-4">
       <div className="sticky top-[116px] z-20 rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
-        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[repeat(7,minmax(0,1fr))_80px]">
+        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[repeat(8,minmax(0,1fr))_80px]">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-xs text-slate-500">Ksolve Amount</div>
             <div className="mt-1 text-lg font-semibold text-slate-900">
@@ -699,6 +723,13 @@ export default function WMInvoiceDiscrepancyView() {
             <div className="text-xs text-emerald-700">Recovered</div>
             <div className="mt-1 text-lg font-semibold text-emerald-800">
               {formatMoney(totals.recovered)}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+            <div className="text-xs text-red-700">Rejected</div>
+            <div className="mt-1 text-lg font-semibold text-red-700">
+              {formatMoney(totals.rejected)}
             </div>
           </div>
 
@@ -779,7 +810,7 @@ export default function WMInvoiceDiscrepancyView() {
           </div>
         ) : (
           <div className="w-full overflow-x-auto">
-            <table className="w-full min-w-[1550px] text-sm">
+            <table className="w-full min-w-[1750px] text-sm">
               <thead className="bg-slate-50">
                 <tr>
                   {[
@@ -796,6 +827,7 @@ export default function WMInvoiceDiscrepancyView() {
                     "Discrepancy",
                     "Percentage",
                     "Claim Status",
+                    "Notes",
                   ].map((header) => (
                     <th
                       key={header}
@@ -890,6 +922,16 @@ export default function WMInvoiceDiscrepancyView() {
                           </option>
                         ))}
                       </select>
+                    </td>
+                    <td className="min-w-[260px] px-4 py-3">
+                      <input
+                        value={row.notes}
+                        onChange={(e) => setRowClaimValues(row.invoice, { notes: e.target.value })}
+                        onBlur={(e) => updateNotes(row.invoice, e.target.value)}
+                        disabled={savingInvoice === row.invoice}
+                        placeholder="Add notes..."
+                        className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs outline-none transition focus:border-slate-300 disabled:opacity-60"
+                      />
                     </td>
                   </tr>
                 ))}
