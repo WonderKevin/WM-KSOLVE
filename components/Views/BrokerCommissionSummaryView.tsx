@@ -109,6 +109,7 @@ type MonthSummary = {
 
 const INFRA_HP_CASE_RATE = 35.68;
 const PAGE_SIZE = 1000;
+const TRANSFER_ALLOCATIONS_STORAGE_KEY = "broker-commission-transfer-allocations";
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -544,6 +545,29 @@ export default function BrokerCommissionSummaryView() {
   const [allocationModal, setAllocationModal] = useState<TransferAlert | null>(
     null
   );
+  const [draftAllocationInvoices, setDraftAllocationInvoices] = useState<string[]>([]);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(TRANSFER_ALLOCATIONS_STORAGE_KEY);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as TransferAllocationMap;
+      if (parsed && typeof parsed === "object") setTransferAllocations(parsed);
+    } catch {
+      // ignore saved allocation parse errors
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        TRANSFER_ALLOCATIONS_STORAGE_KEY,
+        JSON.stringify(transferAllocations),
+      );
+    } catch {
+      // ignore localStorage write errors
+    }
+  }, [transferAllocations]);
 
   const load = useCallback(async (isManualRefresh = false) => {
     if (isManualRefresh) {
@@ -1061,33 +1085,66 @@ export default function BrokerCommissionSummaryView() {
     );
   }, [rows, velocityRows, selectedMonth, transferAllocations]);
 
-  const toggleAllocationInvoice = (alert: TransferAlert, invoice: string) => {
-    setTransferAllocations((prev) => {
-      const current = prev[alert.key]?.length ? prev[alert.key] : alert.selectedInvoices;
+  const getCurrentAllocationInvoices = (alert: TransferAlert) => {
+    const saved = transferAllocations[alert.key];
+    return saved && saved.length > 0 ? saved : alert.selectedInvoices;
+  };
+
+  const openAllocationModal = (alert: TransferAlert) => {
+    setDraftAllocationInvoices(getCurrentAllocationInvoices(alert));
+    setAllocationModal(alert);
+  };
+
+  const getAllocationPreview = (alert: TransferAlert, selectedInvoices: string[]) => {
+    const selectedSet = new Set(selectedInvoices);
+    let remaining = alert.transferAmount;
+    let allocatedAmount = 0;
+
+    for (const option of alert.invoiceOptions) {
+      if (remaining <= 0) break;
+      if (!selectedSet.has(option.invoice)) continue;
+
+      const allocationAmount = round2(Math.min(option.krogerAmount, remaining));
+      allocatedAmount = round2(allocatedAmount + allocationAmount);
+      remaining = round2(remaining - allocationAmount);
+    }
+
+    return {
+      allocatedAmount,
+      unallocatedAmount: round2(Math.max(remaining, 0)),
+    };
+  };
+
+  const toggleAllocationInvoice = (invoice: string) => {
+    setDraftAllocationInvoices((current) => {
       const exists = current.includes(invoice);
-      const nextInvoices = exists
+      return exists
         ? current.filter((item) => item !== invoice)
         : [...current, invoice];
-
-      return {
-        ...prev,
-        [alert.key]: nextInvoices,
-      };
     });
   };
 
   const selectAllAllocationInvoices = (alert: TransferAlert) => {
-    setTransferAllocations((prev) => ({
-      ...prev,
-      [alert.key]: alert.invoiceOptions.map((option) => option.invoice),
-    }));
+    setDraftAllocationInvoices(alert.invoiceOptions.map((option) => option.invoice));
   };
 
   const resetAllocationToFirstInvoice = (alert: TransferAlert) => {
+    setDraftAllocationInvoices(alert.firstInvoice ? [alert.firstInvoice] : []);
+  };
+
+  const saveAllocationModal = () => {
+    if (!allocationModal) return;
+
+    const validInvoices = draftAllocationInvoices.filter((invoice) =>
+      allocationModal.invoiceOptions.some((option) => option.invoice === invoice),
+    );
+
     setTransferAllocations((prev) => ({
       ...prev,
-      [alert.key]: alert.firstInvoice ? [alert.firstInvoice] : [],
+      [allocationModal.key]: validInvoices,
     }));
+    setAllocationModal(null);
+    setDraftAllocationInvoices([]);
   };
 
   return (
@@ -1222,7 +1279,7 @@ export default function BrokerCommissionSummaryView() {
                             </div>
                             <button
                               type="button"
-                              onClick={() => setAllocationModal(alert)}
+                              onClick={() => openAllocationModal(alert)}
                               className="rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100"
                             >
                               Allocate to invoices
@@ -1356,7 +1413,9 @@ export default function BrokerCommissionSummaryView() {
         })
       )}
 
-      {allocationModal && (
+      {allocationModal && (() => {
+        const allocationPreview = getAllocationPreview(allocationModal, draftAllocationInvoices);
+        return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
           <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
@@ -1371,7 +1430,7 @@ export default function BrokerCommissionSummaryView() {
               </div>
               <button
                 type="button"
-                onClick={() => setAllocationModal(null)}
+                onClick={() => { setAllocationModal(null); setDraftAllocationInvoices([]); }}
                 className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
               >
                 Close
@@ -1388,13 +1447,13 @@ export default function BrokerCommissionSummaryView() {
               <div className="rounded-2xl border border-slate-200 p-3">
                 <div className="text-xs text-slate-500">Currently Allocated</div>
                 <div className="mt-1 font-semibold text-emerald-700">
-                  {formatMoney(allocationModal.allocatedAmount)}
+                  {formatMoney(allocationPreview.allocatedAmount)}
                 </div>
               </div>
               <div className="rounded-2xl border border-slate-200 p-3">
                 <div className="text-xs text-slate-500">Unallocated</div>
-                <div className={`mt-1 font-semibold ${allocationModal.unallocatedAmount > 0 ? "text-red-600" : "text-slate-900"}`}>
-                  {formatMoney(allocationModal.unallocatedAmount)}
+                <div className={`mt-1 font-semibold ${allocationPreview.unallocatedAmount > 0 ? "text-red-600" : "text-slate-900"}`}>
+                  {formatMoney(allocationPreview.unallocatedAmount)}
                 </div>
               </div>
             </div>
@@ -1427,11 +1486,7 @@ export default function BrokerCommissionSummaryView() {
                 </thead>
                 <tbody>
                   {allocationModal.invoiceOptions.map((option) => {
-                    const selected =
-                      (transferAllocations[allocationModal.key]?.length
-                        ? transferAllocations[allocationModal.key]
-                        : allocationModal.selectedInvoices
-                      ).includes(option.invoice);
+                    const selected = draftAllocationInvoices.includes(option.invoice);
 
                     return (
                       <tr key={option.invoice} className="border-t border-slate-100">
@@ -1439,7 +1494,7 @@ export default function BrokerCommissionSummaryView() {
                           <input
                             type="checkbox"
                             checked={selected}
-                            onChange={() => toggleAllocationInvoice(allocationModal, option.invoice)}
+                            onChange={() => toggleAllocationInvoice(option.invoice)}
                             className="h-4 w-4 rounded border-slate-300"
                           />
                         </td>
@@ -1464,7 +1519,7 @@ export default function BrokerCommissionSummaryView() {
             <div className="mt-5 flex justify-end">
               <button
                 type="button"
-                onClick={() => setAllocationModal(null)}
+                onClick={saveAllocationModal}
                 className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
               >
                 Done
@@ -1472,7 +1527,8 @@ export default function BrokerCommissionSummaryView() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
