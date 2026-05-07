@@ -782,39 +782,49 @@ export default function BrokerCommissionSummaryView() {
     }
 
     for (const [month, firstInvoice] of firstWmInvoiceByMonth.entries()) {
-      const hpCases = filteredVelocityRows.reduce((sum, row) => {
-        if (normalizeMonthLabel(row.month ?? "") !== normalizeMonthLabel(month)) {
-          return sum;
-        }
+      const getHpCasesForRetailer = (targetRetailer: RetailerName) => {
+        return filteredVelocityRows.reduce((sum, row) => {
+          if (normalizeMonthLabel(row.month ?? "") !== normalizeMonthLabel(month)) {
+            return sum;
+          }
 
-        if (categorizeRetailerName(row.retailer ?? "") !== "INFRA & Others") {
-          return sum;
-        }
+          if (categorizeRetailerName(row.retailer ?? "") !== targetRetailer) {
+            return sum;
+          }
 
-        const description = normalizeText(row.description ?? "");
-        if (!description.startsWith("HP")) return sum;
+          const description = normalizeText(row.description ?? "");
+          if (!description.startsWith("HP")) return sum;
 
-        return sum + Number(row.cases ?? 0);
-      }, 0);
+          return sum + Number(row.cases ?? 0);
+        }, 0);
+      };
 
-      const transferAmount = round2(hpCases * INFRA_HP_CASE_RATE);
-      if (transferAmount <= 0) continue;
+      const applyVelocityTransferFromKroger = (targetRetailer: RetailerName) => {
+        if (!targetRetailer || targetRetailer === "Kroger") return;
 
-      const krogerKey = `${month}__${firstInvoice}__Kroger`;
-      const infraKey = `${month}__${firstInvoice}__INFRA & Others`;
+        const hpCases = getHpCasesForRetailer(targetRetailer);
+        const transferAmount = round2(hpCases * INFRA_HP_CASE_RATE);
+        if (transferAmount <= 0) return;
 
-      const krogerAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(krogerKey) ?? 0;
-      const infraAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(infraKey) ?? 0;
+        const krogerKey = `${month}__${firstInvoice}__Kroger`;
+        const targetKey = `${month}__${firstInvoice}__${targetRetailer}`;
 
-      wmInvoiceTotalsByMonthInvoiceRetailer.set(
-        krogerKey,
-        round2(Math.max(krogerAmount - transferAmount, 0))
-      );
+        const krogerAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(krogerKey) ?? 0;
+        const targetAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(targetKey) ?? 0;
 
-      wmInvoiceTotalsByMonthInvoiceRetailer.set(
-        infraKey,
-        round2(infraAmount + transferAmount)
-      );
+        wmInvoiceTotalsByMonthInvoiceRetailer.set(
+          krogerKey,
+          round2(Math.max(krogerAmount - transferAmount, 0))
+        );
+
+        wmInvoiceTotalsByMonthInvoiceRetailer.set(
+          targetKey,
+          round2(targetAmount + transferAmount)
+        );
+      };
+
+      applyVelocityTransferFromKroger("INFRA & Others");
+      applyVelocityTransferFromKroger("HEB");
     }
 
     for (const [key, amount] of wmInvoiceTotalsByMonthInvoiceRetailer.entries()) {
