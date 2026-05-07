@@ -8,6 +8,7 @@ type TabKey = "analytics" | "velocity" | "pullout" | "priority-pullout";
 type PulloutSubTabKey = "by-location" | "by-store";
 type PeriodMode = "lastMonth" | "past6Months" | "past12Months" | "custom";
 type AnalyticsSection = "summary" | "pull-rate" | "win-back" | "declining";
+type AnalyticsDateMode = "lastMonth" | "past6Months" | "custom";
 
 type TonyVelocityRow = {
   id?: string;
@@ -151,6 +152,19 @@ function getLastMonthInputValue() { const n = new Date(); const d = new Date(n.g
 function getPastMonthsInputValue(back: number) { const n = new Date(); const d = new Date(n.getFullYear(), n.getMonth() - back, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
 function monthLabelFromDate(date: Date) { return `${date.toLocaleString("en-US", { month: "long" })} '${String(date.getFullYear()).slice(-2)}`; }
 function getLastMonthLabel() { const n = new Date(); return monthLabelFromDate(new Date(n.getFullYear(), n.getMonth() - 1, 1)); }
+function monthInputToLabel(value: string) {
+  const [year, month] = String(value || "").split("-").map(Number);
+  if (!year || !month) return "";
+  return monthLabelFromDate(new Date(year, month - 1, 1));
+}
+function monthLabelToInput(value: string) {
+  const normalized = normalizeMonthLabel(value);
+  const m = normalized.match(/^([A-Za-z]+)\s+'(\d{2})$/);
+  if (!m) return "";
+  const monthIndex = new Date(`${m[1]} 1, 2000`).getMonth();
+  if (Number.isNaN(monthIndex)) return "";
+  return `${2000 + Number(m[2])}-${String(monthIndex + 1).padStart(2, "0")}`;
+}
 function getMonthSortValue(value: string) {
   const m = normalizeMonthLabel(value).match(/^([A-Za-z]+)\s+'(\d{2})$/);
   if (!m) return -Infinity;
@@ -480,6 +494,8 @@ function buildTonyAnalyticsContext(rows: TonyVelocityRow[], referenceMonth?: str
   const recentMonths = effectiveMonths.slice(-6);
   const lastMonth = effectiveMonths[effectiveMonths.length - 1] || "";
   const prevMonth = effectiveMonths[effectiveMonths.length - 2] || "";
+  const referenceMonthIndex = lastMonth ? effectiveMonths.indexOf(lastMonth) : -1;
+  const prior3Months = referenceMonthIndex >= 3 ? effectiveMonths.slice(referenceMonthIndex - 3, referenceMonthIndex) : [];
 
   const storeMap = new Map<string, TonyAnalyticsStore>();
   for (const row of rows) {
@@ -499,6 +515,11 @@ function buildTonyAnalyticsContext(rows: TonyVelocityRow[], referenceMonth?: str
     if (!locationMap.has(store.location)) locationMap.set(store.location, []);
     locationMap.get(store.location)!.push(store);
   }
+
+  const getPrior3Average = (store: TonyAnalyticsStore) => {
+    if (prior3Months.length !== 3) return 0;
+    return Math.round(prior3Months.reduce((sum, month) => sum + (store.months[month] || 0), 0) / 3);
+  };
 
   const locationSummaries: TonyAnalyticsArea[] = Array.from(locationMap.entries()).map(([location, locationStores]) => {
     const total = locationStores.length;
@@ -525,12 +546,8 @@ function buildTonyAnalyticsContext(rows: TonyVelocityRow[], referenceMonth?: str
   }).sort((a, b) => b.total - a.total);
 
   const decliningStores = stores.filter((s) => {
-    if (!lastMonth) return false;
+    if (!lastMonth || prior3Months.length !== 3) return false;
 
-    const referenceMonthIndex = effectiveMonths.indexOf(lastMonth);
-    if (referenceMonthIndex < 3) return false;
-
-    const prior3Months = effectiveMonths.slice(referenceMonthIndex - 3, referenceMonthIndex);
     const prior3Average = prior3Months.reduce((sum, month) => sum + (s.months[month] || 0), 0) / 3;
     const referenceMonthCases = s.months[lastMonth] || 0;
 
@@ -538,19 +555,15 @@ function buildTonyAnalyticsContext(rows: TonyVelocityRow[], referenceMonth?: str
   }).sort((a, b) => {
     const aReferenceCases = a.months[lastMonth] || 0;
     const bReferenceCases = b.months[lastMonth] || 0;
-    const aIndex = effectiveMonths.indexOf(lastMonth);
-    const bIndex = effectiveMonths.indexOf(lastMonth);
-    const aPriorMonths = aIndex >= 3 ? effectiveMonths.slice(aIndex - 3, aIndex) : [];
-    const bPriorMonths = bIndex >= 3 ? effectiveMonths.slice(bIndex - 3, bIndex) : [];
-    const aPriorAverage = aPriorMonths.length ? aPriorMonths.reduce((sum, month) => sum + (a.months[month] || 0), 0) / aPriorMonths.length : 0;
-    const bPriorAverage = bPriorMonths.length ? bPriorMonths.reduce((sum, month) => sum + (b.months[month] || 0), 0) / bPriorMonths.length : 0;
+    const aPriorAverage = prior3Months.length ? prior3Months.reduce((sum, month) => sum + (a.months[month] || 0), 0) / prior3Months.length : 0;
+    const bPriorAverage = prior3Months.length ? prior3Months.reduce((sum, month) => sum + (b.months[month] || 0), 0) / prior3Months.length : 0;
 
     return (bPriorAverage - bReferenceCases) - (aPriorAverage - aReferenceCases);
   });
 
   const activeLastMonth = stores.filter((s) => (s.months[lastMonth] || 0) > 0).length;
 
-  return { allMonths, effectiveMonths, recentMonths, lastMonth, prevMonth, stores, locationSummaries, winBackCandidates, decliningStores, activeLastMonth };
+  return { allMonths, effectiveMonths, recentMonths, prior3Months, lastMonth, prevMonth, stores, locationSummaries, winBackCandidates, decliningStores, activeLastMonth, getPrior3Average };
 }
 
 function AnalyticsControls({
@@ -564,6 +577,10 @@ function AnalyticsControls({
   setAnalyticsLocation,
   analyticsDateMode,
   setAnalyticsDateMode,
+  analyticsFrom,
+  setAnalyticsFrom,
+  analyticsTo,
+  setAnalyticsTo,
 }: {
   ctx: ReturnType<typeof buildTonyAnalyticsContext>;
   rows: TonyVelocityRow[];
@@ -573,8 +590,12 @@ function AnalyticsControls({
   setAnalyticsSearch: (v: string) => void;
   analyticsLocation: string;
   setAnalyticsLocation: (v: string) => void;
-  analyticsDateMode: "lastMonth" | "past6Months";
-  setAnalyticsDateMode: (v: "lastMonth" | "past6Months") => void;
+  analyticsDateMode: AnalyticsDateMode;
+  setAnalyticsDateMode: (v: AnalyticsDateMode) => void;
+  analyticsFrom: string;
+  setAnalyticsFrom: (v: string) => void;
+  analyticsTo: string;
+  setAnalyticsTo: (v: string) => void;
 }) {
   const locationOptions = useMemo(() => ["All Locations", ...Array.from(new Set(rows.map((r) => normalize(r.location)).filter(Boolean))).sort((a, b) => a.localeCompare(b))], [rows]);
   if (!ctx) return null;
@@ -605,11 +626,24 @@ function AnalyticsControls({
           </div>
           <div className="min-w-[180px]">
             <label className="mb-1 block text-sm font-medium text-slate-700">Reference Month</label>
-            <select value={analyticsDateMode} onChange={(e) => setAnalyticsDateMode(e.target.value as "lastMonth" | "past6Months")} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
+            <select value={analyticsDateMode} onChange={(e) => setAnalyticsDateMode(e.target.value as AnalyticsDateMode)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none">
               <option value="lastMonth">Last Month ({ctx.lastMonth || "Latest"})</option>
               <option value="past6Months">Past 6 Months</option>
+              <option value="custom">Custom</option>
             </select>
           </div>
+          {analyticsDateMode === "custom" && (
+            <>
+              <div className="min-w-[160px]">
+                <label className="mb-1 block text-sm font-medium text-slate-700">From</label>
+                <input type="month" value={analyticsFrom} onChange={(e) => setAnalyticsFrom(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" />
+              </div>
+              <div className="min-w-[160px]">
+                <label className="mb-1 block text-sm font-medium text-slate-700">To</label>
+                <input type="month" value={analyticsTo} onChange={(e) => setAnalyticsTo(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none" />
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -700,7 +734,7 @@ function AnalyticsTab({ ctx, analyticsSection }: { ctx: ReturnType<typeof buildT
     <div className={`rounded-3xl border ${tone === "amber" ? "border-amber-200 bg-slate-50" : "border-slate-200 bg-white"} p-6 shadow-sm`}>
       <h3 className="mb-1 text-lg font-semibold text-slate-900">{title}</h3>
       <p className="mb-4 text-sm text-slate-500">{stores.length} stores found for the current filters.</p>
-      {stores.length === 0 ? <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">No stores found.</div> : <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white"><div className="max-h-[70vh] overflow-auto"><table className="min-w-full text-sm"><thead className="sticky top-0 z-10 bg-slate-50 shadow-sm"><tr><th className="px-4 py-3 text-left font-semibold text-slate-700">Store</th><th className="px-4 py-3 text-left font-semibold text-slate-700">Location</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Total Cases Through {ctx.lastMonth}</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Cases ({ctx.lastMonth})</th></tr></thead><tbody>{stores.map((s) => <tr key={`${s.location}-${s.store}`} className="border-t border-slate-200 hover:bg-slate-50"><td className="px-4 py-3 font-medium text-slate-900">{s.store}</td><td className="px-4 py-3 text-slate-700">{s.location}</td><td className="px-4 py-3 text-right font-bold text-slate-900">{s.total}</td><td className="px-4 py-3 text-right text-slate-700">{s.months[ctx.lastMonth] || 0}</td></tr>)}</tbody></table></div></div>}
+      {stores.length === 0 ? <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">No stores found.</div> : <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white"><div className="max-h-[70vh] overflow-auto"><table className="min-w-full text-sm"><thead className="sticky top-0 z-10 bg-slate-50 shadow-sm"><tr><th className="px-4 py-3 text-left font-semibold text-slate-700">Store</th><th className="px-4 py-3 text-left font-semibold text-slate-700">Location</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Average past 3 months</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Cases ({ctx.lastMonth})</th></tr></thead><tbody>{stores.map((s) => <tr key={`${s.location}-${s.store}`} className="border-t border-slate-200 hover:bg-slate-50"><td className="px-4 py-3 font-medium text-slate-900">{s.store}</td><td className="px-4 py-3 text-slate-700">{s.location}</td><td className="px-4 py-3 text-right font-bold text-slate-900">{ctx.getPrior3Average(s)}</td><td className="px-4 py-3 text-right text-slate-700">{s.months[ctx.lastMonth] || 0}</td></tr>)}</tbody></table></div></div>}
     </div>
   );
 
@@ -768,7 +802,9 @@ export default function TonyDashboardView() {
   const [analyticsSection, setAnalyticsSection] = useState<AnalyticsSection>("summary");
   const [analyticsSearch, setAnalyticsSearch] = useState("");
   const [analyticsLocation, setAnalyticsLocation] = useState("All Locations");
-  const [analyticsDateMode, setAnalyticsDateMode] = useState<"lastMonth" | "past6Months">("lastMonth");
+  const [analyticsDateMode, setAnalyticsDateMode] = useState<AnalyticsDateMode>("lastMonth");
+  const [analyticsFrom, setAnalyticsFrom] = useState(getPastMonthsInputValue(3));
+  const [analyticsTo, setAnalyticsTo] = useState(getLastMonthInputValue());
 
   const [rows, setRows] = useState<TonyVelocityRow[]>([]);
   const [locations, setLocations] = useState<TonyLocation[]>([]);
@@ -989,12 +1025,18 @@ export default function TonyDashboardView() {
   }, [rows, analyticsSearch, analyticsLocation]);
 
   const analyticsAvailableMonths = useMemo(() => Array.from(new Set(analyticsFilteredRows.map((r) => normalizeMonthLabel(r.month)))).sort(compareMonthLabelsAsc), [analyticsFilteredRows]);
-  const analyticsReferenceMonth = analyticsAvailableMonths[analyticsAvailableMonths.length - 1] || "";
+  const analyticsSelectedMonths = useMemo(() => {
+    if (analyticsDateMode === "custom") {
+      return buildMonthRange(analyticsFrom, analyticsTo).map(normalizeMonthLabel);
+    }
+    if (analyticsDateMode === "past6Months") return analyticsAvailableMonths.slice(-6);
+    return analyticsAvailableMonths.slice(-1);
+  }, [analyticsDateMode, analyticsAvailableMonths, analyticsFrom, analyticsTo]);
+  const analyticsReferenceMonth = analyticsSelectedMonths[analyticsSelectedMonths.length - 1] || analyticsAvailableMonths[analyticsAvailableMonths.length - 1] || "";
   const analyticsRowsByDate = useMemo(() => {
-    if (analyticsDateMode === "lastMonth") return analyticsFilteredRows;
-    const selected = new Set(analyticsAvailableMonths.slice(-6));
-    return analyticsFilteredRows.filter((row) => selected.has(normalizeMonthLabel(row.month)));
-  }, [analyticsDateMode, analyticsFilteredRows, analyticsAvailableMonths]);
+    if (!analyticsReferenceMonth) return analyticsFilteredRows;
+    return analyticsFilteredRows.filter((row) => getMonthSortValue(normalizeMonthLabel(row.month)) <= getMonthSortValue(analyticsReferenceMonth));
+  }, [analyticsFilteredRows, analyticsReferenceMonth]);
 
   const analyticsCtx = useMemo(() => buildTonyAnalyticsContext(analyticsRowsByDate, analyticsReferenceMonth), [analyticsRowsByDate, analyticsReferenceMonth]);
 
@@ -1040,6 +1082,10 @@ export default function TonyDashboardView() {
                 setAnalyticsLocation={setAnalyticsLocation}
                 analyticsDateMode={analyticsDateMode}
                 setAnalyticsDateMode={setAnalyticsDateMode}
+                analyticsFrom={analyticsFrom}
+                setAnalyticsFrom={setAnalyticsFrom}
+                analyticsTo={analyticsTo}
+                setAnalyticsTo={setAnalyticsTo}
               />
             ) : (
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
