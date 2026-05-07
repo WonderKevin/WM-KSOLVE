@@ -821,19 +821,43 @@ function buildAnalyticsContext(
 
   const decliningStores = stores
     .filter((s) => {
-      const r = recentMonths;
-      if (r.length < 4) return false;
-      const prev2avg =
-        ((s.monthCases[r[r.length - 4]] || 0) +
-          (s.monthCases[r[r.length - 3]] || 0)) /
-        2;
-      const last2avg =
-        ((s.monthCases[r[r.length - 2]] || 0) +
-          (s.monthCases[r[r.length - 1]] || 0)) /
-        2;
-      return prev2avg > 5 && last2avg < prev2avg * 0.5;
+      if (!lastMonth) return false;
+
+      const referenceMonthIndex = effectiveMonths.indexOf(lastMonth);
+      if (referenceMonthIndex < 3) return false;
+
+      const prior3Months = effectiveMonths.slice(
+        referenceMonthIndex - 3,
+        referenceMonthIndex,
+      );
+      const prior3Average =
+        prior3Months.reduce((sum, month) => sum + (s.monthCases[month] || 0), 0) /
+        3;
+      const referenceMonthCases = s.monthCases[lastMonth] || 0;
+
+      return prior3Average > 0 && referenceMonthCases <= prior3Average * 0.5;
     })
-    .sort((a, b) => b.total - a.total);
+    .sort((a, b) => {
+      const referenceMonthIndex = effectiveMonths.indexOf(lastMonth);
+      const prior3Months =
+        referenceMonthIndex >= 3
+          ? effectiveMonths.slice(referenceMonthIndex - 3, referenceMonthIndex)
+          : [];
+
+      const aPrior3Average = prior3Months.length
+        ? prior3Months.reduce((sum, month) => sum + (a.monthCases[month] || 0), 0) /
+          prior3Months.length
+        : 0;
+      const bPrior3Average = prior3Months.length
+        ? prior3Months.reduce((sum, month) => sum + (b.monthCases[month] || 0), 0) /
+          prior3Months.length
+        : 0;
+
+      const aDrop = aPrior3Average - (a.monthCases[lastMonth] || 0);
+      const bDrop = bPrior3Average - (b.monthCases[lastMonth] || 0);
+
+      return bDrop - aDrop;
+    });
 
   const topLastMonth = stores
     .filter((s) => (s.monthCases[lastMonth] || 0) > 0)
@@ -866,6 +890,31 @@ function buildAnalyticsContext(
     stores,
     getInactiveMonthCount,
   };
+}
+
+
+function getPrior3Months(ctx: NonNullable<ReturnType<typeof buildAnalyticsContext>>) {
+  const referenceIndex = ctx.effectiveMonths.indexOf(ctx.lastMonth);
+  if (referenceIndex < 3) return [];
+  return ctx.effectiveMonths.slice(referenceIndex - 3, referenceIndex);
+}
+
+function getPrior3AverageForStore(
+  store: {
+    monthCases: Record<string, number>;
+  },
+  ctx: NonNullable<ReturnType<typeof buildAnalyticsContext>>,
+) {
+  const prior3 = getPrior3Months(ctx);
+  if (!prior3.length) return 0;
+  const total = prior3.reduce((sum, month) => sum + (store.monthCases[month] || 0), 0);
+  return Math.round(total / prior3.length);
+}
+
+function getPrior3AverageLabel(ctx: NonNullable<ReturnType<typeof buildAnalyticsContext>>) {
+  const prior3 = getPrior3Months(ctx);
+  if (!prior3.length) return "Average past 3 months";
+  return `Average past 3 months (${prior3.join(", ")})`;
 }
 
 function buildAIPrompt(
@@ -1148,8 +1197,8 @@ function AnalyticsHeader({
   setAnalyticsSection: (section: AnalyticsSection) => void;
   retailerFilter: string;
   setRetailerFilter: (value: string) => void;
-  analyticsDateMode: "lastMonth" | "custom";
-  setAnalyticsDateMode: (value: "lastMonth" | "custom") => void;
+  analyticsDateMode: "lastMonth" | "past6Months" | "custom";
+  setAnalyticsDateMode: (value: "lastMonth" | "past6Months" | "custom") => void;
   analyticsFromMonth: string;
   setAnalyticsFromMonth: (value: string) => void;
   analyticsToMonth: string;
@@ -1236,13 +1285,14 @@ function AnalyticsHeader({
               <select
                 value={analyticsDateMode}
                 onChange={(e) =>
-                  setAnalyticsDateMode(e.target.value as "lastMonth" | "custom")
+                  setAnalyticsDateMode(e.target.value as "lastMonth" | "past6Months" | "custom")
                 }
                 className="h-9 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400"
               >
                 <option value="lastMonth">
                   Last Month ({defaultLastMonth})
                 </option>
+                <option value="past6Months">Past 6 Months</option>
                 <option value="custom">Custom</option>
               </select>
             </div>
@@ -1781,7 +1831,7 @@ function AnalyticsTab({
         </span>
       </h3>
       <p className="mb-4 text-sm text-slate-600">
-        Volume dropped 50%+ comparing last 2 months vs prior 2 months.
+        Volume dropped 50%+ vs average past 3 months before the reference month.
       </p>
       {ctx.decliningStores.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-sm text-slate-600">
@@ -1802,7 +1852,7 @@ function AnalyticsTab({
                   Area
                 </th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-900">
-                  Total Cases
+                  Average past 3 months
                 </th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-900">
                   Cases ({ctx.lastMonth})
@@ -1822,8 +1872,8 @@ function AnalyticsTab({
                   <td className="px-4 py-2.5 text-slate-600">
                     {s.retailerArea}
                   </td>
-                  <td className="px-4 py-2.5 text-right font-bold text-slate-600">
-                    {s.total}
+                  <td className="px-4 py-2.5 text-right font-bold text-slate-600" title={getPrior3AverageLabel(ctx)}>
+                    {getPrior3AverageForStore(s, ctx)}
                   </td>
                   <td className="px-4 py-2.5 text-right text-slate-700">
                     {s.monthCases[ctx.lastMonth] || 0}
@@ -1910,7 +1960,7 @@ export default function KeheDashboardView() {
     useState("All Retailers");
   const [analyticsSearchQuery, setAnalyticsSearchQuery] = useState("");
   const [analyticsDateMode, setAnalyticsDateMode] = useState<
-    "lastMonth" | "custom"
+    "lastMonth" | "past6Months" | "custom"
   >("lastMonth");
   const [analyticsFromMonth, setAnalyticsFromMonth] = useState(
     getPastMonthsInputValue(2),
@@ -2014,6 +2064,7 @@ export default function KeheDashboardView() {
 
   const analyticsSelectedMonths = useMemo(() => {
     if (analyticsDateMode === "lastMonth") return analyticsAvailableMonths;
+    if (analyticsDateMode === "past6Months") return analyticsAvailableMonths.slice(-6);
     return buildMonthRange(analyticsFromMonth, analyticsToMonth).map(
       normalizeMonthLabel,
     );
@@ -2026,11 +2077,24 @@ export default function KeheDashboardView() {
 
   const analyticsRowsByDate = useMemo(() => {
     if (analyticsDateMode === "lastMonth") return analyticsFilteredRows;
-    const selected = new Set(analyticsSelectedMonths);
-    return analyticsFilteredRows.filter((row) =>
-      selected.has(normalizeMonthLabel(row.month)),
+
+    const referenceMonth =
+      analyticsSelectedMonths[analyticsSelectedMonths.length - 1] ??
+      analyticsDefaultLastMonth;
+
+    if (!referenceMonth) return analyticsFilteredRows;
+
+    return analyticsFilteredRows.filter(
+      (row) =>
+        getMonthSortValue(normalizeMonthLabel(row.month)) <=
+        getMonthSortValue(referenceMonth),
     );
-  }, [analyticsDateMode, analyticsFilteredRows, analyticsSelectedMonths]);
+  }, [
+    analyticsDateMode,
+    analyticsFilteredRows,
+    analyticsSelectedMonths,
+    analyticsDefaultLastMonth,
+  ]);
 
   const analyticsLastMonth = useMemo(() => {
     if (analyticsDateMode === "lastMonth") return analyticsDefaultLastMonth;
