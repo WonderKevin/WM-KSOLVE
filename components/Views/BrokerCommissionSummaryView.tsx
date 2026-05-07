@@ -77,9 +77,30 @@ type RetailerBlock = {
   details: DetailLine[];
 };
 
+type InvoiceAllocationOption = {
+  invoice: string;
+  krogerAmount: number;
+};
+
+type TransferAlert = {
+  key: string;
+  month: string;
+  targetRetailer: Exclude<RetailerName, "">;
+  transferAmount: number;
+  allocatedAmount: number;
+  unallocatedAmount: number;
+  firstInvoice: string;
+  firstInvoiceAmount: number;
+  selectedInvoices: string[];
+  invoiceOptions: InvoiceAllocationOption[];
+};
+
+type TransferAllocationMap = Record<string, string[]>;
+
 type MonthSummary = {
   month: string;
   retailers: RetailerBlock[];
+  transferAlerts: TransferAlert[];
   grandWmInvoiceTotal: number;
   grandDeductionsTotal: number;
   grandNetTotal: number;
@@ -518,6 +539,11 @@ export default function BrokerCommissionSummaryView() {
   const [expandedInvoiceRows, setExpandedInvoiceRows] = useState<
     Record<string, boolean>
   >({});
+  const [transferAllocations, setTransferAllocations] =
+    useState<TransferAllocationMap>({});
+  const [allocationModal, setAllocationModal] = useState<TransferAlert | null>(
+    null
+  );
 
   const load = useCallback(async (isManualRefresh = false) => {
     if (isManualRefresh) {
@@ -731,6 +757,7 @@ export default function BrokerCommissionSummaryView() {
         monthMap.set(month, {
           month,
           retailers: [],
+          transferAlerts: [],
           grandWmInvoiceTotal: 0,
           grandDeductionsTotal: 0,
           grandNetTotal: 0,
@@ -799,28 +826,103 @@ export default function BrokerCommissionSummaryView() {
         }, 0);
       };
 
-      const applyVelocityTransferFromKroger = (targetRetailer: RetailerName) => {
+      const getKrogerInvoiceOptions = (): InvoiceAllocationOption[] => {
+        const options: InvoiceAllocationOption[] = [];
+
+        for (const [key, amount] of wmInvoiceTotalsByMonthInvoiceRetailer.entries()) {
+          const [keyMonth, keyInvoice, keyRetailer] = key.split("__") as [
+            string,
+            string,
+            RetailerName,
+          ];
+
+          if (keyMonth !== month || keyRetailer !== "Kroger") continue;
+          if (amount <= 0) continue;
+
+          options.push({ invoice: keyInvoice, krogerAmount: round2(amount) });
+        }
+
+        return options.sort((a, b) => a.invoice.localeCompare(b.invoice));
+      };
+
+      const applyVelocityTransferFromKroger = (
+        targetRetailer: Exclude<RetailerName, "">
+      ) => {
         if (!targetRetailer || targetRetailer === "Kroger") return;
 
         const hpCases = getHpCasesForRetailer(targetRetailer);
         const transferAmount = round2(hpCases * INFRA_HP_CASE_RATE);
         if (transferAmount <= 0) return;
 
-        const krogerKey = `${month}__${firstInvoice}__Kroger`;
-        const targetKey = `${month}__${firstInvoice}__${targetRetailer}`;
-
-        const krogerAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(krogerKey) ?? 0;
-        const targetAmount = wmInvoiceTotalsByMonthInvoiceRetailer.get(targetKey) ?? 0;
-
-        wmInvoiceTotalsByMonthInvoiceRetailer.set(
-          krogerKey,
-          round2(Math.max(krogerAmount - transferAmount, 0))
+        const allocationKey = `${month}__${targetRetailer}`;
+        const invoiceOptions = getKrogerInvoiceOptions();
+        const firstInvoiceAmount = round2(
+          invoiceOptions.find((option) => option.invoice === firstInvoice)?.krogerAmount ?? 0
         );
 
-        wmInvoiceTotalsByMonthInvoiceRetailer.set(
-          targetKey,
-          round2(targetAmount + transferAmount)
-        );
+        const configuredInvoices = transferAllocations[allocationKey];
+        const selectedInvoices =
+          configuredInvoices && configuredInvoices.length > 0
+            ? configuredInvoices.filter((invoice) =>
+                invoiceOptions.some((option) => option.invoice === invoice)
+              )
+            : firstInvoice
+              ? [firstInvoice]
+              : [];
+
+        let remaining = transferAmount;
+        let allocatedAmount = 0;
+
+        for (const invoice of selectedInvoices) {
+          if (remaining <= 0) break;
+
+          const krogerKey = `${month}__${invoice}__Kroger`;
+          const targetKey = `${month}__${invoice}__${targetRetailer}`;
+          const krogerAmount = round2(
+            wmInvoiceTotalsByMonthInvoiceRetailer.get(krogerKey) ?? 0
+          );
+
+          if (krogerAmount <= 0) continue;
+
+          const allocationAmount = round2(Math.min(krogerAmount, remaining));
+          if (allocationAmount <= 0) continue;
+
+          wmInvoiceTotalsByMonthInvoiceRetailer.set(
+            krogerKey,
+            round2(krogerAmount - allocationAmount)
+          );
+
+          wmInvoiceTotalsByMonthInvoiceRetailer.set(
+            targetKey,
+            round2(
+              (wmInvoiceTotalsByMonthInvoiceRetailer.get(targetKey) ?? 0) +
+                allocationAmount
+            )
+          );
+
+          allocatedAmount = round2(allocatedAmount + allocationAmount);
+          remaining = round2(remaining - allocationAmount);
+        }
+
+        const unallocatedAmount = round2(Math.max(remaining, 0));
+        const usedDefaultFirstInvoice = !configuredInvoices || configuredInvoices.length === 0;
+        const exceedsFirstInvoice = transferAmount > firstInvoiceAmount;
+
+        if (unallocatedAmount > 0 || (usedDefaultFirstInvoice && exceedsFirstInvoice)) {
+          const monthSummary = ensureMonth(month);
+          monthSummary.transferAlerts.push({
+            key: allocationKey,
+            month,
+            targetRetailer,
+            transferAmount,
+            allocatedAmount,
+            unallocatedAmount,
+            firstInvoice,
+            firstInvoiceAmount,
+            selectedInvoices,
+            invoiceOptions,
+          });
+        }
       };
 
       applyVelocityTransferFromKroger("INFRA & Others");
@@ -957,7 +1059,36 @@ export default function BrokerCommissionSummaryView() {
     return Array.from(monthMap.values()).sort(
       (a, b) => parseMonthOrder(b.month) - parseMonthOrder(a.month)
     );
-  }, [rows, velocityRows, selectedMonth]);
+  }, [rows, velocityRows, selectedMonth, transferAllocations]);
+
+  const toggleAllocationInvoice = (alert: TransferAlert, invoice: string) => {
+    setTransferAllocations((prev) => {
+      const current = prev[alert.key]?.length ? prev[alert.key] : alert.selectedInvoices;
+      const exists = current.includes(invoice);
+      const nextInvoices = exists
+        ? current.filter((item) => item !== invoice)
+        : [...current, invoice];
+
+      return {
+        ...prev,
+        [alert.key]: nextInvoices,
+      };
+    });
+  };
+
+  const selectAllAllocationInvoices = (alert: TransferAlert) => {
+    setTransferAllocations((prev) => ({
+      ...prev,
+      [alert.key]: alert.invoiceOptions.map((option) => option.invoice),
+    }));
+  };
+
+  const resetAllocationToFirstInvoice = (alert: TransferAlert) => {
+    setTransferAllocations((prev) => ({
+      ...prev,
+      [alert.key]: alert.firstInvoice ? [alert.firstInvoice] : [],
+    }));
+  };
 
   return (
     <div className="space-y-6">
@@ -1070,6 +1201,38 @@ export default function BrokerCommissionSummaryView() {
 
               {isExpanded && (
                 <div className="space-y-4 border-t px-5 py-5">
+                  {monthSummary.transferAlerts.length > 0 && (
+                    <div className="space-y-3">
+                      {monthSummary.transferAlerts.map((alert) => (
+                        <div
+                          key={alert.key}
+                          className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3"
+                        >
+                          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                            <div>
+                              <div className="font-semibold text-amber-900">
+                                {alert.targetRetailer} transfer exceeds the selected Kroger invoice allocation
+                              </div>
+                              <div className="mt-1 text-sm text-amber-800">
+                                Transfer needed: {formatMoney(alert.transferAmount)}. First invoice {alert.firstInvoice || "—"} has {formatMoney(alert.firstInvoiceAmount)} available.
+                                {alert.unallocatedAmount > 0
+                                  ? ` ${formatMoney(alert.unallocatedAmount)} is still unallocated.`
+                                  : " Select additional invoices if you want to spread this transfer."}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setAllocationModal(alert)}
+                              className="rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100"
+                            >
+                              Allocate to invoices
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {monthSummary.retailers.map((block) => (
                     <div
                       key={`${monthSummary.month}-${block.retailer}`}
@@ -1191,6 +1354,124 @@ export default function BrokerCommissionSummaryView() {
             </div>
           );
         })
+      )}
+
+      {allocationModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">
+                  Allocate {allocationModal.targetRetailer} Transfer
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Select the Kroger WM invoices for {formatMonthShort(allocationModal.month)}.
+                  The transfer will deduct from selected Kroger invoices in invoice-number order and move the same amount to {allocationModal.targetRetailer}, so the monthly WM Invoice total stays unchanged.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAllocationModal(null)}
+                className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="rounded-2xl border border-slate-200 p-3">
+                <div className="text-xs text-slate-500">Transfer Needed</div>
+                <div className="mt-1 font-semibold text-slate-900">
+                  {formatMoney(allocationModal.transferAmount)}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 p-3">
+                <div className="text-xs text-slate-500">Currently Allocated</div>
+                <div className="mt-1 font-semibold text-emerald-700">
+                  {formatMoney(allocationModal.allocatedAmount)}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 p-3">
+                <div className="text-xs text-slate-500">Unallocated</div>
+                <div className={`mt-1 font-semibold ${allocationModal.unallocatedAmount > 0 ? "text-red-600" : "text-slate-900"}`}>
+                  {formatMoney(allocationModal.unallocatedAmount)}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => selectAllAllocationInvoices(allocationModal)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Select all invoices
+              </button>
+              <button
+                type="button"
+                onClick={() => resetAllocationToFirstInvoice(allocationModal)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Reset to first invoice
+              </button>
+            </div>
+
+            <div className="mt-4 max-h-[420px] overflow-auto rounded-2xl border border-slate-200">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Use</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Kroger WM Invoice</th>
+                    <th className="px-4 py-3 text-right font-semibold text-slate-700">Available Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allocationModal.invoiceOptions.map((option) => {
+                    const selected =
+                      (transferAllocations[allocationModal.key]?.length
+                        ? transferAllocations[allocationModal.key]
+                        : allocationModal.selectedInvoices
+                      ).includes(option.invoice);
+
+                    return (
+                      <tr key={option.invoice} className="border-t border-slate-100">
+                        <td className="px-4 py-3">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleAllocationInvoice(allocationModal, option.invoice)}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                        </td>
+                        <td className="px-4 py-3 font-medium text-slate-900">
+                          WM Invoice {option.invoice}
+                          {option.invoice === allocationModal.firstInvoice && (
+                            <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                              First invoice
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right font-semibold text-slate-700">
+                          {formatMoney(option.krogerAmount)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setAllocationModal(null)}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
