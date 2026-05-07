@@ -525,12 +525,28 @@ function buildTonyAnalyticsContext(rows: TonyVelocityRow[], referenceMonth?: str
   }).sort((a, b) => b.total - a.total);
 
   const decliningStores = stores.filter((s) => {
-    const r = recentMonths;
-    if (r.length < 4) return false;
-    const prev2avg = ((s.months[r[r.length - 4]] || 0) + (s.months[r[r.length - 3]] || 0)) / 2;
-    const last2avg = ((s.months[r[r.length - 2]] || 0) + (s.months[r[r.length - 1]] || 0)) / 2;
-    return prev2avg > 0 && last2avg < prev2avg * 0.5;
-  }).sort((a, b) => b.total - a.total);
+    if (!lastMonth) return false;
+
+    const referenceMonthIndex = effectiveMonths.indexOf(lastMonth);
+    if (referenceMonthIndex < 3) return false;
+
+    const prior3Months = effectiveMonths.slice(referenceMonthIndex - 3, referenceMonthIndex);
+    const prior3Average = prior3Months.reduce((sum, month) => sum + (s.months[month] || 0), 0) / 3;
+    const referenceMonthCases = s.months[lastMonth] || 0;
+
+    return prior3Average > 0 && referenceMonthCases <= prior3Average * 0.5;
+  }).sort((a, b) => {
+    const aReferenceCases = a.months[lastMonth] || 0;
+    const bReferenceCases = b.months[lastMonth] || 0;
+    const aIndex = effectiveMonths.indexOf(lastMonth);
+    const bIndex = effectiveMonths.indexOf(lastMonth);
+    const aPriorMonths = aIndex >= 3 ? effectiveMonths.slice(aIndex - 3, aIndex) : [];
+    const bPriorMonths = bIndex >= 3 ? effectiveMonths.slice(bIndex - 3, bIndex) : [];
+    const aPriorAverage = aPriorMonths.length ? aPriorMonths.reduce((sum, month) => sum + (a.months[month] || 0), 0) / aPriorMonths.length : 0;
+    const bPriorAverage = bPriorMonths.length ? bPriorMonths.reduce((sum, month) => sum + (b.months[month] || 0), 0) / bPriorMonths.length : 0;
+
+    return (bPriorAverage - bReferenceCases) - (aPriorAverage - aReferenceCases);
+  });
 
   const activeLastMonth = stores.filter((s) => (s.months[lastMonth] || 0) > 0).length;
 
