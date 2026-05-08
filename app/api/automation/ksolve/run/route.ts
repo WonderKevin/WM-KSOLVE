@@ -6,10 +6,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { startDate, endDate } = body;
 
-    await runKsolveAutomation({
-      startDate,
-      endDate,
-    });
+    await runKsolveAutomation();
 
     return NextResponse.json({
       ok: true,
