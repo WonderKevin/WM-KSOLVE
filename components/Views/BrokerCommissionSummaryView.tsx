@@ -35,7 +35,6 @@ type DatasetDbRow = {
   upc: string | null;
   item: string | null;
   cust_name: string | null;
-  retailer: string | null;
   amt: number | null;
 };
 
@@ -400,7 +399,7 @@ async function fetchAllDatasetRows(): Promise<DatasetDbRow[]> {
   while (keepGoing) {
     const { data, error } = await supabase
       .from("broker_commission_datasets")
-      .select("id, month, check_date, invoice, type, upc, item, cust_name, retailer, amt")
+      .select("id, month, check_date, invoice, type, upc, item, cust_name, amt")
       .order("check_date", { ascending: false, nullsFirst: false })
       .order("invoice", { ascending: false })
       .range(from, from + PAGE_SIZE - 1);
@@ -701,8 +700,6 @@ export default function BrokerCommissionSummaryView() {
         locations
       );
       const override = overrides.get(r.id) ?? "";
-      const datasetRetailer = categorizeRetailerName(r.retailer ?? "");
-
       const rawMonth = String(r.month ?? "").trim();
       const rawCheckDate = String(r.check_date ?? "").trim();
 
@@ -720,7 +717,7 @@ export default function BrokerCommissionSummaryView() {
         item: r.item ?? "",
         cust_name: r.cust_name ?? "",
         amt: Number(r.amt ?? 0),
-        retailer: (override || datasetRetailer || inferred || "") as RetailerName,
+        retailer: (override || inferred || "") as RetailerName,
       };
     });
 
@@ -1011,7 +1008,7 @@ export default function BrokerCommissionSummaryView() {
         }
       }
 
-      const deductionAmount = -Math.abs(row.amt);
+      const deductionAmount = round2(-Math.abs(Number(row.amt ?? 0)));
       block.deductionsTotal = round2(block.deductionsTotal + deductionAmount);
       block.details.push({
         label: typeLabel,
