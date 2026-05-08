@@ -35,8 +35,8 @@ type DatasetDbRow = {
   upc: string | null;
   item: string | null;
   cust_name: string | null;
+  retailer: string | null;
   amt: number | null;
-  retailer?: string | null;
 };
 
 type InvoiceRow = {
@@ -256,12 +256,6 @@ function categorizeRetailerName(rawRetailer: string): RetailerName {
   return "INFRA & Others";
 }
 
-function normalizeStoredRetailer(rawRetailer: string | null | undefined): RetailerName {
-  const raw = String(rawRetailer ?? "").trim();
-  if (!raw) return "";
-  return categorizeRetailerName(raw);
-}
-
 function inferRetailer(
   custName: string,
   itemName: string,
@@ -406,7 +400,7 @@ async function fetchAllDatasetRows(): Promise<DatasetDbRow[]> {
   while (keepGoing) {
     const { data, error } = await supabase
       .from("broker_commission_datasets")
-      .select("id, month, check_date, invoice, type, upc, item, cust_name, amt, retailer")
+      .select("id, month, check_date, invoice, type, upc, item, cust_name, retailer, amt")
       .order("check_date", { ascending: false, nullsFirst: false })
       .order("invoice", { ascending: false })
       .range(from, from + PAGE_SIZE - 1);
@@ -707,7 +701,7 @@ export default function BrokerCommissionSummaryView() {
         locations
       );
       const override = overrides.get(r.id) ?? "";
-      const storedRetailer = normalizeStoredRetailer(r.retailer);
+      const datasetRetailer = categorizeRetailerName(r.retailer ?? "");
 
       const rawMonth = String(r.month ?? "").trim();
       const rawCheckDate = String(r.check_date ?? "").trim();
@@ -726,7 +720,7 @@ export default function BrokerCommissionSummaryView() {
         item: r.item ?? "",
         cust_name: r.cust_name ?? "",
         amt: Number(r.amt ?? 0),
-        retailer: (override || storedRetailer || inferred || "") as RetailerName,
+        retailer: (override || datasetRetailer || inferred || "") as RetailerName,
       };
     });
 
