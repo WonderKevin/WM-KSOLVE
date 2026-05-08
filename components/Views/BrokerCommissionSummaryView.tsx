@@ -220,11 +220,40 @@ function directRetailerFromCustomer(custName: string): RetailerName {
 
   if (!customer) return "";
 
+  // Kroger deductions can come through under Kroger-owned banners, not only
+  // customer names that literally start with "Kroger". These direct matches
+  // keep the Broker Commission Summary aligned with the uploaded data set
+  // retailer buckets, including April '26 Customer Spoils Allowance.
+  const krogerBannerStarts = [
+    "KROGER ",
+    "KRO ",
+    "DILLONS ",
+    "PICK N SAVE ",
+    "METRO MARKET ",
+    "MARIANO S ",
+    "MARIANOS ",
+    "RALPHS ",
+    "SMITH S ",
+    "SMITHS ",
+    "KING SOOPERS ",
+    "CITY MARKET ",
+    "FRYS ",
+    "FRY S ",
+    "FOOD 4 LESS ",
+    "FRED MEYER ",
+    "QFC ",
+    "HARRIS TEETER ",
+    "ROUNDY S ",
+    "MJR CAPITAL CITY MKT ",
+    "MEIJER BRIDGE ST ",
+  ];
+
   if (
-    customer.startsWith("KROGER ") ||
-    customer.startsWith("KRO ") ||
+    krogerBannerStarts.some((prefix) => customer.startsWith(prefix)) ||
     customer.includes(" KROGER ") ||
-    customer.includes(" KRO ")
+    customer.includes(" KRO ") ||
+    customer.endsWith(" KGR") ||
+    customer.includes(" KGR ")
   ) {
     return "Kroger";
   }
