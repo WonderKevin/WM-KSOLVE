@@ -1,8 +1,16 @@
 import { chromium } from "@playwright/test";
 
-export async function runKsolveAutomation() {
+type RunKsolveAutomationInput = {
+  startDate: string;
+  endDate: string;
+};
+
+export async function runKsolveAutomation({
+  startDate,
+  endDate,
+}: RunKsolveAutomationInput) {
   const browser = await chromium.launch({
-    headless: false, // keep visible for now
+    headless: false, // keep visible for manual login while testing
   });
 
   const context = await browser.newContext({
@@ -11,14 +19,20 @@ export async function runKsolveAutomation() {
 
   const page = await context.newPage();
 
-  await page.goto("https://connect.kehe.com/#/dashboard");
+  try {
+    await page.goto("https://connect.kehe.com/#/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
 
-  console.log("Manual step required: login + navigate to K-Solve");
+    console.log("Manual step required: login + navigate to K-Solve");
+    console.log(`Selected check date range: ${startDate} to ${endDate}`);
 
-  // TEMP: pause so you can login manually
-  await page.waitForTimeout(60000);
+    // TEMP: pause so you can login manually and navigate to K-Solve
+    await page.waitForTimeout(60000);
 
-  console.log("Automation placeholder running...");
-
-  await browser.close();
+    console.log("K-Solve automation placeholder running...");
+    console.log(`Use these dates in Playwright: ${startDate} to ${endDate}`);
+  } finally {
+    await browser.close();
+  }
 }
