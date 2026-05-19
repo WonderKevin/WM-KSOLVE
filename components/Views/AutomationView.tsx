@@ -28,6 +28,14 @@ export default function AutomationView() {
   const [scheduleDay, setScheduleDay] = useState("monday");
   const [scheduleTime, setScheduleTime] = useState("08:00");
 
+  const downloadAll = () => {
+    documents.forEach((document, index) => {
+      setTimeout(() => {
+        window.open(document.DocumentLink, "_blank", "noopener,noreferrer");
+      }, index * 500);
+    });
+  };
+
   const runAutomation = async () => {
     if (!startDate || !endDate) {
       alert("Please select a start date and end date.");
@@ -56,13 +64,16 @@ export default function AutomationView() {
         throw new Error(result?.message || "Automation failed.");
       }
 
-      const nextDocuments = result?.result?.documents || [];
+      const nextDocuments = (result?.result?.documents || []).filter(
+        (document: KsolveDocument) =>
+          document.DocumentType?.toLowerCase().trim() !== "supporting document"
+      );
+
       setDocuments(nextDocuments);
 
       alert(result?.message || "K-Solve automation completed.");
     } catch (error) {
       console.error(error);
-
       alert(
         error instanceof Error
           ? error.message
@@ -136,15 +147,29 @@ export default function AutomationView() {
             </label>
           </div>
 
-          <Button
-            type="button"
-            className="mt-6 rounded-2xl bg-slate-900 hover:bg-slate-800"
-            onClick={runAutomation}
-            disabled={running}
-          >
-            <Play className="mr-2 h-4 w-4" />
-            {running ? "Running..." : "Run"}
-          </Button>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Button
+              type="button"
+              className="rounded-2xl bg-slate-900 hover:bg-slate-800"
+              onClick={runAutomation}
+              disabled={running}
+            >
+              <Play className="mr-2 h-4 w-4" />
+              {running ? "Running..." : "Run"}
+            </Button>
+
+            {documents.length > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-2xl border-slate-200"
+                onClick={downloadAll}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Download all
+              </Button>
+            )}
+          </div>
 
           {documents.length > 0 && (
             <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">

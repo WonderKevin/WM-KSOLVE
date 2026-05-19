@@ -1,3 +1,6 @@
+import fs from "fs";
+import path from "path";
+
 type KsolveSearchRow = {
   Id: number;
   InvoiceNumber: string;
@@ -21,12 +24,12 @@ type RunKsolveAutomationInput = {
   endDate: string;
 };
 
-function formatKsolveDate(date: Date) {
-  return `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`;
-}
-
 function parseIsoDate(date: string) {
   return new Date(`${date}T00:00:00`);
+}
+
+function formatKsolveDate(date: Date) {
+  return `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`;
 }
 
 function subtractDays(date: Date, days: number) {
@@ -60,6 +63,42 @@ function getKsolveHeaders() {
     "user-agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
   };
+}
+
+async function downloadFile(
+  url: string,
+  filename: string
+) {
+  const downloadsDir =
+    "C:\\Users\\admin\\Desktop\\wm-ksolve-app\\downloads";
+
+  if (!fs.existsSync(downloadsDir)) {
+    fs.mkdirSync(downloadsDir, { recursive: true });
+  }
+
+  const safeFilename = filename.replace(/[<>:"/\\|?*]/g, "_");
+
+  const filePath = path.join(downloadsDir, safeFilename);
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: getKsolveHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed downloading file (${response.status})`
+    );
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  fs.writeFileSync(filePath, buffer);
+
+  console.log(`Downloaded file: ${filePath}`);
+
+  return filePath;
 }
 
 export async function runKsolveAutomation({
@@ -96,6 +135,7 @@ export async function runKsolveAutomation({
 
   if (!searchResponse.ok) {
     const errorText = await searchResponse.text();
+
     throw new Error(
       `K-Solve search failed (${searchResponse.status}): ${errorText}`
     );
@@ -111,6 +151,7 @@ export async function runKsolveAutomation({
   console.log(JSON.stringify(matchingRows, null, 2));
 
   const documents: KsolveDocument[] = [];
+  const downloadedFiles: string[] = [];
 
   for (const row of matchingRows) {
     if (!row.HasDocuments) continue;
@@ -124,18 +165,47 @@ export async function runKsolveAutomation({
 
     if (!documentsResponse.ok) {
       const errorText = await documentsResponse.text();
+
       console.warn(
         `K-Solve document lookup failed for row ${row.Id} (${documentsResponse.status}): ${errorText}`
       );
+
       continue;
     }
 
-    const rowDocuments = (await documentsResponse.json()) as KsolveDocument[];
-    documents.push(...rowDocuments);
+    const rowDocuments =
+      (await documentsResponse.json()) as KsolveDocument[];
+
+    const filteredDocuments = rowDocuments.filter(
+      (document) =>
+        document.DocumentType?.toLowerCase().trim() !==
+        "supporting document"
+    );
+
+    documents.push(...filteredDocuments);
+
+    for (const document of filteredDocuments) {
+      try {
+        const downloadedPath = await downloadFile(
+          document.DocumentLink,
+          document.DocumentDisplayName
+        );
+
+        downloadedFiles.push(downloadedPath);
+      } catch (error) {
+        console.error(
+          `Failed downloading ${document.DocumentDisplayName}:`,
+          error
+        );
+      }
+    }
   }
 
   console.log("K-Solve documents found:");
   console.log(JSON.stringify(documents, null, 2));
+
+  console.log("Downloaded files:");
+  console.log(JSON.stringify(downloadedFiles, null, 2));
 
   return {
     startDate,
@@ -146,5 +216,6 @@ export async function runKsolveAutomation({
     documentCount: documents.length,
     searchRows: matchingRows,
     documents,
+    downloadedFiles,
   };
 }
