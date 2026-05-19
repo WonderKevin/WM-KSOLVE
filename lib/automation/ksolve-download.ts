@@ -1,11 +1,33 @@
 import { createClient } from "@supabase/supabase-js";
+import * as XLSX from "xlsx";
 
 type KsolveSearchRow = {
   Id: number;
   InvoiceNumber: string;
+  JdeUpdateDate?: string | null;
+  Remarks?: string | null;
+  PoNumber?: string | null;
+  InvoiceAmount?: number | null;
+  InvoiceDate?: string | null;
+  PayStatusCode?: string | null;
+  ChargeTypeCode?: string | null;
+  DcNumber?: string | null;
+  DcNameDisplayable?: string | null;
+  SpecialPayee?: number | null;
+  Esn?: string | null;
+  EsnAsString?: string | null;
+  VendorName?: string | null;
   CheckNumber: number | null;
   CheckDate: string | null;
+  CheckAmount?: number | null;
+  DocumentUrl?: string | null;
+  HasDispute?: boolean;
+  Dispute?: unknown;
+  HasNotes?: boolean;
+  Notes?: unknown[];
   HasDocuments: boolean;
+  Documents?: unknown[];
+  CurrencyCode?: string | null;
   [key: string]: unknown;
 };
 
@@ -23,6 +45,17 @@ type UploadedKsolveDocument = KsolveDocument & {
   SignedUrl: string | null;
 };
 
+type InvoiceSummaryUpload = {
+  DocumentLink: string;
+  DocumentType: "Invoice Summary";
+  DocumentDisplayName: string;
+  FileSizeInBytes: number;
+  CreatedOn: string;
+  FileSizeDisplayable: string;
+  StoragePath: string;
+  SignedUrl: string | null;
+};
+
 type RunKsolveAutomationInput = {
   startDate: string;
   endDate: string;
@@ -34,6 +67,20 @@ function parseIsoDate(date: string) {
 
 function formatKsolveDate(date: Date) {
   return `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`;
+}
+
+function formatDisplayDate(date: string | null | undefined) {
+  if (!date) return "";
+
+  const parsedDate = new Date(date);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return "";
+  }
+
+  return `${parsedDate.getMonth() + 1}/${parsedDate.getDate()}/${String(
+    parsedDate.getFullYear()
+  ).slice(-2)}`;
 }
 
 function subtractDays(date: Date, days: number) {
@@ -86,8 +133,65 @@ function safeFilename(filename: string) {
   return filename.replace(/[<>:"/\\|?*]/g, "_");
 }
 
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+
+  const kilobytes = bytes / 1024;
+
+  if (kilobytes < 1024) {
+    return `${Math.round(kilobytes)} KB`;
+  }
+
+  return `${(kilobytes / 1024).toFixed(1)} MB`;
+}
+
 function isSupportingDocument(document: KsolveDocument) {
   return document.DocumentType?.toLowerCase().trim() === "supporting document";
+}
+
+async function uploadBufferToSupabase({
+  buffer,
+  filename,
+  contentType,
+  startDate,
+  endDate,
+}: {
+  buffer: Buffer;
+  filename: string;
+  contentType: string;
+  startDate: string;
+  endDate: string;
+}) {
+  const bucket = process.env.SUPABASE_STORAGE_BUCKET || "ksolve-documents";
+  const supabase = getSupabaseClient();
+
+  const storagePath = `ksolve/${startDate}_to_${endDate}/${Date.now()}-${safeFilename(
+    filename
+  )}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(bucket)
+    .upload(storagePath, buffer, {
+      contentType,
+      upsert: true,
+    });
+
+  if (uploadError) {
+    throw new Error(`Supabase upload failed for ${filename}: ${uploadError.message}`);
+  }
+
+  const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+    .from(bucket)
+    .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
+
+  if (signedUrlError) {
+    console.warn(`Failed creating signed URL for ${filename}:`, signedUrlError.message);
+  }
+
+  return {
+    storagePath,
+    signedUrl: signedUrlData?.signedUrl || null,
+  };
 }
 
 async function uploadDocumentToSupabase({
@@ -99,9 +203,6 @@ async function uploadDocumentToSupabase({
   startDate: string;
   endDate: string;
 }): Promise<UploadedKsolveDocument> {
-  const bucket = process.env.SUPABASE_STORAGE_BUCKET || "ksolve-documents";
-  const supabase = getSupabaseClient();
-
   const downloadResponse = await fetch(document.DocumentLink, {
     method: "GET",
     headers: getKsolveHeaders(),
@@ -116,42 +217,81 @@ async function uploadDocumentToSupabase({
   }
 
   const contentType =
-    downloadResponse.headers.get("content-type") ||
-    "application/octet-stream";
+    downloadResponse.headers.get("content-type") || "application/octet-stream";
 
   const arrayBuffer = await downloadResponse.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
-  const filename = safeFilename(document.DocumentDisplayName);
-  const storagePath = `ksolve/${startDate}_to_${endDate}/${Date.now()}-${filename}`;
-
-  const { error: uploadError } = await supabase.storage
-    .from(bucket)
-    .upload(storagePath, buffer, {
-      contentType,
-      upsert: true,
-    });
-
-  if (uploadError) {
-    throw new Error(
-      `Supabase upload failed for ${document.DocumentDisplayName}: ${uploadError.message}`
-    );
-  }
-
-  const { data: signedUrlData, error: signedUrlError } =
-    await supabase.storage.from(bucket).createSignedUrl(storagePath, 60 * 60 * 24 * 7);
-
-  if (signedUrlError) {
-    console.warn(
-      `Failed creating signed URL for ${document.DocumentDisplayName}:`,
-      signedUrlError.message
-    );
-  }
+  const uploaded = await uploadBufferToSupabase({
+    buffer,
+    filename: document.DocumentDisplayName,
+    contentType,
+    startDate,
+    endDate,
+  });
 
   return {
     ...document,
-    StoragePath: storagePath,
-    SignedUrl: signedUrlData?.signedUrl || null,
+    StoragePath: uploaded.storagePath,
+    SignedUrl: uploaded.signedUrl,
+  };
+}
+
+async function uploadInvoiceSummaryToSupabase({
+  rows,
+  startDate,
+  endDate,
+}: {
+  rows: KsolveSearchRow[];
+  startDate: string;
+  endDate: string;
+}): Promise<InvoiceSummaryUpload> {
+  const summaryRows = rows.map((row) => ({
+    "Invoice #": row.InvoiceNumber || "",
+    Date: formatDisplayDate(row.InvoiceDate),
+    Remarks: row.Remarks || "",
+    "PO #": row.PoNumber || "",
+    "Invoice Amt": row.InvoiceAmount ?? "",
+    Status: row.PayStatusCode || "",
+    "DC Name": row.DcNameDisplayable || "",
+    "Check #": row.CheckNumber ?? "",
+    "Check Date": formatDisplayDate(row.CheckDate),
+    "Check Amt": row.CheckAmount ?? "",
+    "Special Payee": row.SpecialPayee ?? "",
+    ESN: row.EsnAsString || row.Esn || "",
+    "Vendor Name": row.VendorName || "",
+  }));
+
+  const workbook = XLSX.utils.book_new();
+  const worksheet = XLSX.utils.json_to_sheet(summaryRows);
+
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Invoice Summary");
+
+  const buffer = XLSX.write(workbook, {
+    type: "buffer",
+    bookType: "xlsx",
+  }) as Buffer;
+
+  const filename = `invoice-summary-${startDate}-to-${endDate}.xlsx`;
+
+  const uploaded = await uploadBufferToSupabase({
+    buffer,
+    filename,
+    contentType:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    startDate,
+    endDate,
+  });
+
+  return {
+    DocumentLink: uploaded.signedUrl || "",
+    DocumentType: "Invoice Summary",
+    DocumentDisplayName: filename,
+    FileSizeInBytes: buffer.length,
+    CreatedOn: new Date().toISOString(),
+    FileSizeDisplayable: formatFileSize(buffer.length),
+    StoragePath: uploaded.storagePath,
+    SignedUrl: uploaded.signedUrl,
   };
 }
 
@@ -201,8 +341,13 @@ export async function runKsolveAutomation({
     isCheckDateInRange(row.CheckDate, startDate, endDate)
   );
 
-  const documents: KsolveDocument[] = [];
-  const uploadedDocuments: UploadedKsolveDocument[] = [];
+  const invoiceSummary = await uploadInvoiceSummaryToSupabase({
+    rows: matchingRows,
+    startDate,
+    endDate,
+  });
+
+  const invoiceFiles: UploadedKsolveDocument[] = [];
 
   for (const row of matchingRows) {
     if (!row.HasDocuments) continue;
@@ -227,8 +372,6 @@ export async function runKsolveAutomation({
       (document) => !isSupportingDocument(document)
     );
 
-    documents.push(...filteredDocuments);
-
     for (const document of filteredDocuments) {
       const uploadedDocument = await uploadDocumentToSupabase({
         document,
@@ -236,7 +379,7 @@ export async function runKsolveAutomation({
         endDate,
       });
 
-      uploadedDocuments.push(uploadedDocument);
+      invoiceFiles.push(uploadedDocument);
     }
   }
 
@@ -246,9 +389,10 @@ export async function runKsolveAutomation({
     searchedInvoiceDateFrom: formatKsolveDate(searchStart),
     searchedInvoiceDateTo: formatKsolveDate(searchEnd),
     matchedRowCount: matchingRows.length,
-    documentCount: documents.length,
-    uploadedDocumentCount: uploadedDocuments.length,
+    invoiceSummary,
+    invoiceFileCount: invoiceFiles.length,
+    invoiceFiles,
+    documents: [invoiceSummary, ...invoiceFiles],
     searchRows: matchingRows,
-    documents: uploadedDocuments,
   };
 }

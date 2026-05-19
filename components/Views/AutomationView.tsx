@@ -1,8 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
-import { Download, Play, Save } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useState } from "react";
 
 type KsolveDocument = {
   DocumentLink: string;
@@ -11,247 +9,216 @@ type KsolveDocument = {
   FileSizeInBytes: number;
   CreatedOn: string;
   FileSizeDisplayable: string;
+  StoragePath?: string;
+  SignedUrl?: string | null;
 };
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 export default function AutomationView() {
-  const [running, setRunning] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [loading, setLoading] = useState(false);
   const [documents, setDocuments] = useState<KsolveDocument[]>([]);
+  const [message, setMessage] = useState("");
 
-  const [startDate, setStartDate] = useState(todayIso());
-  const [endDate, setEndDate] = useState(todayIso());
-
-  const [scheduleDay, setScheduleDay] = useState("monday");
-  const [scheduleTime, setScheduleTime] = useState("08:00");
-
-  const downloadAll = () => {
-    documents.forEach((document, index) => {
-      setTimeout(() => {
-        window.open(document.DocumentLink, "_blank", "noopener,noreferrer");
-      }, index * 500);
-    });
-  };
-
-  const runAutomation = async () => {
-    if (!startDate || !endDate) {
-      alert("Please select a start date and end date.");
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Run K-Solve automation for check dates from ${startDate} to ${endDate}?`
-    );
-
-    if (!confirmed) return;
-
+  async function runAutomation() {
     try {
-      setRunning(true);
+      setLoading(true);
+      setMessage("");
       setDocuments([]);
 
       const response = await fetch("/api/automation/ksolve/run", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ startDate, endDate }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          startDate,
+          endDate,
+        }),
       });
 
-      const result = await response.json().catch(() => null);
+      const result = await response.json();
 
       if (!response.ok) {
         throw new Error(result?.message || "Automation failed.");
       }
 
-      const nextDocuments = (result?.result?.documents || []).filter(
-        (document: KsolveDocument) =>
-          document.DocumentType?.toLowerCase().trim() !== "supporting document"
-      );
+      const nextDocuments = result?.result?.documents || [];
 
       setDocuments(nextDocuments);
 
-      alert(result?.message || "K-Solve automation completed.");
+      setMessage(
+        result?.message || "K-Solve automation completed successfully."
+      );
     } catch (error) {
-      console.error(error);
-      alert(
-        error instanceof Error
-          ? error.message
-          : "Failed to start K-Solve automation."
+      setMessage(
+        error instanceof Error ? error.message : "Automation failed."
       );
     } finally {
-      setRunning(false);
+      setLoading(false);
     }
-  };
+  }
 
-  const saveSchedule = async () => {
+  async function runScheduleUpload() {
     try {
-      setSaving(true);
+      setLoading(true);
+      setMessage("");
 
       const response = await fetch("/api/automation/ksolve/schedule", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ day: scheduleDay, time: scheduleTime }),
       });
 
-      if (!response.ok) throw new Error(await response.text());
+      const result = await response.json();
 
-      alert(`Schedule saved: every ${scheduleDay} at ${scheduleTime}`);
+      if (!response.ok) {
+        throw new Error(result?.message || "Failed to save schedule.");
+      }
+
+      const nextDocuments = result?.result?.documents || [];
+
+      setDocuments(nextDocuments);
+
+      setMessage(
+        result?.message || "Scheduled upload completed successfully."
+      );
     } catch (error) {
-      console.error(error);
-      alert("Failed to save schedule.");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Failed to run scheduled upload."
+      );
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
-  };
+  }
+
+  function downloadAll() {
+    documents.forEach((document, index) => {
+      setTimeout(() => {
+        window.open(
+          document.SignedUrl || document.DocumentLink,
+          "_blank"
+        );
+      }, index * 500);
+    });
+  }
 
   return (
     <div className="space-y-6">
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-2xl font-bold text-slate-900">
-          K-Solve Automation
-        </h2>
-        <p className="mt-2 text-sm text-slate-500">
-          Run the K-Solve document automation manually by check date range, or
-          schedule weekly uploads.
-        </p>
-      </div>
+      <div className="rounded-2xl border p-6 space-y-6">
+        <div>
+          <h2 className="text-2xl font-semibold">Manual Run</h2>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900">Manual Run</h3>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="text-sm text-gray-500 mt-1">
             Select the check date range to download and upload eligible
             documents.
           </p>
+        </div>
 
-          <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            <label className="text-sm font-medium text-slate-700">
-              Start date
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
-              />
-            </label>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm font-medium">Start date</label>
 
-            <label className="text-sm font-medium text-slate-700">
-              End date
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
-              />
-            </label>
+            <input
+              type="date"
+              className="w-full border rounded-xl px-4 py-3 mt-2"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
           </div>
 
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Button
-              type="button"
-              className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-              onClick={runAutomation}
-              disabled={running}
-            >
-              <Play className="mr-2 h-4 w-4" />
-              {running ? "Running..." : "Run"}
-            </Button>
+          <div>
+            <label className="text-sm font-medium">End date</label>
 
-            {documents.length > 0 && (
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-2xl border-slate-200"
-                onClick={downloadAll}
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Download all
-              </Button>
-            )}
+            <input
+              type="date"
+              className="w-full border rounded-xl px-4 py-3 mt-2"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+            />
           </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={runAutomation}
+            disabled={loading}
+            className="bg-black text-white px-5 py-3 rounded-xl"
+          >
+            {loading ? "Running..." : "Run"}
+          </button>
+
+          <button
+            onClick={runScheduleUpload}
+            disabled={loading}
+            className="border px-5 py-3 rounded-xl"
+          >
+            {loading ? "Running..." : "Schedule Upload"}
+          </button>
 
           {documents.length > 0 && (
-            <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <h4 className="text-sm font-semibold text-slate-900">
-                Available downloads
-              </h4>
-
-              <div className="mt-3 space-y-3">
-                {documents.map((document) => (
-                  <div
-                    key={document.DocumentLink}
-                    className="rounded-2xl border border-slate-200 bg-white p-4"
-                  >
-                    <p className="text-sm font-medium text-slate-900">
-                      {document.DocumentDisplayName}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {document.DocumentType} • {document.FileSizeDisplayable}
-                    </p>
-
-                    <a
-                      href={document.DocumentLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-3 inline-flex items-center rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Download document
-                    </a>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <button
+              onClick={downloadAll}
+              className="bg-blue-600 text-white px-5 py-3 rounded-xl"
+            >
+              Download All
+            </button>
           )}
         </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900">
-            Schedule Upload
-          </h3>
+        {message && (
+          <div className="rounded-xl bg-gray-100 p-4 text-sm">
+            {message}
+          </div>
+        )}
+      </div>
 
-          <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            <label className="text-sm font-medium text-slate-700">
-              Run day
-              <select
-                value={scheduleDay}
-                onChange={(e) => setScheduleDay(e.target.value)}
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
-              >
-                <option value="monday">Every Monday</option>
-                <option value="tuesday">Every Tuesday</option>
-                <option value="wednesday">Every Wednesday</option>
-                <option value="thursday">Every Thursday</option>
-                <option value="friday">Every Friday</option>
-                <option value="saturday">Every Saturday</option>
-                <option value="sunday">Every Sunday</option>
-              </select>
-            </label>
+      {documents.length > 0 && (
+        <div className="rounded-2xl border p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-xl font-semibold">
+              Available downloads
+            </h3>
 
-            <label className="text-sm font-medium text-slate-700">
-              Run time
-              <input
-                type="time"
-                value={scheduleTime}
-                onChange={(e) => setScheduleTime(e.target.value)}
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
-              />
-            </label>
+            <div className="text-sm text-gray-500">
+              {documents.length} file(s)
+            </div>
           </div>
 
-          <Button
-            type="button"
-            variant="outline"
-            className="mt-6 rounded-2xl border-slate-200"
-            onClick={saveSchedule}
-            disabled={saving}
-          >
-            <Save className="mr-2 h-4 w-4" />
-            {saving ? "Saving..." : "Schedule Upload"}
-          </Button>
+          <div className="space-y-4">
+            {documents.map((document) => (
+              <div
+                key={`${document.DocumentDisplayName}-${document.CreatedOn}`}
+                className="border rounded-2xl p-5"
+              >
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="font-medium break-all">
+                      {document.DocumentDisplayName}
+                    </div>
+
+                    <div className="text-sm text-gray-500 mt-1">
+                      {document.DocumentType} •{" "}
+                      {document.FileSizeDisplayable}
+                    </div>
+                  </div>
+
+                  <a
+                    href={
+                      document.SignedUrl || document.DocumentLink
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center bg-black text-white px-4 py-2 rounded-xl whitespace-nowrap"
+                  >
+                    Download document
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
