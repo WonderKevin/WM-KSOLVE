@@ -25,8 +25,11 @@ export default function AutomationView() {
   const [savingInvoiceFile, setSavingInvoiceFile] = useState(false);
   const [savingInvoiceSummary, setSavingInvoiceSummary] = useState(false);
 
-  const [startDate, setStartDate] = useState(todayIso());
-  const [endDate, setEndDate] = useState(todayIso());
+  const [invoiceFileStartDate, setInvoiceFileStartDate] = useState(todayIso());
+  const [invoiceFileEndDate, setInvoiceFileEndDate] = useState(todayIso());
+
+  const [summaryStartDate, setSummaryStartDate] = useState(todayIso());
+  const [summaryEndDate, setSummaryEndDate] = useState(todayIso());
 
   const [invoiceFileScheduleDay, setInvoiceFileScheduleDay] = useState("monday");
   const [invoiceFileScheduleTime, setInvoiceFileScheduleTime] = useState("01:00");
@@ -50,9 +53,13 @@ export default function AutomationView() {
   const runAutomation = async ({
     includeInvoiceSummary,
     includeInvoiceFiles,
+    startDate,
+    endDate,
   }: {
     includeInvoiceSummary: boolean;
     includeInvoiceFiles: boolean;
+    startDate: string;
+    endDate: string;
   }) => {
     if (!startDate || !endDate) {
       alert("Please select a start date and end date.");
@@ -94,7 +101,6 @@ export default function AutomationView() {
       }
 
       setDocuments(result?.result?.documents || []);
-
       alert(result?.message || `${label} completed.`);
     } catch (error) {
       console.error(error);
@@ -170,14 +176,18 @@ export default function AutomationView() {
             <p className="mt-1 text-sm text-slate-500">
               Select the check date range to download and upload eligible documents.
             </p>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h3 className="text-lg font-semibold text-slate-900">Invoice File</h3>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <label className="text-sm font-medium text-slate-700">
                 Start date
                 <input
                   type="date"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
+                  value={invoiceFileStartDate}
+                  onChange={(e) => setInvoiceFileStartDate(e.target.value)}
                   className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
                 />
               </label>
@@ -186,23 +196,11 @@ export default function AutomationView() {
                 End date
                 <input
                   type="date"
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
+                  value={invoiceFileEndDate}
+                  onChange={(e) => setInvoiceFileEndDate(e.target.value)}
                   className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
                 />
               </label>
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-start gap-3">
-              <FileSpreadsheet className="mt-1 h-5 w-5 text-slate-700" />
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900">Invoice File</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Download invoice files only. Supporting documents are ignored.
-                </p>
-              </div>
             </div>
 
             <Button
@@ -212,6 +210,8 @@ export default function AutomationView() {
                 runAutomation({
                   includeInvoiceSummary: false,
                   includeInvoiceFiles: true,
+                  startDate: invoiceFileStartDate,
+                  endDate: invoiceFileEndDate,
                 })
               }
               disabled={runningInvoiceFile || runningInvoiceSummary}
@@ -222,14 +222,28 @@ export default function AutomationView() {
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-start gap-3">
-              <FileSpreadsheet className="mt-1 h-5 w-5 text-slate-700" />
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900">Invoice Summary</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Generate the invoice summary spreadsheet from rows matching the selected check date range.
-                </p>
-              </div>
+            <h3 className="text-lg font-semibold text-slate-900">Invoice Summary</h3>
+
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+              <label className="text-sm font-medium text-slate-700">
+                Start date
+                <input
+                  type="date"
+                  value={summaryStartDate}
+                  onChange={(e) => setSummaryStartDate(e.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
+                />
+              </label>
+
+              <label className="text-sm font-medium text-slate-700">
+                End date
+                <input
+                  type="date"
+                  value={summaryEndDate}
+                  onChange={(e) => setSummaryEndDate(e.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
+                />
+              </label>
             </div>
 
             <Button
@@ -239,6 +253,8 @@ export default function AutomationView() {
                 runAutomation({
                   includeInvoiceSummary: true,
                   includeInvoiceFiles: false,
+                  startDate: summaryStartDate,
+                  endDate: summaryEndDate,
                 })
               }
               disabled={runningInvoiceFile || runningInvoiceSummary}
