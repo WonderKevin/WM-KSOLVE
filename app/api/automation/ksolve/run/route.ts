@@ -1,4 +1,5 @@
 // app/api/automation/ksolve/run/route.ts
+
 import { NextResponse } from "next/server";
 import { runKsolveAutomation } from "@/lib/automation/ksolve-download";
 
@@ -11,16 +12,23 @@ export async function POST(request: Request) {
 
     if (!startDate || !endDate) {
       return NextResponse.json(
-        { ok: false, message: "Start date and end date are required." },
+        {
+          ok: false,
+          message: "Start date and end date are required.",
+        },
         { status: 400 }
       );
     }
 
-    await runKsolveAutomation({ startDate, endDate });
+    const result = await runKsolveAutomation({
+      startDate,
+      endDate,
+    });
 
     return NextResponse.json({
       ok: true,
       message: `K-Solve automation completed for ${startDate} to ${endDate}.`,
+      result,
     });
   } catch (error) {
     console.error("K-Solve automation failed:", error);
@@ -28,7 +36,10 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
-        message: error instanceof Error ? error.message : "Automation failed.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Automation failed.",
       },
       { status: 500 }
     );

@@ -1,3 +1,12 @@
+type KsolveDocument = {
+  DocumentLink: string;
+  DocumentType: string;
+  DocumentDisplayName: string;
+  FileSizeInBytes: number;
+  CreatedOn: string;
+  FileSizeDisplayable: string;
+};
+
 type RunKsolveAutomationInput = {
   startDate: string;
   endDate: string;
@@ -28,16 +37,17 @@ export async function runKsolveAutomation({
 
   if (!response.ok) {
     const errorText = await response.text();
-
-    throw new Error(
-      `K-Solve request failed (${response.status}): ${errorText}`
-    );
+    throw new Error(`K-Solve request failed (${response.status}): ${errorText}`);
   }
 
-  const data = await response.json();
+  const documents = (await response.json()) as KsolveDocument[];
 
-  console.log("K-Solve response received:");
-  console.log(JSON.stringify(data, null, 2));
+  console.log("K-Solve documents received:");
+  console.log(JSON.stringify(documents, null, 2));
 
-  return data;
+  return {
+    startDate,
+    endDate,
+    documents,
+  };
 }
