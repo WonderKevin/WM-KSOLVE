@@ -1,5 +1,3 @@
-import { chromium } from "@playwright/test";
-
 type RunKsolveAutomationInput = {
   startDate: string;
   endDate: string;
@@ -9,30 +7,36 @@ export async function runKsolveAutomation({
   startDate,
   endDate,
 }: RunKsolveAutomationInput) {
-  const browser = await chromium.launch({
-    headless: false, // keep visible for manual login while testing
+  console.log("Running K-Solve API automation...");
+  console.log(`Date range: ${startDate} to ${endDate}`);
+
+  // Replace with your actual endpoint once identified
+  const endpoint =
+    "https://connect.kehe.com/ksolve/services/api/ksolve/list/documents/27804599";
+
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      accept: "application/json, text/plain, */*",
+      authorization: `Bearer ${process.env.KSOLVE_BEARER_TOKEN}`,
+      cookie: process.env.KSOLVE_COOKIE || "",
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
+    },
   });
 
-  const context = await browser.newContext({
-    acceptDownloads: true,
-  });
+  if (!response.ok) {
+    const errorText = await response.text();
 
-  const page = await context.newPage();
-
-  try {
-    await page.goto("https://connect.kehe.com/#/dashboard", {
-      waitUntil: "domcontentloaded",
-    });
-
-    console.log("Manual step required: login + navigate to K-Solve");
-    console.log(`Selected check date range: ${startDate} to ${endDate}`);
-
-    // TEMP: pause so you can login manually and navigate to K-Solve
-    await page.waitForTimeout(60000);
-
-    console.log("K-Solve automation placeholder running...");
-    console.log(`Use these dates in Playwright: ${startDate} to ${endDate}`);
-  } finally {
-    await browser.close();
+    throw new Error(
+      `K-Solve request failed (${response.status}): ${errorText}`
+    );
   }
+
+  const data = await response.json();
+
+  console.log("K-Solve response received:");
+  console.log(JSON.stringify(data, null, 2));
+
+  return data;
 }
