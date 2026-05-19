@@ -10,7 +10,6 @@ export async function runKsolveAutomation({
   console.log("Running K-Solve API automation...");
   console.log(`Date range: ${startDate} to ${endDate}`);
 
-  // Replace with your actual endpoint once identified
   const endpoint =
     "https://connect.kehe.com/ksolve/services/api/ksolve/list/documents/27804599";
 
@@ -18,8 +17,10 @@ export async function runKsolveAutomation({
     method: "GET",
     headers: {
       accept: "application/json, text/plain, */*",
-      authorization: `Bearer ${process.env.KSOLVE_BEARER_TOKEN}`,
+      authorization: `bearer ${process.env.KSOLVE_BEARER_TOKEN}`,
       cookie: process.env.KSOLVE_COOKIE || "",
+      referer: "https://connect.kehe.com/ksolve/",
+      origin: "https://connect.kehe.com",
       "user-agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
     },
