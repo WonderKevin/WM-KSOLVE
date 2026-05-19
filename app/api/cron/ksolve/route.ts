@@ -27,8 +27,23 @@ function getPreviousMondayToSunday() {
   };
 }
 
-export async function POST() {
+export async function GET(request: Request) {
   try {
+    const authHeader = request.headers.get("authorization");
+
+    if (
+      process.env.CRON_SECRET &&
+      authHeader !== `Bearer ${process.env.CRON_SECRET}`
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: "Unauthorized.",
+        },
+        { status: 401 }
+      );
+    }
+
     const { startDate, endDate } = getPreviousMondayToSunday();
 
     const result = await runKsolveAutomation({
@@ -38,19 +53,16 @@ export async function POST() {
 
     return NextResponse.json({
       ok: true,
-      message: `Scheduled K-Solve upload completed for previous week: ${startDate} to ${endDate}.`,
+      message: `K-Solve cron completed for previous week: ${startDate} to ${endDate}.`,
       result,
     });
   } catch (error) {
-    console.error("Scheduled K-Solve upload failed:", error);
+    console.error("K-Solve cron failed:", error);
 
     return NextResponse.json(
       {
         ok: false,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Scheduled upload failed.",
+        message: error instanceof Error ? error.message : "Cron failed.",
       },
       { status: 500 }
     );
