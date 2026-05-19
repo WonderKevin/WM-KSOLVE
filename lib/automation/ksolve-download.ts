@@ -21,26 +21,30 @@ type RunKsolveAutomationInput = {
   endDate: string;
 };
 
-function formatKsolveDate(date: string) {
-  const [year, month, day] = date.split("-");
-
-  if (!year || !month || !day) {
-    return date;
-  }
-
-  return `${Number(month)}/${Number(day)}/${year}`;
+function formatKsolveDate(date: Date) {
+  return `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`;
 }
 
-function dateOnly(date: string) {
+function parseIsoDate(date: string) {
   return new Date(`${date}T00:00:00`);
 }
 
-function isCheckDateInRange(checkDate: string | null, startDate: string, endDate: string) {
+function subtractDays(date: Date, days: number) {
+  const nextDate = new Date(date);
+  nextDate.setDate(nextDate.getDate() - days);
+  return nextDate;
+}
+
+function isCheckDateInRange(
+  checkDate: string | null,
+  startDate: string,
+  endDate: string
+) {
   if (!checkDate) return false;
 
   const check = new Date(checkDate);
-  const start = dateOnly(startDate);
-  const end = dateOnly(endDate);
+  const start = parseIsoDate(startDate);
+  const end = parseIsoDate(endDate);
 
   return check >= start && check <= end;
 }
@@ -65,6 +69,12 @@ export async function runKsolveAutomation({
   console.log("Running K-Solve API automation...");
   console.log(`Selected check date range: ${startDate} to ${endDate}`);
 
+  const selectedStart = parseIsoDate(startDate);
+  const selectedEnd = parseIsoDate(endDate);
+
+  const searchStart = subtractDays(selectedStart, 90);
+  const searchEnd = selectedEnd;
+
   const searchEndpoint =
     "https://connect.kehe.com/ksolve/services/api/ksolve/search";
 
@@ -74,12 +84,8 @@ export async function runKsolveAutomation({
     body: JSON.stringify({
       EsnAsString: "",
       VendorName: "Wonder Monday",
-
-      // K-Solve only searches by invoice/date column here.
-      // We search broadly, then filter by CheckDate below.
-      StartDate: formatKsolveDate(startDate),
-      EndDate: formatKsolveDate(endDate),
-
+      StartDate: formatKsolveDate(searchStart),
+      EndDate: formatKsolveDate(searchEnd),
       CheckNumber: 0,
       Dc: "",
       InvoiceNumber: "",
@@ -90,7 +96,6 @@ export async function runKsolveAutomation({
 
   if (!searchResponse.ok) {
     const errorText = await searchResponse.text();
-
     throw new Error(
       `K-Solve search failed (${searchResponse.status}): ${errorText}`
     );
@@ -119,16 +124,13 @@ export async function runKsolveAutomation({
 
     if (!documentsResponse.ok) {
       const errorText = await documentsResponse.text();
-
       console.warn(
         `K-Solve document lookup failed for row ${row.Id} (${documentsResponse.status}): ${errorText}`
       );
-
       continue;
     }
 
     const rowDocuments = (await documentsResponse.json()) as KsolveDocument[];
-
     documents.push(...rowDocuments);
   }
 
@@ -138,6 +140,8 @@ export async function runKsolveAutomation({
   return {
     startDate,
     endDate,
+    searchedInvoiceDateFrom: formatKsolveDate(searchStart),
+    searchedInvoiceDateTo: formatKsolveDate(searchEnd),
     matchedRowCount: matchingRows.length,
     documentCount: documents.length,
     searchRows: matchingRows,
