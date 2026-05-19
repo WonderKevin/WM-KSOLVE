@@ -1,5 +1,4 @@
-import fs from "fs";
-import path from "path";
+import { createClient } from "@supabase/supabase-js";
 
 type KsolveSearchRow = {
   Id: number;
@@ -17,6 +16,11 @@ type KsolveDocument = {
   FileSizeInBytes: number;
   CreatedOn: string;
   FileSizeDisplayable: string;
+};
+
+type UploadedKsolveDocument = KsolveDocument & {
+  StoragePath: string;
+  SignedUrl: string | null;
 };
 
 type RunKsolveAutomationInput = {
@@ -65,40 +69,90 @@ function getKsolveHeaders() {
   };
 }
 
-async function downloadFile(
-  url: string,
-  filename: string
-) {
-  const downloadsDir =
-    "C:\\Users\\admin\\Desktop\\wm-ksolve-app\\downloads";
+function getSupabaseClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!fs.existsSync(downloadsDir)) {
-    fs.mkdirSync(downloadsDir, { recursive: true });
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error(
+      "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY."
+    );
   }
 
-  const safeFilename = filename.replace(/[<>:"/\\|?*]/g, "_");
+  return createClient(supabaseUrl, serviceRoleKey);
+}
 
-  const filePath = path.join(downloadsDir, safeFilename);
+function safeFilename(filename: string) {
+  return filename.replace(/[<>:"/\\|?*]/g, "_");
+}
 
-  const response = await fetch(url, {
+function isSupportingDocument(document: KsolveDocument) {
+  return document.DocumentType?.toLowerCase().trim() === "supporting document";
+}
+
+async function uploadDocumentToSupabase({
+  document,
+  startDate,
+  endDate,
+}: {
+  document: KsolveDocument;
+  startDate: string;
+  endDate: string;
+}): Promise<UploadedKsolveDocument> {
+  const bucket = process.env.SUPABASE_STORAGE_BUCKET || "ksolve-documents";
+  const supabase = getSupabaseClient();
+
+  const downloadResponse = await fetch(document.DocumentLink, {
     method: "GET",
     headers: getKsolveHeaders(),
   });
 
-  if (!response.ok) {
+  if (!downloadResponse.ok) {
+    const errorText = await downloadResponse.text();
+
     throw new Error(
-      `Failed downloading file (${response.status})`
+      `Failed downloading ${document.DocumentDisplayName} (${downloadResponse.status}): ${errorText}`
     );
   }
 
-  const arrayBuffer = await response.arrayBuffer();
+  const contentType =
+    downloadResponse.headers.get("content-type") ||
+    "application/octet-stream";
+
+  const arrayBuffer = await downloadResponse.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
-  fs.writeFileSync(filePath, buffer);
+  const filename = safeFilename(document.DocumentDisplayName);
+  const storagePath = `ksolve/${startDate}_to_${endDate}/${Date.now()}-${filename}`;
 
-  console.log(`Downloaded file: ${filePath}`);
+  const { error: uploadError } = await supabase.storage
+    .from(bucket)
+    .upload(storagePath, buffer, {
+      contentType,
+      upsert: true,
+    });
 
-  return filePath;
+  if (uploadError) {
+    throw new Error(
+      `Supabase upload failed for ${document.DocumentDisplayName}: ${uploadError.message}`
+    );
+  }
+
+  const { data: signedUrlData, error: signedUrlError } =
+    await supabase.storage.from(bucket).createSignedUrl(storagePath, 60 * 60 * 24 * 7);
+
+  if (signedUrlError) {
+    console.warn(
+      `Failed creating signed URL for ${document.DocumentDisplayName}:`,
+      signedUrlError.message
+    );
+  }
+
+  return {
+    ...document,
+    StoragePath: storagePath,
+    SignedUrl: signedUrlData?.signedUrl || null,
+  };
 }
 
 export async function runKsolveAutomation({
@@ -147,11 +201,8 @@ export async function runKsolveAutomation({
     isCheckDateInRange(row.CheckDate, startDate, endDate)
   );
 
-  console.log("K-Solve matching rows by CheckDate:");
-  console.log(JSON.stringify(matchingRows, null, 2));
-
   const documents: KsolveDocument[] = [];
-  const downloadedFiles: string[] = [];
+  const uploadedDocuments: UploadedKsolveDocument[] = [];
 
   for (const row of matchingRows) {
     if (!row.HasDocuments) continue;
@@ -164,48 +215,30 @@ export async function runKsolveAutomation({
     });
 
     if (!documentsResponse.ok) {
-      const errorText = await documentsResponse.text();
-
       console.warn(
-        `K-Solve document lookup failed for row ${row.Id} (${documentsResponse.status}): ${errorText}`
+        `K-Solve document lookup failed for row ${row.Id}: ${documentsResponse.status}`
       );
-
       continue;
     }
 
-    const rowDocuments =
-      (await documentsResponse.json()) as KsolveDocument[];
+    const rowDocuments = (await documentsResponse.json()) as KsolveDocument[];
 
     const filteredDocuments = rowDocuments.filter(
-      (document) =>
-        document.DocumentType?.toLowerCase().trim() !==
-        "supporting document"
+      (document) => !isSupportingDocument(document)
     );
 
     documents.push(...filteredDocuments);
 
     for (const document of filteredDocuments) {
-      try {
-        const downloadedPath = await downloadFile(
-          document.DocumentLink,
-          document.DocumentDisplayName
-        );
+      const uploadedDocument = await uploadDocumentToSupabase({
+        document,
+        startDate,
+        endDate,
+      });
 
-        downloadedFiles.push(downloadedPath);
-      } catch (error) {
-        console.error(
-          `Failed downloading ${document.DocumentDisplayName}:`,
-          error
-        );
-      }
+      uploadedDocuments.push(uploadedDocument);
     }
   }
-
-  console.log("K-Solve documents found:");
-  console.log(JSON.stringify(documents, null, 2));
-
-  console.log("Downloaded files:");
-  console.log(JSON.stringify(downloadedFiles, null, 2));
 
   return {
     startDate,
@@ -214,8 +247,8 @@ export async function runKsolveAutomation({
     searchedInvoiceDateTo: formatKsolveDate(searchEnd),
     matchedRowCount: matchingRows.length,
     documentCount: documents.length,
+    uploadedDocumentCount: uploadedDocuments.length,
     searchRows: matchingRows,
-    documents,
-    downloadedFiles,
+    documents: uploadedDocuments,
   };
 }
