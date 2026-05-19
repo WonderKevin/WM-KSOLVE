@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { CalendarClock, Play, Save } from "lucide-react";
+import { Play, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 function todayIso() {
@@ -45,10 +45,21 @@ export default function AutomationView() {
         throw new Error(result?.message || "Automation failed.");
       }
 
-      alert(result?.message || "K-Solve automation started.");
+      const documentLink = result?.result?.documents?.[0]?.DocumentLink;
+
+      if (documentLink) {
+        window.open(documentLink, "_blank");
+      }
+
+      alert(result?.message || "K-Solve automation completed.");
     } catch (error) {
       console.error(error);
-      alert(error instanceof Error ? error.message : "Failed to start K-Solve automation.");
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Failed to start K-Solve automation."
+      );
     } finally {
       setRunning(false);
     }
@@ -78,9 +89,12 @@ export default function AutomationView() {
   return (
     <div className="space-y-6">
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-2xl font-bold text-slate-900">K-Solve Automation</h2>
+        <h2 className="text-2xl font-bold text-slate-900">
+          K-Solve Automation
+        </h2>
         <p className="mt-2 text-sm text-slate-500">
-          Run the K-Solve document automation manually by check date range, or schedule weekly uploads.
+          Run the K-Solve document automation manually by check date range, or
+          schedule weekly uploads.
         </p>
       </div>
 
@@ -88,7 +102,8 @@ export default function AutomationView() {
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <h3 className="text-lg font-semibold text-slate-900">Manual Run</h3>
           <p className="mt-1 text-sm text-slate-500">
-            Select the check date range to download and upload eligible documents.
+            Select the check date range to download and upload eligible
+            documents.
           </p>
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
@@ -125,7 +140,9 @@ export default function AutomationView() {
         </div>
 
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900">Schedule Upload</h3>
+          <h3 className="text-lg font-semibold text-slate-900">
+            Schedule Upload
+          </h3>
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
             <label className="text-sm font-medium text-slate-700">
