@@ -1,8 +1,17 @@
 "use client";
 
 import React, { useState } from "react";
-import { Play, Save } from "lucide-react";
+import { Download, Play, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+type KsolveDocument = {
+  DocumentLink: string;
+  DocumentType: string;
+  DocumentDisplayName: string;
+  FileSizeInBytes: number;
+  CreatedOn: string;
+  FileSizeDisplayable: string;
+};
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -11,6 +20,7 @@ function todayIso() {
 export default function AutomationView() {
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [documents, setDocuments] = useState<KsolveDocument[]>([]);
 
   const [startDate, setStartDate] = useState(todayIso());
   const [endDate, setEndDate] = useState(todayIso());
@@ -32,6 +42,7 @@ export default function AutomationView() {
 
     try {
       setRunning(true);
+      setDocuments([]);
 
       const response = await fetch("/api/automation/ksolve/run", {
         method: "POST",
@@ -45,11 +56,8 @@ export default function AutomationView() {
         throw new Error(result?.message || "Automation failed.");
       }
 
-      const documentLink = result?.result?.documents?.[0]?.DocumentLink;
-
-      if (documentLink) {
-        window.open(documentLink, "_blank");
-      }
+      const nextDocuments = result?.result?.documents || [];
+      setDocuments(nextDocuments);
 
       alert(result?.message || "K-Solve automation completed.");
     } catch (error) {
@@ -137,6 +145,40 @@ export default function AutomationView() {
             <Play className="mr-2 h-4 w-4" />
             {running ? "Running..." : "Run"}
           </Button>
+
+          {documents.length > 0 && (
+            <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <h4 className="text-sm font-semibold text-slate-900">
+                Available downloads
+              </h4>
+
+              <div className="mt-3 space-y-3">
+                {documents.map((document) => (
+                  <div
+                    key={document.DocumentLink}
+                    className="rounded-2xl border border-slate-200 bg-white p-4"
+                  >
+                    <p className="text-sm font-medium text-slate-900">
+                      {document.DocumentDisplayName}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {document.DocumentType} • {document.FileSizeDisplayable}
+                    </p>
+
+                    <a
+                      href={document.DocumentLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-3 inline-flex items-center rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Download document
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
