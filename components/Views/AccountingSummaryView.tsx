@@ -7,13 +7,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+type Retailer = "all" | "kehe" | "target" | "unfi";
+type ViewMode = "accounting" | "discrepancy";
 
 type InvoiceSummaryRow = {
   id: number;
   check_date: string | null;
   invoice_amt: number | null;
   type: string | null;
+  retailer?: Retailer;
 };
 
 type KsolveInvoiceRow = {
@@ -32,10 +34,7 @@ type BrokerCommissionDbRow = {
   item: string | null;
   cust_name: string | null;
   amt: number | null;
-
-  // FUTURE READY
-  // all current rows are KeHE
-  retailer?: "kehe" | "target" | "unfi";
+  retailer?: Retailer;
 };
 
 type BrokerCommissionRow = BrokerCommissionDbRow & {
@@ -49,11 +48,7 @@ type MonthOption = {
   sortValue: number;
 };
 
-type ViewMode = "accounting" | "discrepancy";
-
-type Retailer = "all" | "kehe" | "target" | "unfi";
-
-// ─── Pure helpers ─────────────────────────────────────────────────────────────
+const PAGE_SIZE = 1000;
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -63,23 +58,15 @@ function parseUsDate(value: string | null | undefined) {
   if (!value) return null;
 
   const trimmed = String(value).trim();
-
   const match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
 
   if (match) {
     const [, mm, dd, yyyy] = match;
-
-    const date = new Date(
-      Number(yyyy),
-      Number(mm) - 1,
-      Number(dd)
-    );
-
+    const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
     if (!Number.isNaN(date.getTime())) return date;
   }
 
   const fallback = new Date(trimmed);
-
   if (!Number.isNaN(fallback.getTime())) return fallback;
 
   return null;
@@ -93,24 +80,16 @@ function formatCurrency(value: number | null | undefined) {
 }
 
 function monthKeyFromDate(date: Date) {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-
-  return `${yyyy}-${mm}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function monthLabelFromDate(date: Date) {
-  return date.toLocaleString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
+  return date.toLocaleString("en-US", { month: "long", year: "numeric" });
 }
 
-function formatMonthFromDate(value: string): string {
+function formatMonthFromDate(value: string) {
   if (!value) return "";
-
   const parsed = new Date(value);
-
   if (Number.isNaN(parsed.getTime())) return "";
 
   return parsed.toLocaleDateString("en-US", {
@@ -129,18 +108,13 @@ function normalizeMonthLabel(value: string) {
   if (!trimmed) return "";
 
   const match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
-
   if (!match) return trimmed;
 
-  const year =
-    match[2].length === 2
-      ? `20${match[2]}`
-      : match[2];
-
+  const year = match[2].length === 2 ? `20${match[2]}` : match[2];
   return `${match[1]} ${year}`;
 }
 
-function monthLabelToKey(label: string): string | null {
+function monthLabelToKey(label: string) {
   const monthMap: Record<string, string> = {
     january: "01",
     february: "02",
@@ -157,11 +131,9 @@ function monthLabelToKey(label: string): string | null {
   };
 
   const match = label.match(/^([A-Za-z]+)\s+(\d{4})$/);
-
   if (!match) return null;
 
   const mm = monthMap[match[1].toLowerCase()];
-
   if (!mm) return null;
 
   return `${match[2]}-${mm}`;
@@ -185,10 +157,7 @@ function isWmInvoiceType(type: string) {
 }
 
 function normalizeType(value: string | null | undefined) {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
+  return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function sortTypesWithWMFirst(types: string[]) {
@@ -199,8 +168,6 @@ function sortTypesWithWMFirst(types: string[]) {
   });
 }
 
-// ─── Discrepancy adjustment ───────────────────────────────────────────────────
-
 function applyAmountBasedDiscrepancy(
   rawRows: BrokerCommissionDbRow[],
   discrepancyByInvoice: Map<string, number>
@@ -209,34 +176,21 @@ function applyAmountBasedDiscrepancy(
 
   for (const row of rawRows) {
     const key = normalizeInvoice(row.invoice ?? "");
-
-    if (!grouped.has(key)) {
-      grouped.set(key, []);
-    }
-
+    if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key)!.push(row);
   }
 
-  const result: (BrokerCommissionDbRow & {
-    adjustedAmt: number;
-  })[] = [];
+  const result: (BrokerCommissionDbRow & { adjustedAmt: number })[] = [];
 
   for (const [invoiceKey, invoiceRows] of grouped.entries()) {
-    const invoiceDiscrepancy = round2(
-      discrepancyByInvoice.get(invoiceKey) ?? 0
-    );
+    const invoiceDiscrepancy = round2(discrepancyByInvoice.get(invoiceKey) ?? 0);
 
     const wmRows = invoiceRows.filter(
-      (r) =>
-        isWmInvoiceType(r.type ?? "") &&
-        Number(r.amt ?? 0) !== 0
+      (r) => isWmInvoiceType(r.type ?? "") && Number(r.amt ?? 0) !== 0
     );
 
     const totalWmAmount = round2(
-      wmRows.reduce(
-        (sum, r) => sum + Number(r.amt ?? 0),
-        0
-      )
+      wmRows.reduce((sum, r) => sum + Number(r.amt ?? 0), 0)
     );
 
     let runningShare = 0;
@@ -249,189 +203,104 @@ function applyAmountBasedDiscrepancy(
         isWmInvoiceType(row.type ?? "") &&
         totalWmAmount !== 0
       ) {
-        const wmIndex = wmRows.findIndex(
-          (r) => r.id === row.id
-        );
-
-        const isLastWmRow =
-          wmIndex === wmRows.length - 1;
+        const wmIndex = wmRows.findIndex((r) => r.id === row.id);
+        const isLastWmRow = wmIndex === wmRows.length - 1;
 
         let share = 0;
 
         if (isLastWmRow) {
-          share = round2(
-            invoiceDiscrepancy - runningShare
-          );
+          share = round2(invoiceDiscrepancy - runningShare);
         } else {
           share = round2(
-            invoiceDiscrepancy *
-              (Number(row.amt ?? 0) / totalWmAmount)
+            invoiceDiscrepancy * (Number(row.amt ?? 0) / totalWmAmount)
           );
-
-          runningShare = round2(
-            runningShare + share
-          );
+          runningShare = round2(runningShare + share);
         }
 
-        adjustedAmt = round2(
-          Number(row.amt ?? 0) + share
-        );
+        adjustedAmt = round2(Number(row.amt ?? 0) + share);
       }
 
-      result.push({
-        ...row,
-        adjustedAmt,
-      });
+      result.push({ ...row, adjustedAmt });
     }
   }
 
   return result;
 }
 
-// ─── Supabase fetchers ────────────────────────────────────────────────────────
-
-const PAGE_SIZE = 1000;
-
-async function fetchAllBrokerCommissionRows(): Promise<
-  BrokerCommissionDbRow[]
-> {
+async function fetchAllBrokerCommissionRows(): Promise<BrokerCommissionDbRow[]> {
   let allRows: BrokerCommissionDbRow[] = [];
   let from = 0;
 
   while (true) {
     const { data, error } = await supabase
       .from("broker_commission_datasets")
-      .select(
-        `
-        id,
-        month,
-        check_date,
-        invoice,
-        type,
-        upc,
-        item,
-        cust_name,
-        amt
-      `
-      )
-      .order("check_date", {
-        ascending: false,
-        nullsFirst: false,
-      })
-      .order("invoice", {
-        ascending: false,
-      })
+      .select("id, month, check_date, invoice, type, upc, item, cust_name, amt")
+      .order("check_date", { ascending: false, nullsFirst: false })
+      .order("invoice", { ascending: false })
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
 
     const batch = (data ?? []) as BrokerCommissionDbRow[];
 
-    // ALL CURRENT DATA = KEHE
-    const taggedBatch = batch.map((row) => ({
-      ...row,
-      retailer: "kehe" as const,
-    }));
-
-    allRows = allRows.concat(taggedBatch);
+    allRows = allRows.concat(
+      batch.map((row) => ({
+        ...row,
+        retailer: "kehe" as Retailer,
+      }))
+    );
 
     if (batch.length < PAGE_SIZE) break;
-
     from += PAGE_SIZE;
   }
 
   return allRows;
 }
 
-async function fetchAllKsolveInvoiceRows(): Promise<
-  KsolveInvoiceRow[]
-> {
+async function fetchAllKsolveInvoiceRows(): Promise<KsolveInvoiceRow[]> {
   let allRows: KsolveInvoiceRow[] = [];
   let from = 0;
 
   while (true) {
     const { data, error } = await supabase
       .from("invoices")
-      .select(
-        `
-        invoice_number,
-        invoice_amt,
-        type
-      `
-      )
+      .select("invoice_number, invoice_amt, type")
       .eq("type", "WM Invoice")
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
 
     const batch = (data ?? []) as KsolveInvoiceRow[];
-
     allRows = allRows.concat(batch);
 
     if (batch.length < PAGE_SIZE) break;
-
     from += PAGE_SIZE;
   }
 
   return allRows;
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
-
 export default function AccountingSummaryView() {
-  const [invoiceRows, setInvoiceRows] = useState<
-    InvoiceSummaryRow[]
-  >([]);
-
-  const [brokerRows, setBrokerRows] = useState<
-    BrokerCommissionRow[]
-  >([]);
-
+  const [invoiceRows, setInvoiceRows] = useState<InvoiceSummaryRow[]>([]);
+  const [brokerRows, setBrokerRows] = useState<BrokerCommissionRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [viewMode, setViewMode] =
-    useState<ViewMode>("accounting");
-
-  // NEW
-  const [retailer, setRetailer] =
-    useState<Retailer>("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("accounting");
+  const [retailer, setRetailer] = useState<Retailer>("all");
 
   const [fromMonth, setFromMonth] = useState("");
   const [toMonth, setToMonth] = useState("");
+  const [appliedFromMonth, setAppliedFromMonth] = useState("");
+  const [appliedToMonth, setAppliedToMonth] = useState("");
 
-  const [appliedFromMonth, setAppliedFromMonth] =
-    useState("");
-
-  const [appliedToMonth, setAppliedToMonth] =
-    useState("");
-
-  const [discrepancyMonth, setDiscrepancyMonth] =
-    useState("");
-
-  const [
-    appliedDiscrepancyMonth,
-    setAppliedDiscrepancyMonth,
-  ] = useState("");
-
-  // ── Retailer options ────────────────────────────────────────────────────────
+  const [discrepancyMonth, setDiscrepancyMonth] = useState("");
+  const [appliedDiscrepancyMonth, setAppliedDiscrepancyMonth] = useState("");
 
   const retailerOptions = [
-    {
-      value: "all",
-      label: "All",
-    },
-    {
-      value: "kehe",
-      label: "KeHE",
-    },
-    {
-      value: "target",
-      label: "Target",
-    },
-    {
-      value: "unfi",
-      label: "UNFI",
-    },
+    { value: "all", label: "All" },
+    { value: "kehe", label: "KeHE" },
+    { value: "target", label: "Target" },
+    { value: "unfi", label: "UNFI" },
   ];
 
   useEffect(() => {
@@ -439,143 +308,84 @@ export default function AccountingSummaryView() {
       setLoading(true);
 
       try {
-        const [
-          rawInvoiceRes,
-          rawBrokerRows,
-          ksolveWmRows,
-        ] = await Promise.all([
+        const [rawInvoiceRes, rawBrokerRows, ksolveWmRows] = await Promise.all([
           supabase
             .from("invoices")
-            .select(
-              `
-              id,
-              check_date,
-              invoice_amt,
-              type
-            `
-            )
-            .order("check_date", {
-              ascending: false,
-            }),
-
+            .select("id, check_date, invoice_amt, type")
+            .order("check_date", { ascending: false }),
           fetchAllBrokerCommissionRows(),
-
           fetchAllKsolveInvoiceRows(),
         ]);
 
-        if (!rawInvoiceRes.error) {
-          setInvoiceRows(
-            (rawInvoiceRes.data || []).filter((r) =>
-              parseUsDate(r.check_date)
-            )
-          );
+        if (rawInvoiceRes.error) {
+          console.error("Invoice query error:", rawInvoiceRes.error);
         } else {
-          console.error(
-            "Invoice query error:",
-            rawInvoiceRes.error
+          setInvoiceRows(
+            ((rawInvoiceRes.data || []) as InvoiceSummaryRow[])
+              .filter((r) => parseUsDate(r.check_date))
+              .map((row) => ({
+                ...row,
+                retailer: "kehe",
+              }))
           );
         }
 
-        const ksolveByInvoice = new Map<
-          string,
-          number
-        >();
+        const ksolveByInvoice = new Map<string, number>();
 
         for (const row of ksolveWmRows) {
-          const inv = normalizeInvoice(
-            row.invoice_number ?? ""
-          );
-
+          const inv = normalizeInvoice(row.invoice_number ?? "");
           if (!inv) continue;
 
           ksolveByInvoice.set(
             inv,
-            round2(
-              (ksolveByInvoice.get(inv) ?? 0) +
-                Number(row.invoice_amt ?? 0)
-            )
+            round2((ksolveByInvoice.get(inv) ?? 0) + Number(row.invoice_amt ?? 0))
           );
         }
 
-        const wmByInvoice = new Map<
-          string,
-          number
-        >();
+        const wmByInvoice = new Map<string, number>();
 
         for (const row of rawBrokerRows) {
-          const inv = normalizeInvoice(
-            row.invoice ?? ""
-          );
-
-          if (
-            !inv ||
-            !isWmInvoiceType(row.type ?? "")
-          ) {
-            continue;
-          }
+          const inv = normalizeInvoice(row.invoice ?? "");
+          if (!inv || !isWmInvoiceType(row.type ?? "")) continue;
 
           wmByInvoice.set(
             inv,
-            round2(
-              (wmByInvoice.get(inv) ?? 0) +
-                Number(row.amt ?? 0)
-            )
+            round2((wmByInvoice.get(inv) ?? 0) + Number(row.amt ?? 0))
           );
         }
 
-        const discrepancyByInvoice = new Map<
-          string,
-          number
-        >();
+        const discrepancyByInvoice = new Map<string, number>();
 
-        for (const inv of new Set([
-          ...ksolveByInvoice.keys(),
-          ...wmByInvoice.keys(),
-        ])) {
+        for (const inv of new Set([...ksolveByInvoice.keys(), ...wmByInvoice.keys()])) {
           discrepancyByInvoice.set(
             inv,
-            round2(
-              (ksolveByInvoice.get(inv) ?? 0) -
-                (wmByInvoice.get(inv) ?? 0)
-            )
+            round2((ksolveByInvoice.get(inv) ?? 0) - (wmByInvoice.get(inv) ?? 0))
           );
         }
 
-        const adjusted =
-          applyAmountBasedDiscrepancy(
-            rawBrokerRows,
-            discrepancyByInvoice
+        const adjusted = applyAmountBasedDiscrepancy(
+          rawBrokerRows,
+          discrepancyByInvoice
+        );
+
+        const withMonthKey: BrokerCommissionRow[] = adjusted.map((row) => {
+          const rawMonth = String(row.month ?? "").trim();
+          const rawCheckDate = String(row.check_date ?? "").trim();
+
+          const label = normalizeMonthLabel(
+            rawMonth || formatMonthFromDate(rawCheckDate) || ""
           );
 
-        const withMonthKey: BrokerCommissionRow[] =
-          adjusted.map((row) => {
-            const rawMonth = String(
-              row.month ?? ""
-            ).trim();
-
-            const rawCheckDate = String(
-              row.check_date ?? ""
-            ).trim();
-
-            const label = normalizeMonthLabel(
-              rawMonth ||
-                formatMonthFromDate(rawCheckDate) ||
-                ""
-            );
-
-            return {
-              ...row,
-              derivedMonthKey:
-                monthLabelToKey(label) ?? "",
-            };
-          });
+          return {
+            ...row,
+            retailer: row.retailer ?? "kehe",
+            derivedMonthKey: monthLabelToKey(label) ?? "",
+          };
+        });
 
         setBrokerRows(withMonthKey);
       } catch (error) {
-        console.error(
-          "Summary load error:",
-          error
-        );
+        console.error("Summary load error:", error);
       } finally {
         setLoading(false);
       }
@@ -584,33 +394,21 @@ export default function AccountingSummaryView() {
     loadData();
   }, []);
 
-  // ── Retailer Filtering ──────────────────────────────────────────────────────
+  const filteredInvoiceRows = useMemo(() => {
+    if (retailer === "all") return invoiceRows;
+    return invoiceRows.filter((row) => row.retailer === retailer);
+  }, [invoiceRows, retailer]);
 
   const filteredBrokerRows = useMemo(() => {
-    if (retailer === "all") {
-      return brokerRows;
-    }
-
-    return brokerRows.filter(
-      (row) => row.retailer === retailer
-    );
+    if (retailer === "all") return brokerRows;
+    return brokerRows.filter((row) => row.retailer === retailer);
   }, [brokerRows, retailer]);
 
-  // ── Month options ───────────────────────────────────────────────────────────
+  const accountingMonthOptions = useMemo<MonthOption[]>(() => {
+    const map = new Map<string, MonthOption>();
 
-  const accountingMonthOptions = useMemo<
-    MonthOption[]
-  >(() => {
-    const map = new Map<
-      string,
-      MonthOption
-    >();
-
-    for (const row of invoiceRows) {
-      const date = parseUsDate(
-        row.check_date
-      );
-
+    for (const row of filteredInvoiceRows) {
+      const date = parseUsDate(row.check_date);
       if (!date) continue;
 
       const key = monthKeyFromDate(date);
@@ -619,31 +417,19 @@ export default function AccountingSummaryView() {
         map.set(key, {
           key,
           label: monthLabelFromDate(date),
-          sortValue:
-            date.getFullYear() * 100 +
-            (date.getMonth() + 1),
+          sortValue: date.getFullYear() * 100 + date.getMonth() + 1,
         });
       }
     }
 
-    return Array.from(map.values()).sort(
-      (a, b) => b.sortValue - a.sortValue
-    );
-  }, [invoiceRows]);
+    return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
+  }, [filteredInvoiceRows]);
 
-  const discrepancyMonthOptions = useMemo<
-    MonthOption[]
-  >(() => {
-    const map = new Map<
-      string,
-      MonthOption
-    >();
+  const discrepancyMonthOptions = useMemo<MonthOption[]>(() => {
+    const map = new Map<string, MonthOption>();
 
-    for (const row of invoiceRows) {
-      const date = parseUsDate(
-        row.check_date
-      );
-
+    for (const row of filteredInvoiceRows) {
+      const date = parseUsDate(row.check_date);
       if (!date) continue;
 
       const key = monthKeyFromDate(date);
@@ -652,511 +438,292 @@ export default function AccountingSummaryView() {
         map.set(key, {
           key,
           label: monthLabelFromDate(date),
-          sortValue:
-            date.getFullYear() * 100 +
-            (date.getMonth() + 1),
+          sortValue: date.getFullYear() * 100 + date.getMonth() + 1,
         });
       }
     }
 
     for (const row of filteredBrokerRows) {
       const key = row.derivedMonthKey;
-
       if (!key || map.has(key)) continue;
 
       const [yyyy, mm] = key.split("-");
-
-      const date = new Date(
-        Number(yyyy),
-        Number(mm) - 1,
-        1
-      );
+      const date = new Date(Number(yyyy), Number(mm) - 1, 1);
 
       map.set(key, {
         key,
         label: monthLabelFromDate(date),
-        sortValue:
-          Number(yyyy) * 100 + Number(mm),
+        sortValue: Number(yyyy) * 100 + Number(mm),
       });
     }
 
-    return Array.from(map.values()).sort(
-      (a, b) => b.sortValue - a.sortValue
-    );
-  }, [invoiceRows, filteredBrokerRows]);
-
-  // ── Default month selections ────────────────────────────────────────────────
+    return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
+  }, [filteredInvoiceRows, filteredBrokerRows]);
 
   useEffect(() => {
-    if (
-      accountingMonthOptions.length > 0 &&
-      !appliedFromMonth &&
-      !appliedToMonth
-    ) {
-      const sortedAsc = [
-        ...accountingMonthOptions.slice(0, 6),
-      ].sort(
+    if (accountingMonthOptions.length > 0 && !appliedFromMonth && !appliedToMonth) {
+      const sortedAsc = [...accountingMonthOptions.slice(0, 6)].sort(
         (a, b) => a.sortValue - b.sortValue
       );
 
       setFromMonth(sortedAsc[0]?.key || "");
-      setToMonth(
-        sortedAsc[sortedAsc.length - 1]?.key || ""
-      );
-
-      setAppliedFromMonth(
-        sortedAsc[0]?.key || ""
-      );
-
-      setAppliedToMonth(
-        sortedAsc[sortedAsc.length - 1]?.key || ""
-      );
+      setToMonth(sortedAsc[sortedAsc.length - 1]?.key || "");
+      setAppliedFromMonth(sortedAsc[0]?.key || "");
+      setAppliedToMonth(sortedAsc[sortedAsc.length - 1]?.key || "");
     }
-  }, [
-    accountingMonthOptions,
-    appliedFromMonth,
-    appliedToMonth,
-  ]);
+  }, [accountingMonthOptions, appliedFromMonth, appliedToMonth]);
 
   useEffect(() => {
-    if (
-      discrepancyMonthOptions.length > 0 &&
-      !appliedDiscrepancyMonth
-    ) {
-      const latest =
-        discrepancyMonthOptions[0]?.key || "";
-
+    if (discrepancyMonthOptions.length > 0 && !appliedDiscrepancyMonth) {
+      const latest = discrepancyMonthOptions[0]?.key || "";
       setDiscrepancyMonth(latest);
-
       setAppliedDiscrepancyMonth(latest);
     }
-  }, [
-    discrepancyMonthOptions,
-    appliedDiscrepancyMonth,
-  ]);
+  }, [discrepancyMonthOptions, appliedDiscrepancyMonth]);
 
-  // ── Accounting Summary ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (retailer === "target" || retailer === "unfi") {
+      setFromMonth("");
+      setToMonth("");
+      setAppliedFromMonth("");
+      setAppliedToMonth("");
+      setDiscrepancyMonth("");
+      setAppliedDiscrepancyMonth("");
+    }
+  }, [retailer]);
 
   const filteredMonthOptions = useMemo(() => {
-    if (!appliedFromMonth || !appliedToMonth) {
-      return [];
-    }
+    if (!appliedFromMonth || !appliedToMonth) return [];
 
-    const fromVal = Number(
-      appliedFromMonth.replace("-", "")
-    );
-
-    const toVal = Number(
-      appliedToMonth.replace("-", "")
-    );
-
+    const fromVal = Number(appliedFromMonth.replace("-", ""));
+    const toVal = Number(appliedToMonth.replace("-", ""));
     const minVal = Math.min(fromVal, toVal);
     const maxVal = Math.max(fromVal, toVal);
 
     return [...accountingMonthOptions]
-      .filter(
-        (m) =>
-          m.sortValue >= minVal &&
-          m.sortValue <= maxVal
-      )
-      .sort(
-        (a, b) => a.sortValue - b.sortValue
-      );
-  }, [
-    accountingMonthOptions,
-    appliedFromMonth,
-    appliedToMonth,
-  ]);
+      .filter((m) => m.sortValue >= minVal && m.sortValue <= maxVal)
+      .sort((a, b) => a.sortValue - b.sortValue);
+  }, [accountingMonthOptions, appliedFromMonth, appliedToMonth]);
 
   const summary = useMemo(() => {
-    const monthKeys =
-      filteredMonthOptions.map((m) => m.key);
-
+    const monthKeys = filteredMonthOptions.map((m) => m.key);
     const monthKeySet = new Set(monthKeys);
+    const typeMonthTotals = new Map<string, Record<string, number>>();
 
-    const typeMonthTotals = new Map<
-      string,
-      Record<string, number>
-    >();
-
-    for (const row of invoiceRows) {
-      const date = parseUsDate(
-        row.check_date
-      );
-
+    for (const row of filteredInvoiceRows) {
+      const date = parseUsDate(row.check_date);
       if (!date) continue;
 
       const monthKey = monthKeyFromDate(date);
+      if (!monthKeySet.has(monthKey)) continue;
 
-      if (!monthKeySet.has(monthKey)) {
-        continue;
-      }
+      const typeName = row.type?.trim() || "Unknown";
+      const amount = Number(row.invoice_amt || 0);
 
-      const typeName =
-        row.type?.trim() || "Unknown";
+      if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
 
-      const amount = Number(
-        row.invoice_amt || 0
-      );
-
-      if (!typeMonthTotals.has(typeName)) {
-        typeMonthTotals.set(typeName, {});
-      }
-
-      const current =
-        typeMonthTotals.get(typeName)!;
-
-      current[monthKey] =
-        (current[monthKey] || 0) + amount;
+      const current = typeMonthTotals.get(typeName)!;
+      current[monthKey] = (current[monthKey] || 0) + amount;
     }
 
-    const orderedTypes =
-      sortTypesWithWMFirst(
-        Array.from(typeMonthTotals.keys())
-      );
+    const orderedTypes = sortTypesWithWMFirst(Array.from(typeMonthTotals.keys()));
 
-    const typeRows = orderedTypes.map(
-      (typeName) => {
-        const monthlyValues =
-          typeMonthTotals.get(typeName) || {};
+    const typeRows = orderedTypes.map((typeName) => {
+      const monthlyValues = typeMonthTotals.get(typeName) || {};
+      const total = monthKeys.reduce((sum, key) => sum + (monthlyValues[key] || 0), 0);
 
-        const total = monthKeys.reduce(
-          (sum, key) =>
-            sum + (monthlyValues[key] || 0),
-          0
-        );
+      return {
+        typeName,
+        monthlyValues,
+        total,
+      };
+    });
 
-        return {
-          typeName,
-          monthlyValues,
-          total,
-        };
-      }
-    );
-
-    const monthlyTotals: Record<
-      string,
-      number
-    > = {};
+    const monthlyTotals: Record<string, number> = {};
 
     for (const monthKey of monthKeys) {
-      monthlyTotals[monthKey] =
-        typeRows.reduce(
-          (sum, row) =>
-            sum +
-            (row.monthlyValues[monthKey] || 0),
-          0
-        );
+      monthlyTotals[monthKey] = typeRows.reduce(
+        (sum, row) => sum + (row.monthlyValues[monthKey] || 0),
+        0
+      );
     }
 
     return {
       monthKeys,
       typeRows,
       monthlyTotals,
-      grandTotal: Object.values(
-        monthlyTotals
-      ).reduce((sum, val) => sum + val, 0),
+      grandTotal: Object.values(monthlyTotals).reduce((sum, val) => sum + val, 0),
     };
-  }, [invoiceRows, filteredMonthOptions]);
-
-  // ── Discrepancy Summary ─────────────────────────────────────────────────────
+  }, [filteredInvoiceRows, filteredMonthOptions]);
 
   const discrepancySummary = useMemo(() => {
     if (!appliedDiscrepancyMonth) {
       return {
         selectedMonthLabel: "",
-        typeRows: [],
+        typeRows: [] as Array<{
+          typeName: string;
+          ksolveTotal: number;
+          invoiceTotal: number;
+          discrepancy: number;
+        }>,
         ksolveGrandTotal: 0,
         invoiceGrandTotal: 0,
         discrepancyGrandTotal: 0,
       };
     }
 
-    const selectedMonthOption =
-      discrepancyMonthOptions.find(
-        (m) =>
-          m.key === appliedDiscrepancyMonth
-      );
+    const selectedMonthOption = discrepancyMonthOptions.find(
+      (m) => m.key === appliedDiscrepancyMonth
+    );
 
-    const ksolveTypeTotals = new Map<
-      string,
-      number
-    >();
+    const ksolveTypeTotals = new Map<string, number>();
+    const brokerTypeTotals = new Map<string, number>();
+    const displayTypeMap = new Map<string, string>();
 
-    const displayTypeMap = new Map<
-      string,
-      string
-    >();
+    for (const row of filteredInvoiceRows) {
+      const date = parseUsDate(row.check_date);
 
-    for (const row of invoiceRows) {
-      const date = parseUsDate(
-        row.check_date
-      );
+      if (!date || monthKeyFromDate(date) !== appliedDiscrepancyMonth) continue;
 
-      if (
-        !date ||
-        monthKeyFromDate(date) !==
-          appliedDiscrepancyMonth
-      ) {
-        continue;
-      }
+      const rawType = row.type?.trim() || "Unknown";
+      const normType = normalizeType(rawType);
 
-      const rawType =
-        row.type?.trim() || "Unknown";
-
-      const normType =
-        normalizeType(rawType);
-
-      if (!displayTypeMap.has(normType)) {
-        displayTypeMap.set(
-          normType,
-          rawType
-        );
-      }
+      if (!displayTypeMap.has(normType)) displayTypeMap.set(normType, rawType);
 
       ksolveTypeTotals.set(
         normType,
-        (ksolveTypeTotals.get(normType) || 0) +
-          Number(row.invoice_amt || 0)
+        round2((ksolveTypeTotals.get(normType) || 0) + Number(row.invoice_amt || 0))
       );
     }
 
-    const brokerTypeTotals = new Map<
-      string,
-      number
-    >();
-
     for (const row of filteredBrokerRows) {
-      if (
-        row.derivedMonthKey !==
-        appliedDiscrepancyMonth
-      ) {
-        continue;
-      }
+      if (row.derivedMonthKey !== appliedDiscrepancyMonth) continue;
 
-      const rawType =
-        String(row.type ?? "").trim() ||
-        "Unknown";
+      const rawType = String(row.type ?? "").trim() || "Unknown";
+      const normType = normalizeType(rawType);
 
-      const normType =
-        normalizeType(rawType);
+      if (!displayTypeMap.has(normType)) displayTypeMap.set(normType, rawType);
 
-      if (!displayTypeMap.has(normType)) {
-        displayTypeMap.set(
-          normType,
-          rawType
-        );
-      }
-
-      const amount = isWmInvoiceType(
-        row.type ?? ""
-      )
+      const amount = isWmInvoiceType(row.type ?? "")
         ? Math.abs(row.adjustedAmt)
         : Number(row.amt ?? 0);
 
       brokerTypeTotals.set(
         normType,
-        round2(
-          (brokerTypeTotals.get(normType) || 0) +
-            amount
-        )
+        round2((brokerTypeTotals.get(normType) || 0) + amount)
       );
     }
 
     const allNormTypes = Array.from(
-      new Set([
-        ...ksolveTypeTotals.keys(),
-        ...brokerTypeTotals.keys(),
-      ])
+      new Set([...ksolveTypeTotals.keys(), ...brokerTypeTotals.keys()])
     );
 
-    const orderedTypes =
-      sortTypesWithWMFirst(
-        allNormTypes.map(
-          (k) => displayTypeMap.get(k) || k
-        )
-      );
-
-    const typeRows = orderedTypes.map(
-      (displayTypeName) => {
-        const normType =
-          normalizeType(displayTypeName);
-
-        const typeName =
-          displayTypeMap.get(normType) ||
-          displayTypeName;
-
-        const ksolveTotal =
-          ksolveTypeTotals.get(normType) || 0;
-
-        const invoiceTotal =
-          brokerTypeTotals.get(normType) || 0;
-
-        return {
-          typeName,
-          ksolveTotal,
-          invoiceTotal,
-          discrepancy: round2(
-            ksolveTotal - invoiceTotal
-          ),
-        };
-      }
+    const orderedTypes = sortTypesWithWMFirst(
+      allNormTypes.map((key) => displayTypeMap.get(key) || key)
     );
 
-    const ksolveGrandTotal = round2(
-      typeRows.reduce(
-        (s, r) => s + r.ksolveTotal,
-        0
-      )
-    );
+    const typeRows = orderedTypes.map((displayTypeName) => {
+      const normType = normalizeType(displayTypeName);
+      const typeName = displayTypeMap.get(normType) || displayTypeName;
 
-    const invoiceGrandTotal = round2(
-      typeRows.reduce(
-        (s, r) => s + r.invoiceTotal,
-        0
-      )
-    );
+      const ksolveTotal = ksolveTypeTotals.get(normType) || 0;
+      const invoiceTotal = brokerTypeTotals.get(normType) || 0;
+
+      return {
+        typeName,
+        ksolveTotal,
+        invoiceTotal,
+        discrepancy: round2(ksolveTotal - invoiceTotal),
+      };
+    });
+
+    const ksolveGrandTotal = round2(typeRows.reduce((sum, row) => sum + row.ksolveTotal, 0));
+    const invoiceGrandTotal = round2(typeRows.reduce((sum, row) => sum + row.invoiceTotal, 0));
 
     return {
-      selectedMonthLabel:
-        selectedMonthOption?.label || "",
+      selectedMonthLabel: selectedMonthOption?.label || "",
       typeRows,
       ksolveGrandTotal,
       invoiceGrandTotal,
-      discrepancyGrandTotal: round2(
-        ksolveGrandTotal -
-          invoiceGrandTotal
-      ),
+      discrepancyGrandTotal: round2(ksolveGrandTotal - invoiceGrandTotal),
     };
   }, [
-    invoiceRows,
+    filteredInvoiceRows,
     filteredBrokerRows,
     appliedDiscrepancyMonth,
     discrepancyMonthOptions,
   ]);
 
-  // ── Handlers ────────────────────────────────────────────────────────────────
-
   const handleApply = () => {
     if (!fromMonth && !toMonth) return;
 
-    setAppliedFromMonth(
-      fromMonth || toMonth
-    );
-
-    setAppliedToMonth(
-      toMonth || fromMonth
-    );
+    setAppliedFromMonth(fromMonth || toMonth);
+    setAppliedToMonth(toMonth || fromMonth);
   };
 
   const handleApplyDiscrepancyMonth = () => {
     if (!discrepancyMonth) return;
-
-    setAppliedDiscrepancyMonth(
-      discrepancyMonth
-    );
+    setAppliedDiscrepancyMonth(discrepancyMonth);
   };
-
-  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <Card className="rounded-3xl border border-slate-200 bg-white shadow-sm">
       <CardContent className="space-y-6 pt-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          {/* LEFT SIDE */}
           <div className="flex flex-wrap items-end gap-3">
-            {/* Retailer */}
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-slate-500">
-                Retailer
-              </label>
+              <label className="text-xs font-medium text-slate-500">Retailer</label>
 
               <select
                 value={retailer}
-                onChange={(e) =>
-                  setRetailer(
-                    e.target.value as Retailer
-                  )
-                }
+                onChange={(e) => setRetailer(e.target.value as Retailer)}
                 className="min-w-[160px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
               >
                 {retailerOptions.map((option) => (
-                  <option
-                    key={option.value}
-                    value={option.value}
-                  >
+                  <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
                 ))}
               </select>
             </div>
 
-            {/* View Buttons */}
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
-                variant={
-                  viewMode === "accounting"
-                    ? "default"
-                    : "outline"
-                }
+                variant={viewMode === "accounting" ? "default" : "outline"}
                 className="rounded-xl"
-                onClick={() =>
-                  setViewMode("accounting")
-                }
+                onClick={() => setViewMode("accounting")}
               >
                 Accounting Summary
               </Button>
 
               <Button
                 type="button"
-                variant={
-                  viewMode === "discrepancy"
-                    ? "default"
-                    : "outline"
-                }
+                variant={viewMode === "discrepancy" ? "default" : "outline"}
                 className="rounded-xl"
-                onClick={() =>
-                  setViewMode("discrepancy")
-                }
+                onClick={() => setViewMode("discrepancy")}
               >
                 Summary Discrepancy
               </Button>
             </div>
           </div>
 
-          {/* RIGHT SIDE */}
           {viewMode === "accounting" ? (
             <div className="flex flex-col gap-3 sm:flex-row">
               <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-500">
-                  From
-                </label>
+                <label className="text-xs font-medium text-slate-500">From</label>
 
                 <select
                   value={fromMonth}
-                  onChange={(e) =>
-                    setFromMonth(
-                      e.target.value
-                    )
-                  }
+                  onChange={(e) => setFromMonth(e.target.value)}
                   className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
                 >
-                  <option value="">
-                    Select month
-                  </option>
+                  <option value="">Select month</option>
 
                   {[...accountingMonthOptions]
-                    .sort(
-                      (a, b) =>
-                        a.sortValue -
-                        b.sortValue
-                    )
+                    .sort((a, b) => a.sortValue - b.sortValue)
                     .map((m) => (
-                      <option
-                        key={m.key}
-                        value={m.key}
-                      >
+                      <option key={m.key} value={m.key}>
                         {m.label}
                       </option>
                     ))}
@@ -1164,45 +731,26 @@ export default function AccountingSummaryView() {
               </div>
 
               <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-500">
-                  To
-                </label>
+                <label className="text-xs font-medium text-slate-500">To</label>
 
                 <select
                   value={toMonth}
-                  onChange={(e) =>
-                    setToMonth(
-                      e.target.value
-                    )
-                  }
+                  onChange={(e) => setToMonth(e.target.value)}
                   className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
                 >
-                  <option value="">
-                    Select month
-                  </option>
+                  <option value="">Select month</option>
 
                   {[...accountingMonthOptions]
-                    .sort(
-                      (a, b) =>
-                        a.sortValue -
-                        b.sortValue
-                    )
+                    .sort((a, b) => a.sortValue - b.sortValue)
                     .map((m) => (
-                      <option
-                        key={m.key}
-                        value={m.key}
-                      >
+                      <option key={m.key} value={m.key}>
                         {m.label}
                       </option>
                     ))}
                 </select>
               </div>
 
-              <Button
-                type="button"
-                onClick={handleApply}
-                className="rounded-xl"
-              >
+              <Button type="button" onClick={handleApply} className="rounded-xl">
                 <Filter className="mr-2 h-4 w-4" />
                 Apply Filter
               </Button>
@@ -1210,34 +758,19 @@ export default function AccountingSummaryView() {
           ) : (
             <div className="flex flex-col gap-3 sm:flex-row">
               <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-500">
-                  Month
-                </label>
+                <label className="text-xs font-medium text-slate-500">Month</label>
 
                 <select
                   value={discrepancyMonth}
-                  onChange={(e) =>
-                    setDiscrepancyMonth(
-                      e.target.value
-                    )
-                  }
+                  onChange={(e) => setDiscrepancyMonth(e.target.value)}
                   className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
                 >
-                  <option value="">
-                    Select month
-                  </option>
+                  <option value="">Select month</option>
 
                   {[...discrepancyMonthOptions]
-                    .sort(
-                      (a, b) =>
-                        b.sortValue -
-                        a.sortValue
-                    )
+                    .sort((a, b) => b.sortValue - a.sortValue)
                     .map((m) => (
-                      <option
-                        key={m.key}
-                        value={m.key}
-                      >
+                      <option key={m.key} value={m.key}>
                         {m.label}
                       </option>
                     ))}
@@ -1246,9 +779,7 @@ export default function AccountingSummaryView() {
 
               <Button
                 type="button"
-                onClick={
-                  handleApplyDiscrepancyMonth
-                }
+                onClick={handleApplyDiscrepancyMonth}
                 className="rounded-xl"
               >
                 <Filter className="mr-2 h-4 w-4" />
@@ -1258,7 +789,153 @@ export default function AccountingSummaryView() {
           )}
         </div>
 
-        {/* KEEP YOUR EXISTING TABLE RENDERING BELOW */}
+        {loading ? (
+          <p className="text-sm text-slate-500">Loading summary...</p>
+        ) : viewMode === "accounting" ? (
+          filteredMonthOptions.length === 0 ? (
+            <p className="text-sm text-slate-500">No summary data found.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-100">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                      Type
+                    </th>
+
+                    {filteredMonthOptions.map((m) => (
+                      <th
+                        key={m.key}
+                        className="px-4 py-3 text-right font-semibold text-slate-700"
+                      >
+                        {m.label}
+                      </th>
+                    ))}
+
+                    <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                      Total
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {summary.typeRows.map((row) => (
+                    <tr key={row.typeName} className="border-t border-slate-200">
+                      <td className="px-4 py-3 font-medium text-slate-900">
+                        {row.typeName}
+                      </td>
+
+                      {filteredMonthOptions.map((m) => (
+                        <td
+                          key={m.key}
+                          className="px-4 py-3 text-right text-slate-700"
+                        >
+                          {formatCurrency(row.monthlyValues[m.key] || 0)}
+                        </td>
+                      ))}
+
+                      <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                        {formatCurrency(row.total)}
+                      </td>
+                    </tr>
+                  ))}
+
+                  <tr className="border-t-2 border-slate-300 bg-slate-50">
+                    <td className="px-4 py-3 font-semibold text-slate-900">
+                      Monthly Summary Total
+                    </td>
+
+                    {filteredMonthOptions.map((m) => (
+                      <td
+                        key={m.key}
+                        className="px-4 py-3 text-right font-semibold text-slate-900"
+                      >
+                        {formatCurrency(summary.monthlyTotals[m.key] || 0)}
+                      </td>
+                    ))}
+
+                    <td className="px-4 py-3 text-right font-bold text-slate-900">
+                      {formatCurrency(summary.grandTotal)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : !appliedDiscrepancyMonth ? (
+          <p className="text-sm text-slate-500">No discrepancy month selected.</p>
+        ) : discrepancySummary.typeRows.length === 0 ? (
+          <p className="text-sm text-slate-500">No discrepancy data found.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-2xl border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-100">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                    Type
+                  </th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                    Ksolve Total
+                  </th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                    Invoice Total
+                  </th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                    Discrepancy
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {discrepancySummary.typeRows.map((row) => (
+                  <tr key={row.typeName} className="border-t border-slate-200">
+                    <td className="px-4 py-3 font-medium text-slate-900">
+                      {row.typeName}
+                    </td>
+
+                    <td className="px-4 py-3 text-right text-slate-700">
+                      {formatCurrency(row.ksolveTotal)}
+                    </td>
+
+                    <td className="px-4 py-3 text-right text-slate-700">
+                      {formatCurrency(row.invoiceTotal)}
+                    </td>
+
+                    <td
+                      className={`px-4 py-3 text-right font-semibold ${
+                        Math.abs(row.discrepancy) < 0.01
+                          ? "text-slate-900"
+                          : row.discrepancy > 0
+                            ? "text-amber-600"
+                            : "text-red-600"
+                      }`}
+                    >
+                      {formatCurrency(row.discrepancy)}
+                    </td>
+                  </tr>
+                ))}
+
+                <tr className="border-t-2 border-slate-300 bg-slate-50">
+                  <td className="px-4 py-3 font-semibold text-slate-900">
+                    {discrepancySummary.selectedMonthLabel || "Monthly Total"}
+                  </td>
+
+                  <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                    {formatCurrency(discrepancySummary.ksolveGrandTotal)}
+                  </td>
+
+                  <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                    {formatCurrency(discrepancySummary.invoiceGrandTotal)}
+                  </td>
+
+                  <td className="px-4 py-3 text-right font-bold text-slate-900">
+                    {formatCurrency(discrepancySummary.discrepancyGrandTotal)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
