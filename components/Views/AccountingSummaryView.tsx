@@ -18,6 +18,22 @@ type InvoiceSummaryRow = {
   retailer?: Retailer;
 };
 
+type TargetInvoiceRow = {
+  id: number;
+  month: string | null;
+  check_date: string | null;
+  check_number: string | null;
+  doc_header_text: string | null;
+  reason_code_description: string | null;
+  sap_doc_number: string | null;
+  doc_date: string | null;
+  gross_amount: number | null;
+  cash_discount: number | null;
+  withholding_tax_amount: number | null;
+  net_amount: number | null;
+  retailer?: Retailer;
+};
+
 type KsolveInvoiceRow = {
   invoice_number: string | null;
   invoice_amt: number | null;
@@ -84,11 +100,15 @@ function monthKeyFromDate(date: Date) {
 }
 
 function monthLabelFromDate(date: Date) {
-  return date.toLocaleString("en-US", { month: "long", year: "numeric" });
+  return date.toLocaleString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
 }
 
 function formatMonthFromDate(value: string) {
   if (!value) return "";
+
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "";
 
@@ -111,6 +131,7 @@ function normalizeMonthLabel(value: string) {
   if (!match) return trimmed;
 
   const year = match[2].length === 2 ? `20${match[2]}` : match[2];
+
   return `${match[1]} ${year}`;
 }
 
@@ -168,6 +189,18 @@ function sortTypesWithWMFirst(types: string[]) {
   });
 }
 
+function getRetailerMonthlyTotalLabel(retailer: Retailer) {
+  if (retailer === "all") return "Monthly Summary Total";
+  if (retailer === "kehe") return "KeHE Monthly Summary Total";
+  if (retailer === "target") return "Target Monthly Summary Total";
+  if (retailer === "unfi") return "UNFI Monthly Summary Total";
+  return "Monthly Summary Total";
+}
+
+function getAccountingFirstColumnLabel(retailer: Retailer) {
+  return retailer === "target" ? "Reason Code Description" : "Type";
+}
+
 function applyAmountBasedDiscrepancy(
   rawRows: BrokerCommissionDbRow[],
   discrepancyByInvoice: Map<string, number>
@@ -220,7 +253,10 @@ function applyAmountBasedDiscrepancy(
         adjustedAmt = round2(Number(row.amt ?? 0) + share);
       }
 
-      result.push({ ...row, adjustedAmt });
+      result.push({
+        ...row,
+        adjustedAmt,
+      });
     }
   }
 
@@ -235,8 +271,13 @@ async function fetchAllBrokerCommissionRows(): Promise<BrokerCommissionDbRow[]> 
     const { data, error } = await supabase
       .from("broker_commission_datasets")
       .select("id, month, check_date, invoice, type, upc, item, cust_name, amt")
-      .order("check_date", { ascending: false, nullsFirst: false })
-      .order("invoice", { ascending: false })
+      .order("check_date", {
+        ascending: false,
+        nullsFirst: false,
+      })
+      .order("invoice", {
+        ascending: false,
+      })
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
@@ -251,6 +292,7 @@ async function fetchAllBrokerCommissionRows(): Promise<BrokerCommissionDbRow[]> 
     );
 
     if (batch.length < PAGE_SIZE) break;
+
     from += PAGE_SIZE;
   }
 
@@ -274,6 +316,7 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveInvoiceRow[]> {
     allRows = allRows.concat(batch);
 
     if (batch.length < PAGE_SIZE) break;
+
     from += PAGE_SIZE;
   }
 
@@ -282,6 +325,7 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveInvoiceRow[]> {
 
 export default function AccountingSummaryView() {
   const [invoiceRows, setInvoiceRows] = useState<InvoiceSummaryRow[]>([]);
+  const [targetRows, setTargetRows] = useState<TargetInvoiceRow[]>([]);
   const [brokerRows, setBrokerRows] = useState<BrokerCommissionRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -296,7 +340,7 @@ export default function AccountingSummaryView() {
   const [discrepancyMonth, setDiscrepancyMonth] = useState("");
   const [appliedDiscrepancyMonth, setAppliedDiscrepancyMonth] = useState("");
 
-  const retailerOptions = [
+  const retailerOptions: Array<{ value: Retailer; label: string }> = [
     { value: "all", label: "All" },
     { value: "kehe", label: "KeHE" },
     { value: "target", label: "Target" },
@@ -308,25 +352,46 @@ export default function AccountingSummaryView() {
       setLoading(true);
 
       try {
-        const [rawInvoiceRes, rawBrokerRows, ksolveWmRows] = await Promise.all([
-          supabase
-            .from("invoices")
-            .select("id, check_date, invoice_amt, type")
-            .order("check_date", { ascending: false }),
-          fetchAllBrokerCommissionRows(),
-          fetchAllKsolveInvoiceRows(),
-        ]);
+        const [rawInvoiceRes, rawBrokerRows, ksolveWmRows, rawTargetRes] =
+          await Promise.all([
+            supabase
+              .from("invoices")
+              .select("id, check_date, invoice_amt, type")
+              .order("check_date", { ascending: false }),
+
+            fetchAllBrokerCommissionRows(),
+
+            fetchAllKsolveInvoiceRows(),
+
+            supabase
+              .from("target_invoices")
+              .select(
+                "id, month, check_date, check_number, doc_header_text, reason_code_description, sap_doc_number, doc_date, gross_amount, cash_discount, withholding_tax_amount, net_amount"
+              )
+              .order("check_date", { ascending: false }),
+          ]);
 
         if (rawInvoiceRes.error) {
           console.error("Invoice query error:", rawInvoiceRes.error);
         } else {
           setInvoiceRows(
             ((rawInvoiceRes.data || []) as InvoiceSummaryRow[])
-              .filter((r) => parseUsDate(r.check_date))
+              .filter((row) => parseUsDate(row.check_date))
               .map((row) => ({
                 ...row,
                 retailer: "kehe",
               }))
+          );
+        }
+
+        if (rawTargetRes.error) {
+          console.error("Target invoice query error:", rawTargetRes.error);
+        } else {
+          setTargetRows(
+            ((rawTargetRes.data || []) as TargetInvoiceRow[]).map((row) => ({
+              ...row,
+              retailer: "target",
+            }))
           );
         }
 
@@ -346,6 +411,7 @@ export default function AccountingSummaryView() {
 
         for (const row of rawBrokerRows) {
           const inv = normalizeInvoice(row.invoice ?? "");
+
           if (!inv || !isWmInvoiceType(row.type ?? "")) continue;
 
           wmByInvoice.set(
@@ -356,7 +422,10 @@ export default function AccountingSummaryView() {
 
         const discrepancyByInvoice = new Map<string, number>();
 
-        for (const inv of new Set([...ksolveByInvoice.keys(), ...wmByInvoice.keys()])) {
+        for (const inv of new Set([
+          ...ksolveByInvoice.keys(),
+          ...wmByInvoice.keys(),
+        ])) {
           discrepancyByInvoice.set(
             inv,
             round2((ksolveByInvoice.get(inv) ?? 0) - (wmByInvoice.get(inv) ?? 0))
@@ -399,6 +468,11 @@ export default function AccountingSummaryView() {
     return invoiceRows.filter((row) => row.retailer === retailer);
   }, [invoiceRows, retailer]);
 
+  const filteredTargetRows = useMemo(() => {
+    if (retailer === "all") return targetRows;
+    return targetRows.filter((row) => row.retailer === retailer);
+  }, [targetRows, retailer]);
+
   const filteredBrokerRows = useMemo(() => {
     if (retailer === "all") return brokerRows;
     return brokerRows.filter((row) => row.retailer === retailer);
@@ -422,8 +496,23 @@ export default function AccountingSummaryView() {
       }
     }
 
+    for (const row of filteredTargetRows) {
+      const date = parseUsDate(row.check_date);
+      if (!date) continue;
+
+      const key = monthKeyFromDate(date);
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          label: monthLabelFromDate(date),
+          sortValue: date.getFullYear() * 100 + date.getMonth() + 1,
+        });
+      }
+    }
+
     return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
-  }, [filteredInvoiceRows]);
+  }, [filteredInvoiceRows, filteredTargetRows]);
 
   const discrepancyMonthOptions = useMemo<MonthOption[]>(() => {
     const map = new Map<string, MonthOption>();
@@ -461,35 +550,45 @@ export default function AccountingSummaryView() {
   }, [filteredInvoiceRows, filteredBrokerRows]);
 
   useEffect(() => {
-    if (accountingMonthOptions.length > 0 && !appliedFromMonth && !appliedToMonth) {
-      const sortedAsc = [...accountingMonthOptions.slice(0, 6)].sort(
-        (a, b) => a.sortValue - b.sortValue
+    if (accountingMonthOptions.length > 0) {
+      const currentFromStillExists = accountingMonthOptions.some(
+        (m) => m.key === appliedFromMonth
       );
 
-      setFromMonth(sortedAsc[0]?.key || "");
-      setToMonth(sortedAsc[sortedAsc.length - 1]?.key || "");
-      setAppliedFromMonth(sortedAsc[0]?.key || "");
-      setAppliedToMonth(sortedAsc[sortedAsc.length - 1]?.key || "");
+      const currentToStillExists = accountingMonthOptions.some(
+        (m) => m.key === appliedToMonth
+      );
+
+      if (!appliedFromMonth || !appliedToMonth || !currentFromStillExists || !currentToStillExists) {
+        const sortedAsc = [...accountingMonthOptions.slice(0, 6)].sort(
+          (a, b) => a.sortValue - b.sortValue
+        );
+
+        setFromMonth(sortedAsc[0]?.key || "");
+        setToMonth(sortedAsc[sortedAsc.length - 1]?.key || "");
+        setAppliedFromMonth(sortedAsc[0]?.key || "");
+        setAppliedToMonth(sortedAsc[sortedAsc.length - 1]?.key || "");
+      }
+    } else {
+      setFromMonth("");
+      setToMonth("");
+      setAppliedFromMonth("");
+      setAppliedToMonth("");
     }
   }, [accountingMonthOptions, appliedFromMonth, appliedToMonth]);
 
   useEffect(() => {
     if (discrepancyMonthOptions.length > 0 && !appliedDiscrepancyMonth) {
       const latest = discrepancyMonthOptions[0]?.key || "";
+
       setDiscrepancyMonth(latest);
       setAppliedDiscrepancyMonth(latest);
     }
   }, [discrepancyMonthOptions, appliedDiscrepancyMonth]);
 
   useEffect(() => {
-    if (retailer === "target" || retailer === "unfi") {
-      setFromMonth("");
-      setToMonth("");
-      setAppliedFromMonth("");
-      setAppliedToMonth("");
-      setDiscrepancyMonth("");
-      setAppliedDiscrepancyMonth("");
-    }
+    setAppliedDiscrepancyMonth("");
+    setDiscrepancyMonth("");
   }, [retailer]);
 
   const filteredMonthOptions = useMemo(() => {
@@ -497,6 +596,7 @@ export default function AccountingSummaryView() {
 
     const fromVal = Number(appliedFromMonth.replace("-", ""));
     const toVal = Number(appliedToMonth.replace("-", ""));
+
     const minVal = Math.min(fromVal, toVal);
     const maxVal = Math.max(fromVal, toVal);
 
@@ -510,27 +610,53 @@ export default function AccountingSummaryView() {
     const monthKeySet = new Set(monthKeys);
     const typeMonthTotals = new Map<string, Record<string, number>>();
 
-    for (const row of filteredInvoiceRows) {
-      const date = parseUsDate(row.check_date);
-      if (!date) continue;
+    if (retailer === "all" || retailer === "kehe") {
+      for (const row of filteredInvoiceRows) {
+        const date = parseUsDate(row.check_date);
+        if (!date) continue;
 
-      const monthKey = monthKeyFromDate(date);
-      if (!monthKeySet.has(monthKey)) continue;
+        const monthKey = monthKeyFromDate(date);
+        if (!monthKeySet.has(monthKey)) continue;
 
-      const typeName = row.type?.trim() || "Unknown";
-      const amount = Number(row.invoice_amt || 0);
+        const typeName = row.type?.trim() || "Unknown";
+        const amount = Number(row.invoice_amt || 0);
 
-      if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
+        if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
 
-      const current = typeMonthTotals.get(typeName)!;
-      current[monthKey] = (current[monthKey] || 0) + amount;
+        const current = typeMonthTotals.get(typeName)!;
+        current[monthKey] = (current[monthKey] || 0) + amount;
+      }
     }
 
-    const orderedTypes = sortTypesWithWMFirst(Array.from(typeMonthTotals.keys()));
+    if (retailer === "all" || retailer === "target") {
+      for (const row of filteredTargetRows) {
+        const date = parseUsDate(row.check_date);
+        if (!date) continue;
+
+        const monthKey = monthKeyFromDate(date);
+        if (!monthKeySet.has(monthKey)) continue;
+
+        const typeName = row.reason_code_description?.trim() || "Unknown";
+        const amount = Number(row.net_amount || 0);
+
+        if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
+
+        const current = typeMonthTotals.get(typeName)!;
+        current[monthKey] = (current[monthKey] || 0) + amount;
+      }
+    }
+
+    const orderedTypes =
+      retailer === "target"
+        ? Array.from(typeMonthTotals.keys()).sort((a, b) => a.localeCompare(b))
+        : sortTypesWithWMFirst(Array.from(typeMonthTotals.keys()));
 
     const typeRows = orderedTypes.map((typeName) => {
       const monthlyValues = typeMonthTotals.get(typeName) || {};
-      const total = monthKeys.reduce((sum, key) => sum + (monthlyValues[key] || 0), 0);
+      const total = monthKeys.reduce(
+        (sum, key) => sum + (monthlyValues[key] || 0),
+        0
+      );
 
       return {
         typeName,
@@ -554,7 +680,7 @@ export default function AccountingSummaryView() {
       monthlyTotals,
       grandTotal: Object.values(monthlyTotals).reduce((sum, val) => sum + val, 0),
     };
-  }, [filteredInvoiceRows, filteredMonthOptions]);
+  }, [filteredInvoiceRows, filteredTargetRows, filteredMonthOptions, retailer]);
 
   const discrepancySummary = useMemo(() => {
     if (!appliedDiscrepancyMonth) {
@@ -583,7 +709,9 @@ export default function AccountingSummaryView() {
     for (const row of filteredInvoiceRows) {
       const date = parseUsDate(row.check_date);
 
-      if (!date || monthKeyFromDate(date) !== appliedDiscrepancyMonth) continue;
+      if (!date || monthKeyFromDate(date) !== appliedDiscrepancyMonth) {
+        continue;
+      }
 
       const rawType = row.type?.trim() || "Unknown";
       const normType = normalizeType(rawType);
@@ -637,8 +765,13 @@ export default function AccountingSummaryView() {
       };
     });
 
-    const ksolveGrandTotal = round2(typeRows.reduce((sum, row) => sum + row.ksolveTotal, 0));
-    const invoiceGrandTotal = round2(typeRows.reduce((sum, row) => sum + row.invoiceTotal, 0));
+    const ksolveGrandTotal = round2(
+      typeRows.reduce((sum, row) => sum + row.ksolveTotal, 0)
+    );
+
+    const invoiceGrandTotal = round2(
+      typeRows.reduce((sum, row) => sum + row.invoiceTotal, 0)
+    );
 
     return {
       selectedMonthLabel: selectedMonthOption?.label || "",
@@ -672,7 +805,9 @@ export default function AccountingSummaryView() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-slate-500">Retailer</label>
+              <label className="text-xs font-medium text-slate-500">
+                Retailer
+              </label>
 
               <select
                 value={retailer}
@@ -711,7 +846,9 @@ export default function AccountingSummaryView() {
           {viewMode === "accounting" ? (
             <div className="flex flex-col gap-3 sm:flex-row">
               <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-500">From</label>
+                <label className="text-xs font-medium text-slate-500">
+                  From
+                </label>
 
                 <select
                   value={fromMonth}
@@ -731,7 +868,9 @@ export default function AccountingSummaryView() {
               </div>
 
               <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-500">To</label>
+                <label className="text-xs font-medium text-slate-500">
+                  To
+                </label>
 
                 <select
                   value={toMonth}
@@ -758,7 +897,9 @@ export default function AccountingSummaryView() {
           ) : (
             <div className="flex flex-col gap-3 sm:flex-row">
               <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-500">Month</label>
+                <label className="text-xs font-medium text-slate-500">
+                  Month
+                </label>
 
                 <select
                   value={discrepancyMonth}
@@ -800,7 +941,7 @@ export default function AccountingSummaryView() {
                 <thead className="bg-slate-100">
                   <tr>
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">
-                      Type
+                      {getAccountingFirstColumnLabel(retailer)}
                     </th>
 
                     {filteredMonthOptions.map((m) => (
@@ -842,7 +983,7 @@ export default function AccountingSummaryView() {
 
                   <tr className="border-t-2 border-slate-300 bg-slate-50">
                     <td className="px-4 py-3 font-semibold text-slate-900">
-                      Monthly Summary Total
+                      {getRetailerMonthlyTotalLabel(retailer)}
                     </td>
 
                     {filteredMonthOptions.map((m) => (
@@ -862,6 +1003,10 @@ export default function AccountingSummaryView() {
               </table>
             </div>
           )
+        ) : retailer === "target" || retailer === "unfi" ? (
+          <p className="text-sm text-slate-500">
+            Summary Discrepancy is currently available for KeHE only.
+          </p>
         ) : !appliedDiscrepancyMonth ? (
           <p className="text-sm text-slate-500">No discrepancy month selected.</p>
         ) : discrepancySummary.typeRows.length === 0 ? (
@@ -874,12 +1019,15 @@ export default function AccountingSummaryView() {
                   <th className="px-4 py-3 text-left font-semibold text-slate-700">
                     Type
                   </th>
+
                   <th className="px-4 py-3 text-right font-semibold text-slate-700">
                     Ksolve Total
                   </th>
+
                   <th className="px-4 py-3 text-right font-semibold text-slate-700">
                     Invoice Total
                   </th>
+
                   <th className="px-4 py-3 text-right font-semibold text-slate-700">
                     Discrepancy
                   </th>
@@ -906,8 +1054,8 @@ export default function AccountingSummaryView() {
                         Math.abs(row.discrepancy) < 0.01
                           ? "text-slate-900"
                           : row.discrepancy > 0
-                            ? "text-amber-600"
-                            : "text-red-600"
+                          ? "text-amber-600"
+                          : "text-red-600"
                       }`}
                     >
                       {formatCurrency(row.discrepancy)}
