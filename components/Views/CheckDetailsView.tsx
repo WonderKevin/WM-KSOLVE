@@ -7,6 +7,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
 
+type Retailer = "all" | "kehe" | "target" | "unfi";
+
 type InvoiceRecord = {
   id: number;
   month: string | null;
@@ -18,6 +20,10 @@ type InvoiceRecord = {
   dc_name: string | null;
   status: string | null;
   type: string | null;
+
+  // All current invoice rows are KeHE.
+  // Target and UNFI can be added later.
+  retailer?: Retailer;
 };
 
 type CheckGroup = {
@@ -28,8 +34,16 @@ type CheckGroup = {
   rows: InvoiceRecord[];
 };
 
+const retailerOptions: Array<{ value: Retailer; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "kehe", label: "KeHE" },
+  { value: "target", label: "Target" },
+  { value: "unfi", label: "UNFI" },
+];
+
 function formatCurrency(value: number | null | undefined) {
   if (value == null) return "";
+
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -64,7 +78,10 @@ function groupByCheck(rows: InvoiceRecord[]): CheckGroup[] {
 export default function CheckDetailsView() {
   const [rows, setRows] = useState<InvoiceRecord[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const [retailer, setRetailer] = useState<Retailer>("all");
   const [searchTerm, setSearchTerm] = useState("");
+
   const [openChecks, setOpenChecks] = useState<Record<string, boolean>>({});
   const [openTypes, setOpenTypes] = useState<Record<string, boolean>>({});
 
@@ -82,7 +99,14 @@ export default function CheckDetailsView() {
           .order("check_number", { ascending: false });
 
         if (error) throw error;
-        setRows(data || []);
+
+        // All existing/current rows are KeHE.
+        const taggedRows = ((data || []) as InvoiceRecord[]).map((row) => ({
+          ...row,
+          retailer: "kehe" as Retailer,
+        }));
+
+        setRows(taggedRows);
       } catch (error) {
         console.error("Check details load error:", error);
       } finally {
@@ -93,11 +117,20 @@ export default function CheckDetailsView() {
     loadData();
   }, []);
 
+  const retailerFilteredRows = useMemo(() => {
+    if (retailer === "all") return rows;
+
+    return rows.filter((row) => row.retailer === retailer);
+  }, [rows, retailer]);
+
   const filteredRows = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
-    if (!search) return rows;
 
-    return rows.filter((row) => {
+    const baseRows = retailerFilteredRows;
+
+    if (!search) return baseRows;
+
+    return baseRows.filter((row) => {
       return (
         (row.month || "").toLowerCase().includes(search) ||
         (row.check_date || "").toLowerCase().includes(search) ||
@@ -106,10 +139,11 @@ export default function CheckDetailsView() {
         (row.invoice_number || "").toLowerCase().includes(search) ||
         (row.dc_name || "").toLowerCase().includes(search) ||
         (row.status || "").toLowerCase().includes(search) ||
-        (row.type || "").toLowerCase().includes(search)
+        (row.type || "").toLowerCase().includes(search) ||
+        (row.retailer || "").toLowerCase().includes(search)
       );
     });
-  }, [rows, searchTerm]);
+  }, [retailerFilteredRows, searchTerm]);
 
   const checkGroups = useMemo(() => groupByCheck(filteredRows), [filteredRows]);
 
@@ -130,18 +164,37 @@ export default function CheckDetailsView() {
   return (
     <div className="space-y-4">
       <div className="sticky top-[116px] z-20 space-y-4">
-        
-
         <Card className="rounded-3xl border border-slate-200 bg-white/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
           <CardContent className="pt-6">
-            <div className="relative max-w-md">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <Input
-                placeholder="Search month, check, invoice, DC, type..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="rounded-xl border-slate-200 pl-9"
-              />
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-slate-500">
+                  Retailer
+                </label>
+
+                <select
+                  value={retailer}
+                  onChange={(e) => setRetailer(e.target.value as Retailer)}
+                  className="min-w-[160px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                >
+                  {retailerOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="relative w-full max-w-md">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                <Input
+                  placeholder="Search month, check, invoice, DC, type..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="rounded-xl border-slate-200 pl-9"
+                />
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -160,11 +213,14 @@ export default function CheckDetailsView() {
                 const isCheckOpen = !!openChecks[checkKey];
 
                 const typeMap = new Map<string, InvoiceRecord[]>();
+
                 for (const row of group.rows) {
                   const typeName = row.type?.trim() || "Unknown";
+
                   if (!typeMap.has(typeName)) {
                     typeMap.set(typeName, []);
                   }
+
                   typeMap.get(typeName)!.push(row);
                 }
 
@@ -198,6 +254,7 @@ export default function CheckDetailsView() {
                           <ChevronRight className="h-4 w-4 text-slate-600" />
                         )}
                       </div>
+
                       <div>
                         <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                           Month
@@ -206,6 +263,7 @@ export default function CheckDetailsView() {
                           {group.month}
                         </div>
                       </div>
+
                       <div>
                         <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                           Check Date
@@ -214,6 +272,7 @@ export default function CheckDetailsView() {
                           {group.check_date}
                         </div>
                       </div>
+
                       <div>
                         <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                           Check #
@@ -222,6 +281,7 @@ export default function CheckDetailsView() {
                           {group.check_number}
                         </div>
                       </div>
+
                       <div>
                         <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                           Check Amt
@@ -236,7 +296,7 @@ export default function CheckDetailsView() {
                       <div className="border-t border-slate-200 bg-slate-50 p-4">
                         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                           <div className="grid grid-cols-[48px_1fr_220px] bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700">
-                            <div></div>
+                            <div />
                             <div>Type</div>
                             <div>Total Amount</div>
                           </div>
@@ -266,9 +326,11 @@ export default function CheckDetailsView() {
                                       <ChevronRight className="h-4 w-4 text-slate-600" />
                                     )}
                                   </div>
+
                                   <div className="font-medium text-slate-900">
                                     {entry.typeName}
                                   </div>
+
                                   <div className="font-medium text-slate-900">
                                     {formatCurrency(entry.totalAmount)}
                                   </div>
@@ -290,10 +352,13 @@ export default function CheckDetailsView() {
                                           className="grid grid-cols-[1.4fr_180px_1.2fr_140px] border-t border-slate-200 px-4 py-3 text-sm text-slate-700"
                                         >
                                           <div>{item.invoice_number || ""}</div>
+
                                           <div className="font-medium text-slate-900">
                                             {formatCurrency(item.invoice_amt)}
                                           </div>
+
                                           <div>{item.dc_name || ""}</div>
+
                                           <div>{item.status || ""}</div>
                                         </div>
                                       ))}
