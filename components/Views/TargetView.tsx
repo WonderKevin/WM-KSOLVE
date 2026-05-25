@@ -25,32 +25,59 @@ type TargetInvoiceRow = {
   retailer: "target";
 };
 
-function clean(value: any) {
-  return String(value ?? "").replace(/\u0000/g, "").trim();
+function clean(value: unknown) {
+  return String(value ?? "")
+    .replace(/\u0000/g, "")
+    .trim();
 }
 
-function normalizeHeader(value: any) {
-  return clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+function normalizeHeader(value: unknown) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }
 
-function parseDate(value: any) {
+function parseDate(value: unknown) {
   if (!value) return null;
 
   if (typeof value === "number") {
     const parsed = XLSX.SSF.parse_date_code(value);
+
     if (!parsed) return null;
-    return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+
+    return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(
+      parsed.d
+    ).padStart(2, "0")}`;
   }
 
   const text = clean(value);
-  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
 
-  if (match) {
-    const [, mm, dd, yyyy] = match;
-    return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+  if (!text) return null;
+
+  const mmddyyyy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+
+  if (mmddyyyy) {
+    const [, mm, dd, yyyy] = mmddyyyy;
+
+    return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(
+      2,
+      "0"
+    )}`;
+  }
+
+  const yyyymmdd = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+
+  if (yyyymmdd) {
+    const [, yyyy, mm, dd] = yyyymmdd;
+
+    return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(
+      2,
+      "0"
+    )}`;
   }
 
   const date = new Date(text);
+
   if (Number.isNaN(date.getTime())) return null;
 
   return date.toISOString().slice(0, 10);
@@ -60,6 +87,7 @@ function monthFromDate(value: string | null) {
   if (!value) return null;
 
   const date = new Date(`${value}T00:00:00`);
+
   if (Number.isNaN(date.getTime())) return null;
 
   return date.toLocaleDateString("en-US", {
@@ -68,20 +96,36 @@ function monthFromDate(value: string | null) {
   });
 }
 
-function toNumber(value: any) {
-  const text = clean(value).replace(/[$,]/g, "");
+function toNumber(value: unknown) {
+  const text = clean(value)
+    .replace(/[$,]/g, "")
+    .replace(/[()]/g, "")
+    .trim();
+
   if (!text) return null;
 
+  const isNegative =
+    clean(value).includes("(") && clean(value).includes(")");
+
   const number = Number(text);
-  return Number.isNaN(number) ? null : number;
+
+  if (Number.isNaN(number)) return null;
+
+  return isNegative ? -number : number;
 }
 
-function getType(docHeaderText: string | null, reasonCodeDescription: string | null) {
+function getType(
+  docHeaderText: string | null,
+  reasonCodeDescription: string | null
+) {
   const doc = clean(docHeaderText);
   const reason = clean(reasonCodeDescription);
 
   if (/^\d{4}$/.test(doc)) return "WM Invoice";
-  if (/^TRT-TR/i.test(doc) || /^TRT-TR/i.test(reason)) return "Lumper Charges";
+
+  if (/^TRT-TR/i.test(doc) || /^TRT-TR/i.test(reason)) {
+    return "Lumper Charges";
+  }
 
   return "Unknown";
 }
@@ -107,40 +151,78 @@ async function parseTargetWorkbook(file: File) {
   const buffer = await file.arrayBuffer();
 
   try {
-    const workbook = XLSX.read(buffer, { type: "array" });
+    const workbook = XLSX.read(buffer, {
+      type: "array",
+      cellDates: false,
+      raw: false,
+    });
+
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
     const rows = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: "",
       raw: false,
-    }) as any[][];
+    }) as unknown[][];
 
-    if (rows.length) return rows;
+    if (
+      rows.some((row) =>
+        row.some((cell) => normalizeHeader(cell) === "docheadertext")
+      )
+    ) {
+      return rows;
+    }
   } catch {
-    // Fall back to Target tab-delimited XLS export.
+    // Fall back below.
   }
 
   const utf16 = new TextDecoder("utf-16le").decode(buffer);
   const utf8 = new TextDecoder("utf-8").decode(buffer);
 
   const rows16 = parseDelimitedTargetFile(utf16);
-  if (rows16.some((row) => row.some((cell) => normalizeHeader(cell) === "docheadertext"))) {
+
+  if (
+    rows16.some((row) =>
+      row.some((cell) => normalizeHeader(cell) === "docheadertext")
+    )
+  ) {
     return rows16;
   }
 
   return parseDelimitedTargetFile(utf8);
 }
 
-function getHeaderIndex(headers: any[], names: string[]) {
+function getHeaderIndex(headers: unknown[], names: string[]) {
   const normalized = headers.map(normalizeHeader);
 
   for (const name of names) {
     const index = normalized.indexOf(normalizeHeader(name));
+
     if (index !== -1) return index;
   }
 
   return -1;
+}
+
+function getValue(row: unknown[], index: number) {
+  if (index < 0) return "";
+  return row[index];
+}
+
+function findMetadataValue(rows: unknown[][], label: string) {
+  const normalizedLabel = normalizeHeader(label);
+
+  for (const row of rows) {
+    const index = row.findIndex(
+      (cell) => normalizeHeader(cell) === normalizedLabel
+    );
+
+    if (index !== -1) {
+      return row[index + 1] ?? "";
+    }
+  }
+
+  return "";
 }
 
 export default function TargetView() {
@@ -180,16 +262,8 @@ export default function TargetView() {
     try {
       const rawRows = await parseTargetWorkbook(file);
 
-      const checkNumberRow = rawRows.find((row) =>
-        row.some((cell) => normalizeHeader(cell) === "checknumber")
-      );
-
-      const checkDateRow = rawRows.find((row) =>
-        row.some((cell) => normalizeHeader(cell) === "checkdate")
-      );
-
-      const checkNumber = clean(checkNumberRow?.[1]);
-      const checkDate = parseDate(checkDateRow?.[1]);
+      const checkNumber = clean(findMetadataValue(rawRows, "Check Number"));
+      const checkDate = parseDate(findMetadataValue(rawRows, "Check Date"));
       const month = monthFromDate(checkDate);
 
       const headerRowIndex = rawRows.findIndex((row) =>
@@ -206,17 +280,26 @@ export default function TargetView() {
       const reasonIndex = getHeaderIndex(headers, ["Reason Code Description"]);
       const sapDocIndex = getHeaderIndex(headers, ["SAP Doc #"]);
       const docDateIndex = getHeaderIndex(headers, ["Doc Date"]);
-      const grossIndex = getHeaderIndex(headers, ["Gross Amount", "Gross Amt"]);
+      const grossIndex = getHeaderIndex(headers, [
+        "Gross Amount",
+        "Gross Amt",
+      ]);
       const cashDiscountIndex = getHeaderIndex(headers, ["Cash Discount"]);
-      const withholdingIndex = getHeaderIndex(headers, ["Withholding Tax Amount"]);
+      const withholdingIndex = getHeaderIndex(headers, [
+        "Withholding Tax Amount",
+        "Withholdi",
+        "Withholding",
+      ]);
       const netIndex = getHeaderIndex(headers, ["Net Amount"]);
 
       const parsedRows: TargetInvoiceRow[] = rawRows
         .slice(headerRowIndex + 1)
         .filter((row) => row.some((cell) => clean(cell) !== ""))
-        .map((row) => {
-          const docHeaderText = clean(row[docHeaderIndex]) || null;
-          const reasonCodeDescription = clean(row[reasonIndex]) || null;
+        .map((row): TargetInvoiceRow => {
+          const docHeaderText = clean(getValue(row, docHeaderIndex)) || null;
+
+          const reasonCodeDescription =
+            clean(getValue(row, reasonIndex)) || null;
 
           return {
             month,
@@ -224,12 +307,12 @@ export default function TargetView() {
             check_number: checkNumber || null,
             doc_header_text: docHeaderText,
             reason_code_description: reasonCodeDescription,
-            sap_doc_number: clean(row[sapDocIndex]) || null,
-            doc_date: parseDate(row[docDateIndex]),
-            gross_amount: toNumber(row[grossIndex]),
-            cash_discount: toNumber(row[cashDiscountIndex]),
-            withholding_tax_amount: toNumber(row[withholdingIndex]),
-            net_amount: toNumber(row[netIndex]),
+            sap_doc_number: clean(getValue(row, sapDocIndex)) || null,
+            doc_date: parseDate(getValue(row, docDateIndex)),
+            gross_amount: toNumber(getValue(row, grossIndex)),
+            cash_discount: toNumber(getValue(row, cashDiscountIndex)),
+            withholding_tax_amount: toNumber(getValue(row, withholdingIndex)),
+            net_amount: toNumber(getValue(row, netIndex)),
             type: getType(docHeaderText, reasonCodeDescription),
             retailer: "target",
           };
@@ -246,7 +329,9 @@ export default function TargetView() {
         throw new Error("No Target invoice rows found in uploaded file.");
       }
 
-      const { error } = await supabase.from("target_invoices").insert(parsedRows);
+      const { error } = await supabase
+        .from("target_invoices")
+        .insert(parsedRows);
 
       if (error) throw error;
 
@@ -270,6 +355,7 @@ export default function TargetView() {
         acc.cashDiscount += Number(row.cash_discount || 0);
         acc.withholding += Number(row.withholding_tax_amount || 0);
         acc.net += Number(row.net_amount || 0);
+
         return acc;
       },
       {
@@ -286,7 +372,10 @@ export default function TargetView() {
       <Card className="rounded-3xl border border-slate-200 bg-white shadow-sm">
         <CardContent className="flex flex-col gap-3 pt-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-xl font-bold text-slate-900">Target Invoices</h2>
+            <h2 className="text-xl font-bold text-slate-900">
+              Target Invoices
+            </h2>
+
             <p className="text-sm text-slate-500">
               Upload Target remittance files and save them to Supabase.
             </p>
@@ -300,6 +389,7 @@ export default function TargetView() {
               className="hidden"
               onChange={(event) => {
                 const file = event.target.files?.[0];
+
                 if (file) handleUpload(file);
               }}
             />
@@ -320,7 +410,9 @@ export default function TargetView() {
       <Card className="rounded-3xl border border-slate-200 bg-white shadow-sm">
         <CardContent className="space-y-5 pt-6">
           {loading ? (
-            <p className="text-sm text-slate-500">Loading Target invoices...</p>
+            <p className="text-sm text-slate-500">
+              Loading Target invoices...
+            </p>
           ) : rows.length === 0 ? (
             <p className="text-sm text-slate-500">No Target invoices found.</p>
           ) : (
@@ -328,17 +420,39 @@ export default function TargetView() {
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-100">
                   <tr>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Month</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Check Date</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Check Number</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Doc.Header Text</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Reason Code Description</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">SAP Doc #</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Doc Date</th>
-                    <th className="px-4 py-3 text-right font-semibold text-slate-700">Gross Amount</th>
-                    <th className="px-4 py-3 text-right font-semibold text-slate-700">Cash Discount</th>
-                    <th className="px-4 py-3 text-right font-semibold text-slate-700">Withholding Tax Amount</th>
-                    <th className="px-4 py-3 text-right font-semibold text-slate-700">Net Amount</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                      Month
+                    </th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                      Check Date
+                    </th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                      Check Number
+                    </th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                      Doc.Header Text
+                    </th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                      Reason Code Description
+                    </th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                      SAP Doc #
+                    </th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                      Doc Date
+                    </th>
+                    <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                      Gross Amount
+                    </th>
+                    <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                      Cash Discount
+                    </th>
+                    <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                      Withholding Tax Amount
+                    </th>
+                    <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                      Net Amount
+                    </th>
                   </tr>
                 </thead>
 
@@ -349,13 +463,23 @@ export default function TargetView() {
                       <td className="px-4 py-3">{row.check_date}</td>
                       <td className="px-4 py-3">{row.check_number}</td>
                       <td className="px-4 py-3">{row.doc_header_text}</td>
-                      <td className="px-4 py-3">{row.reason_code_description}</td>
+                      <td className="px-4 py-3">
+                        {row.reason_code_description}
+                      </td>
                       <td className="px-4 py-3">{row.sap_doc_number}</td>
                       <td className="px-4 py-3">{row.doc_date}</td>
-                      <td className="px-4 py-3 text-right">{formatCurrency(row.gross_amount)}</td>
-                      <td className="px-4 py-3 text-right">{formatCurrency(row.cash_discount)}</td>
-                      <td className="px-4 py-3 text-right">{formatCurrency(row.withholding_tax_amount)}</td>
-                      <td className="px-4 py-3 text-right font-medium text-slate-900">{formatCurrency(row.net_amount)}</td>
+                      <td className="px-4 py-3 text-right">
+                        {formatCurrency(row.gross_amount)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {formatCurrency(row.cash_discount)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {formatCurrency(row.withholding_tax_amount)}
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium text-slate-900">
+                        {formatCurrency(row.net_amount)}
+                      </td>
                     </tr>
                   ))}
 
@@ -363,10 +487,18 @@ export default function TargetView() {
                     <td className="px-4 py-3" colSpan={7}>
                       Total
                     </td>
-                    <td className="px-4 py-3 text-right">{formatCurrency(totals.gross)}</td>
-                    <td className="px-4 py-3 text-right">{formatCurrency(totals.cashDiscount)}</td>
-                    <td className="px-4 py-3 text-right">{formatCurrency(totals.withholding)}</td>
-                    <td className="px-4 py-3 text-right">{formatCurrency(totals.net)}</td>
+                    <td className="px-4 py-3 text-right">
+                      {formatCurrency(totals.gross)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {formatCurrency(totals.cashDiscount)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {formatCurrency(totals.withholding)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {formatCurrency(totals.net)}
+                    </td>
                   </tr>
                 </tbody>
               </table>
