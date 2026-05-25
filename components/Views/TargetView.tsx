@@ -21,8 +21,12 @@ type TargetInvoiceRow = {
   cash_discount: number | null;
   withholding_tax_amount: number | null;
   net_amount: number | null;
-  type: string | null;
   retailer: "target";
+};
+
+type ReasonPrefix = {
+  prefix: string;
+  description: string;
 };
 
 type ParsedTargetFile = {
@@ -33,15 +37,11 @@ type ParsedTargetFile = {
 };
 
 function clean(value: unknown) {
-  return String(value ?? "")
-    .replace(/\u0000/g, "")
-    .trim();
+  return String(value ?? "").replace(/\u0000/g, "").trim();
 }
 
 function normalizeHeader(value: unknown) {
-  return clean(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
+  return clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function parseDate(value: unknown) {
@@ -63,7 +63,6 @@ function parseDate(value: unknown) {
 
   if (mmddyyyy) {
     const [, mm, dd, yyyy] = mmddyyyy;
-
     return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(
       2,
       "0"
@@ -90,11 +89,7 @@ function monthFromDate(value: string | null) {
 
 function toNumber(value: unknown) {
   const original = clean(value);
-
-  const text = original
-    .replace(/[$,]/g, "")
-    .replace(/[()]/g, "")
-    .trim();
+  const text = original.replace(/[$,]/g, "").replace(/[()]/g, "").trim();
 
   if (!text) return null;
 
@@ -102,24 +97,6 @@ function toNumber(value: unknown) {
   if (Number.isNaN(number)) return null;
 
   return original.includes("(") && original.includes(")") ? -number : number;
-}
-
-function getType(
-  docHeaderText: string | null,
-  reasonCodeDescription: string | null
-) {
-  const doc = clean(docHeaderText);
-  const reason = clean(reasonCodeDescription);
-
-  if (/^\d{4}$/.test(doc) || /^\d{4}$/.test(reason)) {
-    return "WM Invoice";
-  }
-
-  if (/^TRT-TR/i.test(doc) || /^TRT-TR/i.test(reason)) {
-    return "Lumper Charges";
-  }
-
-  return "Unknown";
 }
 
 function formatCurrency(value: number | null | undefined) {
@@ -151,13 +128,11 @@ async function parseTargetWorkbook(file: File) {
 
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
-    const rows = XLSX.utils.sheet_to_json(sheet, {
+    return XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: "",
       raw: false,
     }) as unknown[][];
-
-    return rows;
   } catch {
     const utf16 = new TextDecoder("utf-16le").decode(buffer);
     return parseDelimitedTargetFile(utf16);
@@ -194,7 +169,24 @@ function findMetadataValue(rows: unknown[][], label: string) {
   return "";
 }
 
-async function parseTargetFile(file: File): Promise<ParsedTargetFile> {
+function resolveReasonDescription(
+  docHeaderText: string | null,
+  originalReason: string | null,
+  reasonPrefixes: ReasonPrefix[]
+) {
+  const source = clean(originalReason || docHeaderText);
+
+  const match = reasonPrefixes
+    .sort((a, b) => b.prefix.length - a.prefix.length)
+    .find((item) => source.toUpperCase().startsWith(item.prefix.toUpperCase()));
+
+  return match?.description || clean(originalReason) || null;
+}
+
+async function parseTargetFile(
+  file: File,
+  reasonPrefixes: ReasonPrefix[]
+): Promise<ParsedTargetFile> {
   const rawRows = await parseTargetWorkbook(file);
 
   const checkNumber = clean(findMetadataValue(rawRows, "Check Number")) || null;
@@ -225,21 +217,24 @@ async function parseTargetFile(file: File): Promise<ParsedTargetFile> {
     .filter((row) => row.some((cell) => clean(cell) !== ""))
     .map((row): TargetInvoiceRow => {
       const docHeaderText = clean(getValue(row, docHeaderIndex)) || null;
-      const reasonCodeDescription = clean(getValue(row, reasonIndex)) || null;
+      const originalReason = clean(getValue(row, reasonIndex)) || null;
 
       return {
         month,
         check_date: checkDate,
         check_number: checkNumber,
         doc_header_text: docHeaderText,
-        reason_code_description: reasonCodeDescription,
+        reason_code_description: resolveReasonDescription(
+          docHeaderText,
+          originalReason,
+          reasonPrefixes
+        ),
         sap_doc_number: clean(getValue(row, sapDocIndex)) || null,
         doc_date: parseDate(getValue(row, docDateIndex)),
         gross_amount: toNumber(getValue(row, grossIndex)),
         cash_discount: toNumber(getValue(row, cashDiscountIndex)),
         withholding_tax_amount: toNumber(getValue(row, withholdingIndex)),
         net_amount: toNumber(getValue(row, netIndex)),
-        type: getType(docHeaderText, reasonCodeDescription),
         retailer: "target",
       };
     })
@@ -282,6 +277,7 @@ export default function TargetView() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [rows, setRows] = useState<TargetInvoiceRow[]>([]);
+  const [reasonPrefixes, setReasonPrefixes] = useState<ReasonPrefix[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
 
@@ -289,14 +285,23 @@ export default function TargetView() {
     setLoading(true);
 
     try {
-      const { data, error } = await supabase
-        .from("target_invoices")
-        .select("*")
-        .order("check_date", { ascending: false });
+      const [{ data: invoiceData, error: invoiceError }, { data: prefixData, error: prefixError }] =
+        await Promise.all([
+          supabase
+            .from("target_invoices")
+            .select("*")
+            .order("check_date", { ascending: false }),
+          supabase
+            .from("target_reason_code_prefixes")
+            .select("prefix, description")
+            .order("prefix", { ascending: true }),
+        ]);
 
-      if (error) throw error;
+      if (invoiceError) throw invoiceError;
+      if (prefixError) throw prefixError;
 
-      setRows((data || []) as TargetInvoiceRow[]);
+      setRows((invoiceData || []) as TargetInvoiceRow[]);
+      setReasonPrefixes((prefixData || []) as ReasonPrefix[]);
     } catch (error) {
       console.error(error);
     } finally {
@@ -324,7 +329,7 @@ export default function TargetView() {
       const parsedFiles: ParsedTargetFile[] = [];
 
       for (const file of fileArray) {
-        parsedFiles.push(await parseTargetFile(file));
+        parsedFiles.push(await parseTargetFile(file, reasonPrefixes));
       }
 
       let uploadedCount = 0;
@@ -380,9 +385,7 @@ export default function TargetView() {
     } finally {
       setUploading(false);
 
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -413,7 +416,6 @@ export default function TargetView() {
             <h2 className="text-xl font-bold text-slate-900">
               Target Invoices
             </h2>
-
             <p className="text-sm text-slate-500">
               Upload one or multiple Target remittance files and save them to
               Supabase.
@@ -429,10 +431,7 @@ export default function TargetView() {
               className="hidden"
               onChange={(event) => {
                 const files = event.target.files;
-
-                if (files && files.length > 0) {
-                  handleUpload(files);
-                }
+                if (files && files.length > 0) handleUpload(files);
               }}
             />
 
@@ -443,7 +442,6 @@ export default function TargetView() {
               onClick={() => fileInputRef.current?.click()}
             >
               <Upload className="mr-2 h-4 w-4" />
-
               {uploading ? "Uploading..." : "Upload Target Files"}
             </Button>
           </div>
@@ -461,42 +459,17 @@ export default function TargetView() {
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-100">
                   <tr>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
-                      Month
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
-                      Check Date
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
-                      Check Number
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
-                      Doc.Header Text
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
-                      Reason Code Description
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
-                      SAP Doc #
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
-                      Doc Date
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">
-                      Gross Amount
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">
-                      Cash Discount
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">
-                      Withholding Tax Amount
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">
-                      Net Amount
-                    </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
-                      Type
-                    </th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Month</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Check Date</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Check Number</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Doc.Header Text</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Reason Code Description</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">SAP Doc #</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Doc Date</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Gross Amount</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Cash Discount</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Withholding Tax Amount</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Net Amount</th>
                   </tr>
                 </thead>
 
@@ -504,7 +477,7 @@ export default function TargetView() {
                   {rows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={12}
+                        colSpan={11}
                         className="px-4 py-6 text-center text-sm text-slate-500"
                       >
                         No Target invoices found.
@@ -514,42 +487,17 @@ export default function TargetView() {
 
                   {rows.map((row) => (
                     <tr key={row.id} className="border-t border-slate-200">
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {row.month}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {row.check_date}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {row.check_number}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {row.doc_header_text}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {row.reason_code_description}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {row.sap_doc_number}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {row.doc_date}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatCurrency(row.gross_amount)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatCurrency(row.cash_discount)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatCurrency(row.withholding_tax_amount)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-slate-900">
-                        {formatCurrency(row.net_amount)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {row.type}
-                      </td>
+                      <td className="whitespace-nowrap px-4 py-3">{row.month}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{row.check_date}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{row.check_number}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{row.doc_header_text}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{row.reason_code_description}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{row.sap_doc_number}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{row.doc_date}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(row.gross_amount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(row.cash_discount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(row.withholding_tax_amount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-slate-900">{formatCurrency(row.net_amount)}</td>
                     </tr>
                   ))}
 
@@ -558,19 +506,10 @@ export default function TargetView() {
                       <td className="px-4 py-3" colSpan={7}>
                         Total
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatCurrency(totals.gross)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatCurrency(totals.cashDiscount)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatCurrency(totals.withholding)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatCurrency(totals.net)}
-                      </td>
-                      <td className="px-4 py-3" />
+                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(totals.gross)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(totals.cashDiscount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(totals.withholding)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(totals.net)}</td>
                     </tr>
                   )}
                 </tbody>
