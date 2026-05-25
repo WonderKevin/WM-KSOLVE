@@ -431,9 +431,9 @@ export default function TargetView() {
               Loading Target invoices...
             </p>
           ) : (
-            <div className="overflow-x-auto rounded-2xl border border-slate-200">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-100">
+            <div className="max-h-[70vh] overflow-auto rounded-2xl border border-slate-200">
+  <table className="min-w-full border-separate border-spacing-0 text-sm">
+    <thead className="sticky top-0 z-20 bg-slate-100 shadow-sm">
                   <tr>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Month</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Check Date</th>
