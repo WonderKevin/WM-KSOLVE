@@ -25,21 +25,32 @@ type TargetInvoiceRow = {
   retailer: "target";
 };
 
-function excelDateToIso(value: any) {
+function clean(value: any) {
+  return String(value ?? "").replace(/\u0000/g, "").trim();
+}
+
+function normalizeHeader(value: any) {
+  return clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function parseDate(value: any) {
   if (!value) return null;
 
   if (typeof value === "number") {
     const parsed = XLSX.SSF.parse_date_code(value);
     if (!parsed) return null;
-
-    const yyyy = parsed.y;
-    const mm = String(parsed.m).padStart(2, "0");
-    const dd = String(parsed.d).padStart(2, "0");
-
-    return `${yyyy}-${mm}-${dd}`;
+    return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
   }
 
-  const date = new Date(value);
+  const text = clean(value);
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+
+  if (match) {
+    const [, mm, dd, yyyy] = match;
+    return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+  }
+
+  const date = new Date(text);
   if (Number.isNaN(date.getTime())) return null;
 
   return date.toISOString().slice(0, 10);
@@ -58,21 +69,19 @@ function monthFromDate(value: string | null) {
 }
 
 function toNumber(value: any) {
-  if (value === null || value === undefined || value === "") return null;
+  const text = clean(value).replace(/[$,]/g, "");
+  if (!text) return null;
 
-  const cleaned = String(value).replace(/[$,]/g, "").trim();
-  const number = Number(cleaned);
-
+  const number = Number(text);
   return Number.isNaN(number) ? null : number;
 }
 
 function getType(docHeaderText: string | null, reasonCodeDescription: string | null) {
-  const doc = String(docHeaderText || "").trim();
-  const reason = String(reasonCodeDescription || "").trim();
+  const doc = clean(docHeaderText);
+  const reason = clean(reasonCodeDescription);
 
   if (/^\d{4}$/.test(doc)) return "WM Invoice";
-  if (/^TRT-TR/i.test(reason)) return "Lumper Charges";
-  if (/^TRT-TR/i.test(doc)) return "Lumper Charges";
+  if (/^TRT-TR/i.test(doc) || /^TRT-TR/i.test(reason)) return "Lumper Charges";
 
   return "Unknown";
 }
@@ -84,6 +93,54 @@ function formatCurrency(value: number | null | undefined) {
     style: "currency",
     currency: "USD",
   }).format(Number(value));
+}
+
+function parseDelimitedTargetFile(text: string) {
+  return text
+    .replace(/\u0000/g, "")
+    .split(/\r?\n|\r/)
+    .map((line) => line.split("\t").map(clean))
+    .filter((row) => row.some(Boolean));
+}
+
+async function parseTargetWorkbook(file: File) {
+  const buffer = await file.arrayBuffer();
+
+  try {
+    const workbook = XLSX.read(buffer, { type: "array" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+    const rows = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: "",
+      raw: false,
+    }) as any[][];
+
+    if (rows.length) return rows;
+  } catch {
+    // Fall back to Target tab-delimited XLS export.
+  }
+
+  const utf16 = new TextDecoder("utf-16le").decode(buffer);
+  const utf8 = new TextDecoder("utf-8").decode(buffer);
+
+  const rows16 = parseDelimitedTargetFile(utf16);
+  if (rows16.some((row) => row.some((cell) => normalizeHeader(cell) === "docheadertext"))) {
+    return rows16;
+  }
+
+  return parseDelimitedTargetFile(utf8);
+}
+
+function getHeaderIndex(headers: any[], names: string[]) {
+  const normalized = headers.map(normalizeHeader);
+
+  for (const name of names) {
+    const index = normalized.indexOf(normalizeHeader(name));
+    if (index !== -1) return index;
+  }
+
+  return -1;
 }
 
 export default function TargetView() {
@@ -121,54 +178,72 @@ export default function TargetView() {
     setUploading(true);
 
     try {
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: "array" });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rawRows = await parseTargetWorkbook(file);
 
-      const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, {
-        header: 1,
-        defval: "",
-      });
+      const checkNumberRow = rawRows.find((row) =>
+        row.some((cell) => normalizeHeader(cell) === "checknumber")
+      );
 
-      const checkNumber = String(rawRows[6]?.[1] || "").trim();
-      const checkDate = excelDateToIso(rawRows[7]?.[1]);
+      const checkDateRow = rawRows.find((row) =>
+        row.some((cell) => normalizeHeader(cell) === "checkdate")
+      );
+
+      const checkNumber = clean(checkNumberRow?.[1]);
+      const checkDate = parseDate(checkDateRow?.[1]);
       const month = monthFromDate(checkDate);
 
       const headerRowIndex = rawRows.findIndex((row) =>
-        row.some((cell) => String(cell).trim() === "Doc.Header Text")
+        row.some((cell) => normalizeHeader(cell) === "docheadertext")
       );
 
       if (headerRowIndex === -1) {
         throw new Error("Could not find Target invoice header row.");
       }
 
-      const dataRows = rawRows.slice(headerRowIndex + 1);
+      const headers = rawRows[headerRowIndex];
 
-      const parsedRows: TargetInvoiceRow[] = dataRows
-        .filter((row) => row.some((cell) => String(cell).trim() !== ""))
+      const docHeaderIndex = getHeaderIndex(headers, ["Doc.Header Text"]);
+      const reasonIndex = getHeaderIndex(headers, ["Reason Code Description"]);
+      const sapDocIndex = getHeaderIndex(headers, ["SAP Doc #"]);
+      const docDateIndex = getHeaderIndex(headers, ["Doc Date"]);
+      const grossIndex = getHeaderIndex(headers, ["Gross Amount", "Gross Amt"]);
+      const cashDiscountIndex = getHeaderIndex(headers, ["Cash Discount"]);
+      const withholdingIndex = getHeaderIndex(headers, ["Withholding Tax Amount"]);
+      const netIndex = getHeaderIndex(headers, ["Net Amount"]);
+
+      const parsedRows: TargetInvoiceRow[] = rawRows
+        .slice(headerRowIndex + 1)
+        .filter((row) => row.some((cell) => clean(cell) !== ""))
         .map((row) => {
-          const docHeaderText = String(row[0] || "").trim() || null;
-          const reasonCodeDescription = String(row[2] || "").trim() || null;
+          const docHeaderText = clean(row[docHeaderIndex]) || null;
+          const reasonCodeDescription = clean(row[reasonIndex]) || null;
 
           return {
             month,
             check_date: checkDate,
-            check_number: checkNumber,
+            check_number: checkNumber || null,
             doc_header_text: docHeaderText,
             reason_code_description: reasonCodeDescription,
-            sap_doc_number: String(row[4] || "").trim() || null,
-            doc_date: excelDateToIso(row[5]),
-            gross_amount: toNumber(row[6]),
-            cash_discount: toNumber(row[7]),
-            withholding_tax_amount: toNumber(row[8]),
-            net_amount: toNumber(row[9]),
+            sap_doc_number: clean(row[sapDocIndex]) || null,
+            doc_date: parseDate(row[docDateIndex]),
+            gross_amount: toNumber(row[grossIndex]),
+            cash_discount: toNumber(row[cashDiscountIndex]),
+            withholding_tax_amount: toNumber(row[withholdingIndex]),
+            net_amount: toNumber(row[netIndex]),
             type: getType(docHeaderText, reasonCodeDescription),
             retailer: "target",
           };
-        });
+        })
+        .filter(
+          (row) =>
+            row.doc_header_text ||
+            row.sap_doc_number ||
+            row.gross_amount !== null ||
+            row.net_amount !== null
+        );
 
       if (parsedRows.length === 0) {
-        throw new Error("No invoice rows found in uploaded file.");
+        throw new Error("No Target invoice rows found in uploaded file.");
       }
 
       const { error } = await supabase.from("target_invoices").insert(parsedRows);
@@ -223,8 +298,8 @@ export default function TargetView() {
               type="file"
               accept=".xlsx,.xls,.csv"
               className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
+              onChange={(event) => {
+                const file = event.target.files?.[0];
                 if (file) handleUpload(file);
               }}
             />
@@ -264,7 +339,6 @@ export default function TargetView() {
                     <th className="px-4 py-3 text-right font-semibold text-slate-700">Cash Discount</th>
                     <th className="px-4 py-3 text-right font-semibold text-slate-700">Withholding Tax Amount</th>
                     <th className="px-4 py-3 text-right font-semibold text-slate-700">Net Amount</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Type</th>
                   </tr>
                 </thead>
 
@@ -282,7 +356,6 @@ export default function TargetView() {
                       <td className="px-4 py-3 text-right">{formatCurrency(row.cash_discount)}</td>
                       <td className="px-4 py-3 text-right">{formatCurrency(row.withholding_tax_amount)}</td>
                       <td className="px-4 py-3 text-right font-medium text-slate-900">{formatCurrency(row.net_amount)}</td>
-                      <td className="px-4 py-3">{row.type}</td>
                     </tr>
                   ))}
 
@@ -294,7 +367,6 @@ export default function TargetView() {
                     <td className="px-4 py-3 text-right">{formatCurrency(totals.cashDiscount)}</td>
                     <td className="px-4 py-3 text-right">{formatCurrency(totals.withholding)}</td>
                     <td className="px-4 py-3 text-right">{formatCurrency(totals.net)}</td>
-                    <td className="px-4 py-3" />
                   </tr>
                 </tbody>
               </table>
