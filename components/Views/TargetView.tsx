@@ -65,17 +65,6 @@ function parseDate(value: unknown) {
     )}`;
   }
 
-  const yyyymmdd = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-
-  if (yyyymmdd) {
-    const [, yyyy, mm, dd] = yyyymmdd;
-
-    return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(
-      2,
-      "0"
-    )}`;
-  }
-
   const date = new Date(text);
 
   if (Number.isNaN(date.getTime())) return null;
@@ -110,7 +99,9 @@ function toNumber(value: unknown) {
 
   if (Number.isNaN(number)) return null;
 
-  return original.includes("(") && original.includes(")") ? -number : number;
+  return original.includes("(") && original.includes(")")
+    ? -number
+    : number;
 }
 
 function getType(
@@ -166,31 +157,12 @@ async function parseTargetWorkbook(file: File) {
       raw: false,
     }) as unknown[][];
 
-    if (
-      rows.some((row) =>
-        row.some((cell) => normalizeHeader(cell) === "docheadertext")
-      )
-    ) {
-      return rows;
-    }
+    return rows;
   } catch {
-    // Fallback to text parsing below.
+    const utf16 = new TextDecoder("utf-16le").decode(buffer);
+
+    return parseDelimitedTargetFile(utf16);
   }
-
-  const utf16 = new TextDecoder("utf-16le").decode(buffer);
-  const rows16 = parseDelimitedTargetFile(utf16);
-
-  if (
-    rows16.some((row) =>
-      row.some((cell) => normalizeHeader(cell) === "docheadertext")
-    )
-  ) {
-    return rows16;
-  }
-
-  const utf8 = new TextDecoder("utf-8").decode(buffer);
-
-  return parseDelimitedTargetFile(utf8);
 }
 
 function getHeaderIndex(headers: unknown[], names: string[]) {
@@ -226,21 +198,6 @@ function findMetadataValue(rows: unknown[][], label: string) {
   return "";
 }
 
-function getUploadErrorMessage(error: unknown) {
-  if (error instanceof Error) return error.message;
-
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as { message?: unknown }).message === "string"
-  ) {
-    return (error as { message: string }).message;
-  }
-
-  return JSON.stringify(error);
-}
-
 export default function TargetView() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -255,14 +212,13 @@ export default function TargetView() {
       const { data, error } = await supabase
         .from("target_invoices")
         .select("*")
-        .order("check_date", { ascending: false })
-        .order("check_number", { ascending: false });
+        .order("check_date", { ascending: false });
 
       if (error) throw error;
 
       setRows((data || []) as TargetInvoiceRow[]);
     } catch (error) {
-      console.error("Target invoices load error:", error);
+      console.error(error);
     } finally {
       setLoading(false);
     }
@@ -278,57 +234,106 @@ export default function TargetView() {
     try {
       const rawRows = await parseTargetWorkbook(file);
 
-      const checkNumber = clean(findMetadataValue(rawRows, "Check Number"));
-      const checkDate = parseDate(findMetadataValue(rawRows, "Check Date"));
+      const checkNumber = clean(
+        findMetadataValue(rawRows, "Check Number")
+      );
+
+      const checkDate = parseDate(
+        findMetadataValue(rawRows, "Check Date")
+      );
+
       const month = monthFromDate(checkDate);
 
       const headerRowIndex = rawRows.findIndex((row) =>
-        row.some((cell) => normalizeHeader(cell) === "docheadertext")
+        row.some(
+          (cell) =>
+            normalizeHeader(cell) === "docheadertext"
+        )
       );
 
       if (headerRowIndex === -1) {
-        throw new Error("Could not find Target invoice header row.");
+        throw new Error(
+          "Could not find Target invoice header row."
+        );
       }
 
       const headers = rawRows[headerRowIndex];
 
-      const docHeaderIndex = getHeaderIndex(headers, ["Doc.Header Text"]);
-      const reasonIndex = getHeaderIndex(headers, ["Reason Code Description"]);
-      const sapDocIndex = getHeaderIndex(headers, ["SAP Doc #"]);
-      const docDateIndex = getHeaderIndex(headers, ["Doc Date"]);
+      const docHeaderIndex = getHeaderIndex(headers, [
+        "Doc.Header Text",
+      ]);
+
+      const reasonIndex = getHeaderIndex(headers, [
+        "Reason Code Description",
+      ]);
+
+      const sapDocIndex = getHeaderIndex(headers, [
+        "SAP Doc #",
+      ]);
+
+      const docDateIndex = getHeaderIndex(headers, [
+        "Doc Date",
+      ]);
+
       const grossIndex = getHeaderIndex(headers, [
         "Gross Amount",
-        "Gross Amt",
       ]);
-      const cashDiscountIndex = getHeaderIndex(headers, ["Cash Discount"]);
+
+      const cashDiscountIndex = getHeaderIndex(headers, [
+        "Cash Discount",
+      ]);
+
       const withholdingIndex = getHeaderIndex(headers, [
         "Withholding Tax Amount",
-        "Withholding",
       ]);
-      const netIndex = getHeaderIndex(headers, ["Net Amount"]);
+
+      const netIndex = getHeaderIndex(headers, [
+        "Net Amount",
+      ]);
 
       const parsedRows: TargetInvoiceRow[] = rawRows
         .slice(headerRowIndex + 1)
-        .filter((row) => row.some((cell) => clean(cell) !== ""))
+        .filter((row) =>
+          row.some((cell) => clean(cell) !== "")
+        )
         .map((row): TargetInvoiceRow => {
-          const docHeaderText = clean(getValue(row, docHeaderIndex)) || null;
+          const docHeaderText =
+            clean(getValue(row, docHeaderIndex)) ||
+            null;
 
           const reasonCodeDescription =
-            clean(getValue(row, reasonIndex)) || null;
+            clean(getValue(row, reasonIndex)) ||
+            null;
 
           return {
             month,
             check_date: checkDate,
             check_number: checkNumber || null,
             doc_header_text: docHeaderText,
-            reason_code_description: reasonCodeDescription,
-            sap_doc_number: clean(getValue(row, sapDocIndex)) || null,
-            doc_date: parseDate(getValue(row, docDateIndex)),
-            gross_amount: toNumber(getValue(row, grossIndex)),
-            cash_discount: toNumber(getValue(row, cashDiscountIndex)),
-            withholding_tax_amount: toNumber(getValue(row, withholdingIndex)),
-            net_amount: toNumber(getValue(row, netIndex)),
-            type: getType(docHeaderText, reasonCodeDescription),
+            reason_code_description:
+              reasonCodeDescription,
+            sap_doc_number:
+              clean(getValue(row, sapDocIndex)) ||
+              null,
+            doc_date: parseDate(
+              getValue(row, docDateIndex)
+            ),
+            gross_amount: toNumber(
+              getValue(row, grossIndex)
+            ),
+            cash_discount: toNumber(
+              getValue(row, cashDiscountIndex)
+            ),
+            withholding_tax_amount: toNumber(
+              getValue(row, withholdingIndex)
+            ),
+            net_amount: toNumber(
+              getValue(row, netIndex)
+            ),
+            type: getType(
+              docHeaderText,
+              reasonCodeDescription
+            ),
             retailer: "target",
           };
         })
@@ -341,7 +346,9 @@ export default function TargetView() {
         );
 
       if (parsedRows.length === 0) {
-        throw new Error("No Target invoice rows found in uploaded file.");
+        throw new Error(
+          "No Target invoice rows found."
+        );
       }
 
       const { error } = await supabase
@@ -351,9 +358,18 @@ export default function TargetView() {
       if (error) throw error;
 
       await loadRows();
+
+      alert(
+        `Uploaded ${parsedRows.length} Target invoice rows successfully.`
+      );
     } catch (error) {
-      console.error("Target upload error:", error);
-      alert(getUploadErrorMessage(error));
+      console.error(error);
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Upload failed."
+      );
     } finally {
       setUploading(false);
 
@@ -367,8 +383,15 @@ export default function TargetView() {
     return rows.reduce(
       (acc, row) => {
         acc.gross += Number(row.gross_amount || 0);
-        acc.cashDiscount += Number(row.cash_discount || 0);
-        acc.withholding += Number(row.withholding_tax_amount || 0);
+
+        acc.cashDiscount += Number(
+          row.cash_discount || 0
+        );
+
+        acc.withholding += Number(
+          row.withholding_tax_amount || 0
+        );
+
         acc.net += Number(row.net_amount || 0);
 
         return acc;
@@ -392,7 +415,8 @@ export default function TargetView() {
             </h2>
 
             <p className="text-sm text-slate-500">
-              Upload Target remittance files and save them to Supabase.
+              Upload Target remittance files and save
+              them to Supabase.
             </p>
           </div>
 
@@ -403,9 +427,12 @@ export default function TargetView() {
               accept=".xlsx,.xls,.csv"
               className="hidden"
               onChange={(event) => {
-                const file = event.target.files?.[0];
+                const file =
+                  event.target.files?.[0];
 
-                if (file) handleUpload(file);
+                if (file) {
+                  handleUpload(file);
+                }
               }}
             />
 
@@ -413,10 +440,15 @@ export default function TargetView() {
               type="button"
               className="rounded-2xl bg-slate-900 hover:bg-slate-800"
               disabled={uploading}
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() =>
+                fileInputRef.current?.click()
+              }
             >
               <Upload className="mr-2 h-4 w-4" />
-              {uploading ? "Uploading..." : "Upload Target File"}
+
+              {uploading
+                ? "Uploading..."
+                : "Upload Target File"}
             </Button>
           </div>
         </CardContent>
@@ -428,8 +460,6 @@ export default function TargetView() {
             <p className="text-sm text-slate-500">
               Loading Target invoices...
             </p>
-          ) : rows.length === 0 ? (
-            <p className="text-sm text-slate-500">No Target invoices found.</p>
           ) : (
             <div className="overflow-x-auto rounded-2xl border border-slate-200">
               <table className="min-w-full text-sm">
@@ -438,36 +468,47 @@ export default function TargetView() {
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
                       Month
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
                       Check Date
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
                       Check Number
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
                       Doc.Header Text
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
                       Reason Code Description
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
                       SAP Doc #
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
                       Doc Date
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">
                       Gross Amount
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">
                       Cash Discount
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">
                       Withholding Tax Amount
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">
                       Net Amount
                     </th>
+
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">
                       Type
                     </th>
@@ -475,65 +516,118 @@ export default function TargetView() {
                 </thead>
 
                 <tbody>
+                  {rows.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={12}
+                        className="px-4 py-6 text-center text-sm text-slate-500"
+                      >
+                        No Target invoices found.
+                      </td>
+                    </tr>
+                  )}
+
                   {rows.map((row) => (
-                    <tr key={row.id} className="border-t border-slate-200">
+                    <tr
+                      key={row.id}
+                      className="border-t border-slate-200"
+                    >
                       <td className="whitespace-nowrap px-4 py-3">
                         {row.month}
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3">
                         {row.check_date}
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3">
                         {row.check_number}
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3">
                         {row.doc_header_text}
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3">
-                        {row.reason_code_description}
+                        {
+                          row.reason_code_description
+                        }
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3">
                         {row.sap_doc_number}
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3">
                         {row.doc_date}
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatCurrency(row.gross_amount)}
+                        {formatCurrency(
+                          row.gross_amount
+                        )}
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatCurrency(row.cash_discount)}
+                        {formatCurrency(
+                          row.cash_discount
+                        )}
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatCurrency(row.withholding_tax_amount)}
+                        {formatCurrency(
+                          row.withholding_tax_amount
+                        )}
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-slate-900">
-                        {formatCurrency(row.net_amount)}
+                        {formatCurrency(
+                          row.net_amount
+                        )}
                       </td>
+
                       <td className="whitespace-nowrap px-4 py-3">
                         {row.type}
                       </td>
                     </tr>
                   ))}
 
-                  <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
-                    <td className="px-4 py-3" colSpan={7}>
-                      Total
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right">
-                      {formatCurrency(totals.gross)}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right">
-                      {formatCurrency(totals.cashDiscount)}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right">
-                      {formatCurrency(totals.withholding)}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right">
-                      {formatCurrency(totals.net)}
-                    </td>
-                    <td className="px-4 py-3" />
-                  </tr>
+                  {rows.length > 0 && (
+                    <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
+                      <td
+                        className="px-4 py-3"
+                        colSpan={7}
+                      >
+                        Total
+                      </td>
+
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(
+                          totals.gross
+                        )}
+                      </td>
+
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(
+                          totals.cashDiscount
+                        )}
+                      </td>
+
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(
+                          totals.withholding
+                        )}
+                      </td>
+
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(
+                          totals.net
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3" />
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
