@@ -10,7 +10,7 @@ import BrokerCommissionSummaryView from "@/components/Views/BrokerCommissionSumm
 import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDataSetsView";
 
 import InvoicesView from "@/components/Views/InvoicesView";
-import KeheVelocityView from "@/components/Views/KeheVelocityView";
+import KeHeVelocityView from "@/components/Views/KeHeVelocityView";
 import TonyVelocityView from "@/components/Views/TonyVelocityView";
 import ProductListView from "@/components/Views/ProductListView";
 import LocationsView from "@/components/Views/LocationsView";
@@ -107,7 +107,7 @@ export default function WMKsolveApp() {
         return <TargetView />;
 
       case "kehe-velocity":
-        return <KeheVelocityView />;
+        return <KeHeVelocityView />;
 
       case "tony-velocity":
         return <TonyVelocityView />;
@@ -143,7 +143,6 @@ export default function WMKsolveApp() {
 
   return (
     <div className="flex min-h-screen bg-slate-100">
-      {/* SIDEBAR */}
       <aside className="w-[300px] border-r border-slate-200 bg-white p-5">
         <div className="mb-8">
           <h1 className="text-3xl font-black tracking-tight text-slate-900">
@@ -202,7 +201,7 @@ export default function WMKsolveApp() {
             )}
           </div>
 
-          {/* BROKER COMMISSION */}
+          {/* BROKER */}
           <div className="rounded-2xl border border-slate-200 bg-slate-50">
             <button
               onClick={() => toggleSection("broker")}
@@ -429,7 +428,6 @@ export default function WMKsolveApp() {
         </div>
       </aside>
 
-      {/* CONTENT */}
       <main className="flex-1 overflow-auto p-6">
         {renderView}
       </main>
