@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Download, FileSpreadsheet, Upload } from "lucide-react";
+import { FileSpreadsheet, Upload } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
 type TonyVelocityRow = {
@@ -32,6 +32,8 @@ type MissingLocation = {
   location: string;
 };
 
+const PAGE_SIZE = 1000;
+
 const MONTHS = [
   "January",
   "February",
@@ -52,7 +54,10 @@ function monthLabel(month: string, year: string) {
 }
 
 function normalize(value: unknown) {
-  return String(value ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  return String(value ?? "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeKey(value: unknown) {
@@ -61,51 +66,148 @@ function normalizeKey(value: unknown) {
 
 function toNumber(value: unknown) {
   if (typeof value === "number") return value;
-  const n = Number(String(value ?? "").replace(/[$,]/g, "").trim());
+
+  const n = Number(
+    String(value ?? "")
+      .replace(/[$,]/g, "")
+      .trim()
+  );
+
   return Number.isFinite(n) ? n : 0;
 }
 
 function findColumn(headers: string[], candidates: string[]) {
   const normalized = headers.map((h) => normalizeKey(h));
+
   for (const candidate of candidates) {
     const c = normalizeKey(candidate);
     const exactIndex = normalized.findIndex((h) => h === c);
+
     if (exactIndex >= 0) return headers[exactIndex];
   }
+
   for (const candidate of candidates) {
     const c = normalizeKey(candidate);
-    const containsIndex = normalized.findIndex((h) => h.includes(c) || c.includes(h));
+
+    const containsIndex = normalized.findIndex(
+      (h) => h.includes(c) || c.includes(h)
+    );
+
     if (containsIndex >= 0) return headers[containsIndex];
   }
+
   return "";
 }
 
-function getCell(row: Record<string, unknown>, headers: string[], candidates: string[]) {
+function getCell(
+  row: Record<string, unknown>,
+  headers: string[],
+  candidates: string[]
+) {
   const col = findColumn(headers, candidates);
+
   return col ? row[col] : "";
 }
 
-function downloadCsv(filename: string, headers: string[], rows: (string | number)[][]) {
+function downloadCsv(
+  filename: string,
+  headers: string[],
+  rows: (string | number)[][]
+) {
   const esc = (value: string | number) => {
     const s = String(value ?? "");
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+
+    return /[",\n]/.test(s)
+      ? `"${s.replace(/"/g, '""')}"`
+      : s;
   };
-  const csv = [headers.map(esc).join(","), ...rows.map((row) => row.map(esc).join(","))].join("\r\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+
+  const csv = [
+    headers.map(esc).join(","),
+    ...rows.map((row) => row.map(esc).join(",")),
+  ].join("\r\n");
+
+  const blob = new Blob([csv], {
+    type: "text/csv;charset=utf-8;",
+  });
+
   const url = URL.createObjectURL(blob);
+
   const a = document.createElement("a");
   a.href = url;
   a.download = `${filename}.csv`;
   a.click();
+
   URL.revokeObjectURL(url);
 }
 
 async function readWorkbookRows(file: File) {
   const XLSX = await import("xlsx");
   const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: "array" });
+
+  const workbook = XLSX.read(buffer, {
+    type: "array",
+  });
+
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+
+  return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+    defval: "",
+  });
+}
+
+async function fetchAllTonyVelocityRows() {
+  let allRows: TonyVelocityRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("tony_velocity")
+      .select("*")
+      .order("month", {
+        ascending: false,
+      })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as TonyVelocityRow[];
+
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) break;
+
+    from += PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
+async function fetchAllTonyLocations() {
+  let allRows: TonyLocation[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("tony_locations")
+      .select("*")
+      .order("customer", {
+        ascending: true,
+      })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as TonyLocation[];
+
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) break;
+
+    from += PAGE_SIZE;
+  }
+
+  return allRows;
 }
 
 function LocationResolutionModal({
@@ -123,15 +225,28 @@ function LocationResolutionModal({
 
   const updateLocation = (customer: string, location: string) => {
     setItems((prev) =>
-      prev.map((item) => (item.customer === customer ? { ...item, location } : item))
+      prev.map((item) =>
+        item.customer === customer
+          ? {
+              ...item,
+              location,
+            }
+          : item
+      )
     );
   };
 
   const getSuggestions = (value: string) => {
     const q = normalizeKey(value);
+
     if (!q) return suggestions.slice(0, 8);
+
     return suggestions
-      .filter((s) => normalizeKey(s.location).includes(q) || normalizeKey(s.customer).includes(q))
+      .filter(
+        (s) =>
+          normalizeKey(s.location).includes(q) ||
+          normalizeKey(s.customer).includes(q)
+      )
       .slice(0, 8);
   };
 
@@ -141,9 +256,13 @@ function LocationResolutionModal({
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-6">
       <div className="max-h-[85vh] w-full max-w-5xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
         <div className="border-b border-slate-200 px-6 py-4">
-          <h2 className="text-xl font-bold text-slate-900">New locations need mapping</h2>
+          <h2 className="text-xl font-bold text-slate-900">
+            New locations need mapping
+          </h2>
+
           <p className="mt-1 text-sm text-slate-500">
-            These customers are not in Tony&apos;s Location database yet. Type a location or choose a suggestion, then save.
+            These customers are not in Tony&apos;s Location database yet. Type a
+            location or choose a suggestion, then save.
           </p>
         </div>
 
@@ -151,24 +270,33 @@ function LocationResolutionModal({
           <div className="space-y-4">
             {items.map((item) => {
               const options = getSuggestions(item.location || item.customer);
+
               return (
-                <div key={item.customer} className="rounded-2xl border border-slate-200 p-4">
+                <div
+                  key={item.customer}
+                  className="rounded-2xl border border-slate-200 p-4"
+                >
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                     <div>
                       <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">
                         Customer
                       </label>
+
                       <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-medium text-slate-800">
                         {item.customer}
                       </div>
                     </div>
+
                     <div>
                       <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">
                         Location
                       </label>
+
                       <input
                         value={item.location}
-                        onChange={(e) => updateLocation(item.customer, e.target.value)}
+                        onChange={(e) =>
+                          updateLocation(item.customer, e.target.value)
+                        }
                         placeholder="Type location..."
                         className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400"
                       />
@@ -181,7 +309,9 @@ function LocationResolutionModal({
                         <button
                           key={`${item.customer}-${option.customer}-${option.location}`}
                           type="button"
-                          onClick={() => updateLocation(item.customer, option.location)}
+                          onClick={() =>
+                            updateLocation(item.customer, option.location)
+                          }
                           className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
                         >
                           {option.location}
@@ -203,6 +333,7 @@ function LocationResolutionModal({
           >
             Cancel
           </button>
+
           <button
             type="button"
             onClick={() => onSave(items)}
@@ -229,34 +360,43 @@ export default function TonyVelocityView() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const [selectedMonth, setSelectedMonth] = useState(MONTHS[new Date().getMonth()]);
-  const [selectedYear, setSelectedYear] = useState(String(new Date().getFullYear()));
+  const [selectedMonth, setSelectedMonth] = useState(
+    MONTHS[new Date().getMonth()]
+  );
+
+  const [selectedYear, setSelectedYear] = useState(
+    String(new Date().getFullYear())
+  );
+
   const [searchQuery, setSearchQuery] = useState("");
   const [monthFilter, setMonthFilter] = useState("All Months");
 
   const [pendingRows, setPendingRows] = useState<TonyVelocityRow[]>([]);
   const [pendingSourceName, setPendingSourceName] = useState("");
-  const [missingLocations, setMissingLocations] = useState<MissingLocation[]>([]);
-  const [showVelocityUploadOptions, setShowVelocityUploadOptions] = useState(false);
+  const [missingLocations, setMissingLocations] = useState<MissingLocation[]>(
+    []
+  );
+
+  const [showVelocityUploadOptions, setShowVelocityUploadOptions] =
+    useState(false);
+
   const [showLocationModal, setShowLocationModal] = useState(false);
+
   const [manualCustomer, setManualCustomer] = useState("");
   const [manualLocation, setManualLocation] = useState("");
 
   const loadData = async () => {
     setLoading(true);
     setError("");
+
     try {
-      const [{ data: velocityData, error: velocityError }, { data: locationData, error: locationError }] =
-        await Promise.all([
-          supabase.from("tony_velocity").select("*").order("month", { ascending: false }),
-          supabase.from("tony_locations").select("*").order("customer", { ascending: true }),
-        ]);
+      const [velocityData, locationData] = await Promise.all([
+        fetchAllTonyVelocityRows(),
+        fetchAllTonyLocations(),
+      ]);
 
-      if (velocityError) throw velocityError;
-      if (locationError) throw locationError;
-
-      setRows((velocityData ?? []) as TonyVelocityRow[]);
-      setLocations((locationData ?? []) as TonyLocation[]);
+      setRows(velocityData);
+      setLocations(locationData);
     } catch (err: any) {
       setError(err?.message || "Failed to load Tony velocity data.");
     } finally {
@@ -270,30 +410,49 @@ export default function TonyVelocityView() {
 
   useEffect(() => {
     if (!notice) return;
+
     const timer = window.setTimeout(() => setNotice(""), 3500);
+
     return () => window.clearTimeout(timer);
   }, [notice]);
 
   const locationMap = useMemo(() => {
     const map = new Map<string, string>();
+
     for (const loc of locations) {
       map.set(normalizeKey(loc.customer), normalize(loc.location));
     }
+
     return map;
   }, [locations]);
 
   const parseVelocityRows = async (file: File) => {
     const rawRows = await readWorkbookRows(file);
+
     if (!rawRows.length) return [];
 
     const headers = Object.keys(rawRows[0]);
+
     const month = monthLabel(selectedMonth, selectedYear);
 
     return rawRows
       .map((row) => {
-        const customer = normalize(getCell(row, headers, ["sh Long Description", "Customer", "Ship to Customer"]));
+        const customer = normalize(
+          getCell(row, headers, [
+            "sh Long Description",
+            "Customer",
+            "Ship to Customer",
+          ])
+        );
+
         const location = locationMap.get(normalizeKey(customer)) || "";
-        const quantityShipped = toNumber(getCell(row, headers, ["Quantity shipped", "Quantity shipped Mar 26 to Mar 26"]));
+
+        const quantityShipped = toNumber(
+          getCell(row, headers, [
+            "Quantity shipped",
+            "Quantity shipped Mar 26 to Mar 26",
+          ])
+        );
 
         return {
           month,
@@ -306,8 +465,18 @@ export default function TonyVelocityView() {
           vendor_item: normalize(getCell(row, headers, ["Vendor Item"])),
           quantity_shipped: quantityShipped,
           eaches: quantityShipped * 12,
-          ext_net_ship_weight: toNumber(getCell(row, headers, ["Ext Net Ship Weight", "Ext Net Ship Weight Mar 26 to Mar 26"])),
-          actual_cost_gross: toNumber(getCell(row, headers, ["Actual Cost Gross", "Actual Cost Gross Mar 26 to Mar 26"])),
+          ext_net_ship_weight: toNumber(
+            getCell(row, headers, [
+              "Ext Net Ship Weight",
+              "Ext Net Ship Weight Mar 26 to Mar 26",
+            ])
+          ),
+          actual_cost_gross: toNumber(
+            getCell(row, headers, [
+              "Actual Cost Gross",
+              "Actual Cost Gross Mar 26 to Mar 26",
+            ])
+          ),
           source_file_name: file.name,
         };
       })
@@ -327,26 +496,39 @@ export default function TonyVelocityView() {
 
     if (deleteError) throw deleteError;
 
-    const { error: insertError } = await supabase.from("tony_velocity").insert(uploadRows);
+    const { error: insertError } = await supabase
+      .from("tony_velocity")
+      .insert(uploadRows);
+
     if (insertError) throw insertError;
 
-    setNotice(`Uploaded ${uploadRows.length.toLocaleString()} Tony velocity rows.`);
+    setNotice(
+      `Uploaded ${uploadRows.length.toLocaleString()} Tony velocity rows.`
+    );
+
     setShowVelocityUploadOptions(false);
+
     await loadData();
   };
 
   const handleVelocityFile = async (file?: File) => {
     if (!file) return;
+
     setUploadingVelocity(true);
     setError("");
     setNotice("");
+
     try {
       const parsed = await parseVelocityRows(file);
+
       const missingMap = new Map<string, MissingLocation>();
 
       for (const row of parsed) {
         if (row.customer && !row.location) {
-          missingMap.set(row.customer, { customer: row.customer, location: "" });
+          missingMap.set(row.customer, {
+            customer: row.customer,
+            location: "",
+          });
         }
       }
 
@@ -362,27 +544,42 @@ export default function TonyVelocityView() {
       setError(err?.message || "Failed to upload Tony velocity file.");
     } finally {
       setUploadingVelocity(false);
-      if (velocityInputRef.current) velocityInputRef.current.value = "";
+
+      if (velocityInputRef.current) {
+        velocityInputRef.current.value = "";
+      }
     }
   };
 
   const handleLocationFile = async (file?: File) => {
     if (!file) return;
+
     setUploadingLocations(true);
     setError("");
     setNotice("");
+
     try {
       const rawRows = await readWorkbookRows(file);
+
       if (!rawRows.length) {
         setNotice("No location rows found.");
         return;
       }
 
       const headers = Object.keys(rawRows[0]);
+
       const parsed = rawRows
         .map((row) => ({
-          customer: normalize(getCell(row, headers, ["Customer", "Ship to Customer", "sh Long Description"])),
-          location: normalize(getCell(row, headers, ["Location", "Mapped Location"])),
+          customer: normalize(
+            getCell(row, headers, [
+              "Customer",
+              "Ship to Customer",
+              "sh Long Description",
+            ])
+          ),
+          location: normalize(
+            getCell(row, headers, ["Location", "Mapped Location"])
+          ),
         }))
         .filter((row) => row.customer && row.location);
 
@@ -393,18 +590,27 @@ export default function TonyVelocityView() {
 
       const { error: upsertError } = await supabase
         .from("tony_locations")
-        .upsert(parsed, { onConflict: "customer" });
+        .upsert(parsed, {
+          onConflict: "customer",
+        });
 
       if (upsertError) throw upsertError;
 
-      setNotice(`Uploaded ${parsed.length.toLocaleString()} location mappings.`);
+      setNotice(
+        `Uploaded ${parsed.length.toLocaleString()} location mappings.`
+      );
+
       setShowLocationModal(false);
+
       await loadData();
     } catch (err: any) {
       setError(err?.message || "Failed to upload Tony location file.");
     } finally {
       setUploadingLocations(false);
-      if (locationInputRef.current) locationInputRef.current.value = "";
+
+      if (locationInputRef.current) {
+        locationInputRef.current.value = "";
+      }
     }
   };
 
@@ -412,6 +618,7 @@ export default function TonyVelocityView() {
     setUploadingVelocity(true);
     setError("");
     setNotice("");
+
     try {
       const mappings = items.map((item) => ({
         customer: normalize(item.customer),
@@ -420,18 +627,22 @@ export default function TonyVelocityView() {
 
       const { error: upsertError } = await supabase
         .from("tony_locations")
-        .upsert(mappings, { onConflict: "customer" });
+        .upsert(mappings, {
+          onConflict: "customer",
+        });
 
       if (upsertError) throw upsertError;
 
       const newMap = new Map(locationMap);
+
       for (const item of mappings) {
         newMap.set(normalizeKey(item.customer), item.location);
       }
 
       const resolvedRows = pendingRows.map((row) => ({
         ...row,
-        location: row.location || newMap.get(normalizeKey(row.customer)) || "",
+        location:
+          row.location || newMap.get(normalizeKey(row.customer)) || "",
         source_file_name: pendingSourceName || row.source_file_name,
       }));
 
@@ -440,6 +651,7 @@ export default function TonyVelocityView() {
       setPendingSourceName("");
 
       await uploadVelocityRows(resolvedRows);
+
       await loadData();
     } catch (err: any) {
       setError(err?.message || "Failed to save location mappings.");
@@ -448,10 +660,11 @@ export default function TonyVelocityView() {
     }
   };
 
-
   const saveManualLocation = async () => {
     const customer = normalize(manualCustomer);
+
     const location = normalize(manualLocation);
+
     if (!customer || !location) {
       setError("Please enter both Customer and Location.");
       return;
@@ -460,17 +673,31 @@ export default function TonyVelocityView() {
     setUploadingLocations(true);
     setError("");
     setNotice("");
+
     try {
       const { error: upsertError } = await supabase
         .from("tony_locations")
-        .upsert([{ customer, location }], { onConflict: "customer" });
+        .upsert(
+          [
+            {
+              customer,
+              location,
+            },
+          ],
+          {
+            onConflict: "customer",
+          }
+        );
 
       if (upsertError) throw upsertError;
 
       setManualCustomer("");
       setManualLocation("");
+
       setNotice("Location mapping saved.");
+
       setShowLocationModal(false);
+
       await loadData();
     } catch (err: any) {
       setError(err?.message || "Failed to save location mapping.");
@@ -480,14 +707,22 @@ export default function TonyVelocityView() {
   };
 
   const monthOptions = useMemo(
-    () => ["All Months", ...Array.from(new Set(rows.map((row) => row.month).filter(Boolean))).sort((a, b) => b.localeCompare(a))],
+    () => [
+      "All Months",
+      ...Array.from(
+        new Set(rows.map((row) => row.month).filter(Boolean))
+      ).sort((a, b) => b.localeCompare(a)),
+    ],
     [rows]
   );
 
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
+
     return rows.filter((row) => {
-      const monthMatch = monthFilter === "All Months" || row.month === monthFilter;
+      const monthMatch =
+        monthFilter === "All Months" || row.month === monthFilter;
+
       const searchMatch =
         !q ||
         row.month.toLowerCase().includes(q) ||
@@ -540,15 +775,22 @@ export default function TonyVelocityView() {
       <div className="sticky top-0 z-20 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
-            <h2 className="text-xl font-bold text-slate-900">Tony&apos;s Velocity</h2>
+            <h2 className="text-xl font-bold text-slate-900">
+              Tony&apos;s Velocity
+            </h2>
+
             <p className="mt-1 text-sm text-slate-500">
-              Upload Tony&apos;s velocity files, map customers to locations, and export filtered results.
+              Upload Tony&apos;s velocity files, map customers to locations, and
+              export filtered results.
             </p>
           </div>
 
           <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-end lg:justify-end">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">Search</label>
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                Search
+              </label>
+
               <div className="relative min-w-[260px]">
                 <input
                   value={searchQuery}
@@ -560,7 +802,10 @@ export default function TonyVelocityView() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">Month Filter</label>
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                Month Filter
+              </label>
+
               <select
                 value={monthFilter}
                 onChange={(e) => setMonthFilter(e.target.value)}
@@ -590,6 +835,7 @@ export default function TonyVelocityView() {
               disabled={uploadingLocations}
             >
               <Upload className="h-4 w-4" />
+
               {uploadingLocations ? "Uploading..." : "Upload Location"}
             </button>
 
@@ -600,6 +846,7 @@ export default function TonyVelocityView() {
               disabled={uploadingVelocity}
             >
               <Upload className="h-4 w-4" />
+
               {uploadingVelocity ? "Uploading..." : "Upload Velocity File"}
             </button>
 
@@ -610,6 +857,7 @@ export default function TonyVelocityView() {
               className="hidden"
               onChange={(e) => handleLocationFile(e.target.files?.[0])}
             />
+
             <input
               ref={velocityInputRef}
               type="file"
@@ -624,7 +872,10 @@ export default function TonyVelocityView() {
           <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_160px_180px]">
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Upload Month</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Upload Month
+                </label>
+
                 <select
                   value={selectedMonth}
                   onChange={(e) => setSelectedMonth(e.target.value)}
@@ -637,7 +888,10 @@ export default function TonyVelocityView() {
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Year</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Year
+                </label>
+
                 <input
                   value={selectedYear}
                   onChange={(e) => setSelectedYear(e.target.value)}
@@ -659,18 +913,33 @@ export default function TonyVelocityView() {
           </div>
         )}
 
-        {error && <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-        {notice && <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
+        {error && (
+          <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {notice && (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            {notice}
+          </div>
+        )}
       </div>
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h3 className="text-lg font-semibold text-slate-900">Tony&apos;s Velocity Rows</h3>
+            <h3 className="text-lg font-semibold text-slate-900">
+              Tony&apos;s Velocity Rows
+            </h3>
+
             <p className="text-sm text-slate-500">
-              {loading ? "Loading..." : `${filteredRows.length.toLocaleString()} of ${rows.length.toLocaleString()} rows shown`}
+              {loading
+                ? "Loading..."
+                : `${filteredRows.length.toLocaleString()} of ${rows.length.toLocaleString()} rows shown`}
             </p>
           </div>
+
           <button
             type="button"
             onClick={loadData}
@@ -699,34 +968,87 @@ export default function TonyVelocityView() {
                     "Ext Net Ship Weight",
                     "Actual Cost Gross",
                   ].map((header) => (
-                    <th key={header} className="px-4 py-3 text-left font-semibold text-slate-700">
+                    <th
+                      key={header}
+                      className="px-4 py-3 text-left font-semibold text-slate-700"
+                    >
                       {header}
                     </th>
                   ))}
                 </tr>
               </thead>
+
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={12} className="px-4 py-8 text-center text-sm text-slate-500">
+                    <td
+                      colSpan={12}
+                      className="px-4 py-8 text-center text-sm text-slate-500"
+                    >
                       No Tony velocity rows found.
                     </td>
                   </tr>
                 ) : (
                   filteredRows.map((row, i) => (
-                    <tr key={row.id ?? `${row.month}-${row.customer}-${i}`} className="border-t border-slate-200 hover:bg-slate-50">
-                      <td className="px-4 py-3 text-slate-700">{row.month}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.warehouse}</td>
-                      <td className="px-4 py-3 font-medium text-slate-900">{row.location}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.customer}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.cheesecakes}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.item_pack}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.item_size}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.vendor_item}</td>
-                      <td className="px-4 py-3 text-right text-slate-700">{row.quantity_shipped.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-right text-slate-700">{(row.eaches ?? row.quantity_shipped * 12).toLocaleString()}</td>
-                      <td className="px-4 py-3 text-right text-slate-700">{row.ext_net_ship_weight.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-slate-900">{row.actual_cost_gross.toLocaleString(undefined, { style: "currency", currency: "USD" })}</td>
+                    <tr
+                      key={row.id ?? `${row.month}-${row.customer}-${i}`}
+                      className="border-t border-slate-200 hover:bg-slate-50"
+                    >
+                      <td className="px-4 py-3 text-slate-700">
+                        {row.month}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-700">
+                        {row.warehouse}
+                      </td>
+
+                      <td className="px-4 py-3 font-medium text-slate-900">
+                        {row.location}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-700">
+                        {row.customer}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-700">
+                        {row.cheesecakes}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-700">
+                        {row.item_pack}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-700">
+                        {row.item_size}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-700">
+                        {row.vendor_item}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-700">
+                        {Number(row.quantity_shipped || 0).toLocaleString()}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-700">
+                        {Number(
+                          row.eaches ?? row.quantity_shipped * 12
+                        ).toLocaleString()}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-700">
+                        {Number(row.ext_net_ship_weight || 0).toLocaleString()}
+                      </td>
+
+                      <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                        {Number(row.actual_cost_gross || 0).toLocaleString(
+                          undefined,
+                          {
+                            style: "currency",
+                            currency: "USD",
+                          }
+                        )}
+                      </td>
                     </tr>
                   ))
                 )}
@@ -736,23 +1058,32 @@ export default function TonyVelocityView() {
         </div>
       </div>
 
-
       {showLocationModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-6">
           <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
             <div className="border-b border-slate-200 px-6 py-4">
-              <h2 className="text-xl font-bold text-slate-900">Upload or Add Tony Location</h2>
+              <h2 className="text-xl font-bold text-slate-900">
+                Upload or Add Tony Location
+              </h2>
+
               <p className="mt-1 text-sm text-slate-500">
-                Add one Customer → Location mapping, or bulk upload an Excel/CSV with columns Customer and Location.
+                Add one Customer → Location mapping, or bulk upload an Excel/CSV
+                with columns Customer and Location.
               </p>
             </div>
 
             <div className="space-y-5 p-6">
               <div className="rounded-2xl border border-slate-200 p-4">
-                <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">Manual Entry</h3>
+                <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">
+                  Manual Entry
+                </h3>
+
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-slate-700">Customer</label>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">
+                      Customer
+                    </label>
+
                     <input
                       value={manualCustomer}
                       onChange={(e) => setManualCustomer(e.target.value)}
@@ -760,8 +1091,12 @@ export default function TonyVelocityView() {
                       className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400"
                     />
                   </div>
+
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-slate-700">Location</label>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">
+                      Location
+                    </label>
+
                     <input
                       value={manualLocation}
                       onChange={(e) => setManualLocation(e.target.value)}
@@ -770,6 +1105,7 @@ export default function TonyVelocityView() {
                     />
                   </div>
                 </div>
+
                 <div className="mt-4 flex justify-end">
                   <button
                     type="button"
@@ -783,10 +1119,15 @@ export default function TonyVelocityView() {
               </div>
 
               <div className="rounded-2xl border border-slate-200 p-4">
-                <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-slate-500">Bulk Upload</h3>
+                <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-slate-500">
+                  Bulk Upload
+                </h3>
+
                 <p className="mb-3 text-sm text-slate-500">
-                  Upload an Excel or CSV file with exactly these columns: Customer and Location.
+                  Upload an Excel or CSV file with exactly these columns:
+                  Customer and Location.
                 </p>
+
                 <button
                   type="button"
                   onClick={() => locationInputRef.current?.click()}
@@ -794,6 +1135,7 @@ export default function TonyVelocityView() {
                   className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Upload className="h-4 w-4" />
+
                   {uploadingLocations ? "Uploading..." : "Choose Location File"}
                 </button>
               </div>
