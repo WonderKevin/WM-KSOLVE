@@ -27,6 +27,21 @@ type MonthGroup = {
   rows: TargetInvoiceRow[];
 };
 
+type CheckGroup = {
+  key: string;
+  checkDate: string;
+  checkNumber: string;
+  rows: TargetInvoiceRow[];
+  totals: Totals;
+};
+
+type Totals = {
+  wmInvoiceTotal: number;
+  deductions: number;
+  netTotal: number;
+  brokerFee: number;
+};
+
 function formatCurrency(value: number | null | undefined) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -38,6 +53,7 @@ function monthSortValue(month: string | null) {
   if (!month) return 0;
 
   const date = new Date(`1 ${month}`);
+
   if (Number.isNaN(date.getTime())) return 0;
 
   return date.getFullYear() * 100 + date.getMonth() + 1;
@@ -47,7 +63,7 @@ function isWmInvoice(row: TargetInvoiceRow) {
   return row.reason_code_description === "WM Invoice";
 }
 
-function getTotals(rows: TargetInvoiceRow[]) {
+function getTotals(rows: TargetInvoiceRow[]): Totals {
   const wmInvoiceTotal = rows
     .filter(isWmInvoice)
     .reduce((sum, row) => sum + Number(row.net_amount || 0), 0);
@@ -87,7 +103,7 @@ function groupByMonth(rows: TargetInvoiceRow[]) {
   return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
 }
 
-function groupByCheck(rows: TargetInvoiceRow[]) {
+function groupByCheck(rows: TargetInvoiceRow[]): CheckGroup[] {
   const map = new Map<string, TargetInvoiceRow[]>();
 
   for (const row of rows) {
@@ -100,17 +116,55 @@ function groupByCheck(rows: TargetInvoiceRow[]) {
     map.get(key)!.push(row);
   }
 
-  return Array.from(map.entries()).map(([key, checkRows]) => {
-    const first = checkRows[0];
+  return Array.from(map.entries())
+    .map(([key, checkRows]) => {
+      const first = checkRows[0];
 
-    return {
-      key,
-      checkDate: first?.check_date || "",
-      checkNumber: first?.check_number || "",
-      rows: checkRows,
-      totals: getTotals(checkRows),
-    };
-  });
+      return {
+        key,
+        checkDate: first?.check_date || "",
+        checkNumber: first?.check_number || "",
+        rows: checkRows,
+        totals: getTotals(checkRows),
+      };
+    })
+    .sort((a, b) => {
+      const dateCompare = b.checkDate.localeCompare(a.checkDate);
+
+      if (dateCompare !== 0) return dateCompare;
+
+      return b.checkNumber.localeCompare(a.checkNumber);
+    });
+}
+
+function groupByReason(rows: TargetInvoiceRow[]) {
+  const map = new Map<string, TargetInvoiceRow[]>();
+
+  for (const row of rows) {
+    const reason = row.reason_code_description || "Unknown";
+
+    if (!map.has(reason)) {
+      map.set(reason, []);
+    }
+
+    map.get(reason)!.push(row);
+  }
+
+  return Array.from(map.entries())
+    .map(([reason, reasonRows]) => ({
+      reason,
+      amount: reasonRows.reduce(
+        (sum, row) => sum + Number(row.net_amount || 0),
+        0
+      ),
+      rows: reasonRows,
+    }))
+    .sort((a, b) => {
+      if (a.reason === "WM Invoice") return -1;
+      if (b.reason === "WM Invoice") return 1;
+
+      return a.reason.localeCompare(b.reason);
+    });
 }
 
 export default function TargetBrokerCommissionView() {
@@ -118,6 +172,7 @@ export default function TargetBrokerCommissionView() {
   const [loading, setLoading] = useState(true);
   const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({});
   const [openChecks, setOpenChecks] = useState<Record<string, boolean>>({});
+  const [openReasons, setOpenReasons] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const loadRows = async () => {
@@ -156,6 +211,13 @@ export default function TargetBrokerCommissionView() {
 
   const toggleCheck = (key: string) => {
     setOpenChecks((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  const toggleReason = (key: string) => {
+    setOpenReasons((prev) => ({
       ...prev,
       [key]: !prev[key],
     }));
@@ -239,6 +301,7 @@ export default function TargetBrokerCommissionView() {
                     <div className="space-y-4">
                       {checkGroups.map((checkGroup) => {
                         const isCheckOpen = !!openChecks[checkGroup.key];
+                        const reasonGroups = groupByReason(checkGroup.rows);
 
                         return (
                           <div
@@ -310,64 +373,94 @@ export default function TargetBrokerCommissionView() {
                             </button>
 
                             {isCheckOpen && (
-                              <div className="border-t border-slate-200">
-                                <table className="min-w-full text-sm">
-                                  <thead className="bg-slate-100">
-                                    <tr>
-                                      <th className="px-4 py-3 text-left font-semibold text-slate-700">
-                                        Line Item
-                                      </th>
-                                      <th className="px-4 py-3 text-left font-semibold text-slate-700">
-                                        Doc.Header Text
-                                      </th>
-                                      <th className="px-4 py-3 text-left font-semibold text-slate-700">
-                                        SAP Doc #
-                                      </th>
-                                      <th className="px-4 py-3 text-left font-semibold text-slate-700">
-                                        Doc Date
-                                      </th>
-                                      <th className="px-4 py-3 text-right font-semibold text-slate-700">
-                                        Amount
-                                      </th>
-                                    </tr>
-                                  </thead>
+                              <div className="border-t border-slate-200 bg-slate-50 p-4">
+                                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                                  <div className="grid grid-cols-[1fr_180px] bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700">
+                                    <div>Line Item</div>
+                                    <div className="text-right">Amount</div>
+                                  </div>
 
-                                  <tbody>
-                                    {checkGroup.rows.map((row) => {
-                                      const isDeduction = !isWmInvoice(row);
+                                  {reasonGroups.map((reasonGroup) => {
+                                    const reasonKey = `${checkGroup.key}__${reasonGroup.reason}`;
+                                    const isReasonOpen =
+                                      !!openReasons[reasonKey];
+                                    const isDeduction =
+                                      reasonGroup.reason !== "WM Invoice";
 
-                                      return (
-                                        <tr
-                                          key={row.id}
-                                          className="border-t border-slate-200"
+                                    return (
+                                      <div
+                                        key={reasonKey}
+                                        className="border-t border-slate-200 first:border-t-0"
+                                      >
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            toggleReason(reasonKey)
+                                          }
+                                          className="grid w-full grid-cols-[24px_1fr_180px] items-center px-4 py-3 text-left hover:bg-slate-50"
                                         >
-                                          <td className="px-4 py-3 font-medium text-slate-900">
-                                            {row.reason_code_description ||
-                                              "Unknown"}
-                                          </td>
-                                          <td className="px-4 py-3 text-slate-700">
-                                            {row.doc_header_text}
-                                          </td>
-                                          <td className="px-4 py-3 text-slate-700">
-                                            {row.sap_doc_number}
-                                          </td>
-                                          <td className="px-4 py-3 text-slate-700">
-                                            {row.doc_date}
-                                          </td>
-                                          <td
-                                            className={`px-4 py-3 text-right font-medium ${
+                                          <div>
+                                            {isReasonOpen ? (
+                                              <ChevronDown className="h-4 w-4 text-slate-600" />
+                                            ) : (
+                                              <ChevronRight className="h-4 w-4 text-slate-600" />
+                                            )}
+                                          </div>
+
+                                          <div className="font-medium text-slate-900">
+                                            {reasonGroup.reason}
+                                          </div>
+
+                                          <div
+                                            className={`text-right font-medium ${
                                               isDeduction
                                                 ? "text-red-600"
                                                 : "text-slate-900"
                                             }`}
                                           >
-                                            {formatCurrency(row.net_amount)}
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
+                                            {formatCurrency(reasonGroup.amount)}
+                                          </div>
+                                        </button>
+
+                                        {isReasonOpen && (
+                                          <div className="border-t border-slate-200 bg-slate-50">
+                                            <div className="grid grid-cols-[1fr_160px_160px_160px] bg-slate-100 px-4 py-3 text-xs font-semibold text-slate-600">
+                                              <div>Doc.Header Text</div>
+                                              <div>SAP Doc #</div>
+                                              <div>Doc Date</div>
+                                              <div className="text-right">
+                                                Amount
+                                              </div>
+                                            </div>
+
+                                            {reasonGroup.rows.map((row) => (
+                                              <div
+                                                key={row.id}
+                                                className="grid grid-cols-[1fr_160px_160px_160px] border-t border-slate-200 px-4 py-3 text-sm text-slate-700"
+                                              >
+                                                <div>{row.doc_header_text}</div>
+                                                <div>{row.sap_doc_number}</div>
+                                                <div>{row.doc_date}</div>
+                                                <div
+                                                  className={`text-right font-medium ${
+                                                    row.reason_code_description ===
+                                                    "WM Invoice"
+                                                      ? "text-slate-900"
+                                                      : "text-red-600"
+                                                  }`}
+                                                >
+                                                  {formatCurrency(
+                                                    row.net_amount
+                                                  )}
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             )}
                           </div>
