@@ -392,7 +392,7 @@ export default function WMKsolveApp() {
     const brokerChildren = [
       permissions.can_view_broker_commission_summary
         ? {
-            label: "Broker Commission Summary",
+            label: "KeHe Broker Commission Summary",
             key: "broker-commission-summary",
           }
         : null,
