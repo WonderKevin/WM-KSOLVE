@@ -241,6 +241,116 @@ export default function WMKsolveApp() {
     };
   }, [router]);
 
+  useEffect(() => {
+    if (!permissions) return;
+
+    const canViewKeheDashboard =
+      permissions.can_view_dashboard_kehe ?? permissions.can_view_dashboard;
+
+    const canViewTonyDashboard =
+      permissions.can_view_dashboard_tony ?? permissions.can_view_dashboard;
+
+    const allowedKeys: string[] = [];
+
+    if (canViewKeheDashboard) allowedKeys.push("dashboard-kehe");
+    if (canViewTonyDashboard) allowedKeys.push("dashboard-tony");
+
+    if (permissions.can_view_broker_commission_summary) {
+      allowedKeys.push("target-broker-commission");
+      allowedKeys.push("broker-commission-summary");
+    }
+
+    if (permissions.can_view_broker_commission_data_sets) {
+      allowedKeys.push("broker-commission-data-sets");
+    }
+
+    if (permissions.can_view_accounting_summary) {
+      allowedKeys.push("accounting-summary");
+      allowedKeys.push("accounting-wm-invoice-discrepancy");
+    }
+
+    if (permissions.can_view_accounting_check_details) {
+      allowedKeys.push("accounting-check-details");
+    }
+
+    if (permissions.can_view_database_ksolve_invoices) {
+      allowedKeys.push("database-ksolve-invoices");
+    }
+
+    if (permissions.can_view_database_target_invoices) {
+      allowedKeys.push("database-target-invoices");
+    }
+
+    if (permissions.can_view_database_kehe_velocity) {
+      allowedKeys.push("database-kehe-velocity");
+    }
+
+    if (
+      permissions.can_view_database_tony_velocity ??
+      permissions.can_view_database_kehe_velocity
+    ) {
+      allowedKeys.push("database-tony-velocity");
+    }
+
+    if (permissions.can_view_database_product_list) {
+      allowedKeys.push("database-product-list");
+    }
+
+    if (permissions.can_view_database_locations) {
+      allowedKeys.push("database-locations");
+    }
+
+    if (permissions.can_view_database_deduction_type) {
+      allowedKeys.push("database-deduction-type");
+    }
+
+    if (permissions.can_view_user_account) {
+      allowedKeys.push("admin-user-account");
+    }
+
+    if (permissions.can_view_admin) {
+      allowedKeys.push("admin-automation");
+    }
+
+    if (activeKey && !allowedKeys.includes(activeKey)) {
+      setActiveKey("");
+    }
+
+    setOpenGroups((prev) => ({
+      ...prev,
+
+      "broker-commission":
+        activeKey === "target-broker-commission" ||
+        activeKey === "broker-commission-summary" ||
+        activeKey === "broker-commission-data-sets"
+          ? true
+          : prev["broker-commission"],
+
+      accounting:
+        activeKey === "accounting-summary" ||
+        activeKey === "accounting-check-details" ||
+        activeKey === "accounting-wm-invoice-discrepancy"
+          ? true
+          : prev.accounting,
+
+      database:
+        activeKey === "database-ksolve-invoices" ||
+        activeKey === "database-target-invoices" ||
+        activeKey === "database-kehe-velocity" ||
+        activeKey === "database-tony-velocity" ||
+        activeKey === "database-product-list" ||
+        activeKey === "database-locations" ||
+        activeKey === "database-deduction-type"
+          ? true
+          : prev.database,
+
+      admin:
+        activeKey === "admin-user-account" || activeKey === "admin-automation"
+          ? true
+          : prev.admin,
+    }));
+  }, [permissions, activeKey]);
+
   const handleLogout = async () => {
     try {
       setLoggingOut(true);
@@ -257,35 +367,49 @@ export default function WMKsolveApp() {
 
     const items: any[] = [];
 
-    const dashboardChildren = [
-      {
-        label: "Kehe Dashboard",
-        key: "dashboard-kehe",
-      },
-      {
-        label: "Tony's Dashboard",
-        key: "dashboard-tony",
-      },
-    ];
+    const canViewKeheDashboard =
+      permissions.can_view_dashboard_kehe ?? permissions.can_view_dashboard;
 
-    items.push({
-      label: "Dashboard",
-      icon: LayoutDashboard,
-      key: "dashboard",
-      children: dashboardChildren,
-    });
+    const canViewTonyDashboard =
+      permissions.can_view_dashboard_tony ?? permissions.can_view_dashboard;
+
+    const dashboardChildren = [
+      canViewKeheDashboard
+        ? { label: "Kehe Dashboard", key: "dashboard-kehe" }
+        : null,
+
+      canViewTonyDashboard
+        ? { label: "Tony's Dashboard", key: "dashboard-tony" }
+        : null,
+    ].filter(Boolean);
+
+    if (dashboardChildren.length) {
+      items.push({
+        label: "Dashboard",
+        icon: LayoutDashboard,
+        key: "dashboard",
+        children: dashboardChildren,
+      });
+    }
 
     const brokerChildren = [
       permissions.can_view_broker_commission_summary
         ? {
-            label: "KeHe Broker Commission Summary",
+            label: "Target Broker Commission",
+            key: "target-broker-commission",
+          }
+        : null,
+
+      permissions.can_view_broker_commission_summary
+        ? {
+            label: "KeHe Broker Commission",
             key: "broker-commission-summary",
           }
         : null,
 
       permissions.can_view_broker_commission_data_sets
         ? {
-            label: "Data Sets",
+            label: "KeHe Data Sets",
             key: "broker-commission-data-sets",
           }
         : null,
@@ -302,17 +426,11 @@ export default function WMKsolveApp() {
 
     const accountingChildren = [
       permissions.can_view_accounting_summary
-        ? {
-            label: "Summary",
-            key: "accounting-summary",
-          }
+        ? { label: "Summary", key: "accounting-summary" }
         : null,
 
       permissions.can_view_accounting_check_details
-        ? {
-            label: "Check Details",
-            key: "accounting-check-details",
-          }
+        ? { label: "Check Details", key: "accounting-check-details" }
         : null,
 
       permissions.can_view_accounting_summary
@@ -334,52 +452,32 @@ export default function WMKsolveApp() {
 
     const databaseChildren = [
       permissions.can_view_database_ksolve_invoices
-        ? {
-            label: "Ksolve Invoices",
-            key: "database-ksolve-invoices",
-          }
+        ? { label: "Ksolve Invoices", key: "database-ksolve-invoices" }
         : null,
 
       permissions.can_view_database_target_invoices
-        ? {
-            label: "Target Invoices",
-            key: "database-target-invoices",
-          }
+        ? { label: "Target Invoices", key: "database-target-invoices" }
         : null,
 
       permissions.can_view_database_kehe_velocity
-        ? {
-            label: "KeHe Velocity",
-            key: "database-kehe-velocity",
-          }
+        ? { label: "KeHe Velocity", key: "database-kehe-velocity" }
         : null,
 
-      permissions.can_view_database_tony_velocity
-        ? {
-            label: "Tony's Velocity",
-            key: "database-tony-velocity",
-          }
+      permissions.can_view_database_tony_velocity ??
+      permissions.can_view_database_kehe_velocity
+        ? { label: "Tony's Velocity", key: "database-tony-velocity" }
         : null,
 
       permissions.can_view_database_product_list
-        ? {
-            label: "Product List",
-            key: "database-product-list",
-          }
+        ? { label: "Product List", key: "database-product-list" }
         : null,
 
       permissions.can_view_database_locations
-        ? {
-            label: "Locations",
-            key: "database-locations",
-          }
+        ? { label: "Locations", key: "database-locations" }
         : null,
 
       permissions.can_view_database_deduction_type
-        ? {
-            label: "Deduction Type",
-            key: "database-deduction-type",
-          }
+        ? { label: "Deduction Type", key: "database-deduction-type" }
         : null,
     ].filter(Boolean);
 
@@ -394,21 +492,15 @@ export default function WMKsolveApp() {
 
     const adminChildren = [
       permissions.can_view_user_account
-        ? {
-            label: "User Account",
-            key: "admin-user-account",
-          }
+        ? { label: "User Account", key: "admin-user-account" }
         : null,
 
       permissions.can_view_admin
-        ? {
-            label: "Automation",
-            key: "admin-automation",
-          }
+        ? { label: "Automation", key: "admin-automation" }
         : null,
     ].filter(Boolean);
 
-    if (adminChildren.length) {
+    if (permissions.can_view_admin && adminChildren.length) {
       items.push({
         label: "Admin",
         icon: Shield,
@@ -426,47 +518,27 @@ export default function WMKsolveApp() {
     "dashboard-kehe": "Kehe Dashboard",
     "dashboard-tony": "Tony's Dashboard",
 
-    "broker-commission-summary":
-      "KeHe Broker Commission Summary",
-
-    "broker-commission-data-sets":
-      "KeHe Data Sets",
+    "target-broker-commission": "Target Broker Commission",
+    "broker-commission-summary": "KeHe Broker Commission",
+    "broker-commission-data-sets": "KeHe Data Sets",
 
     "accounting-summary": "Summary",
+    "accounting-check-details": "Check Details",
+    "accounting-wm-invoice-discrepancy": "WM Invoice Discrepancy",
 
-    "accounting-check-details":
-      "Check Details",
+    "database-ksolve-invoices": "Ksolve Invoices",
+    "database-target-invoices": "Target Invoices",
+    "database-kehe-velocity": "KeHe Velocity",
+    "database-tony-velocity": "Tony's Velocity",
+    "database-product-list": "Product List",
+    "database-locations": "Locations",
+    "database-deduction-type": "Deduction Type",
 
-    "accounting-wm-invoice-discrepancy":
-      "WM Invoice Discrepancy",
-
-    "database-ksolve-invoices":
-      "Ksolve Invoices",
-
-    "database-target-invoices":
-      "Target Invoices",
-
-    "database-kehe-velocity":
-      "KeHe Velocity",
-
-    "database-tony-velocity":
-      "Tony's Velocity",
-
-    "database-product-list":
-      "Product List",
-
-    "database-locations":
-      "Locations",
-
-    "database-deduction-type":
-      "Deduction Type",
-
-    "admin-user-account":
-      "User Account",
-
-    "admin-automation":
-      "Automation",
+    "admin-user-account": "User Account",
+    "admin-automation": "Automation",
   };
+
+  const isKeheDashboard = activeKey === "dashboard-kehe";
 
   const renderContent = () => {
     switch (activeKey) {
@@ -475,6 +547,9 @@ export default function WMKsolveApp() {
 
       case "dashboard-tony":
         return <TonyDashboardView />;
+
+      case "target-broker-commission":
+        return <AccountingSummaryView />;
 
       case "broker-commission-summary":
         return <BrokerCommissionSummaryView />;
@@ -496,13 +571,8 @@ export default function WMKsolveApp() {
           <InvoicesView
             invoiceUploadSignal={invoiceUploadSignal}
             documentUploadSignal={documentUploadSignal}
-            canReprocess={
-              !!permissions?.can_reprocess_invoices
-            }
-            isAdmin={
-              userEmail.toLowerCase() ===
-              "kevin@wondermonday.com"
-            }
+            canReprocess={!!permissions?.can_reprocess_invoices}
+            isAdmin={userEmail.toLowerCase() === "kevin@wondermonday.com"}
           />
         );
 
@@ -537,7 +607,7 @@ export default function WMKsolveApp() {
 
   if (checkingSession) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-100">
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
         <div className="rounded-3xl border border-slate-200 bg-white px-6 py-4 text-sm text-slate-500 shadow-sm">
           Checking session...
         </div>
@@ -571,8 +641,11 @@ export default function WMKsolveApp() {
       )}
 
       <main className="flex-1 h-screen overflow-y-auto">
-        <div className="sticky top-0 z-30 border-b border-slate-200 bg-slate-100 px-6 pb-4 pt-5">
-          <div className="rounded-3xl border border-slate-200 bg-white/95 px-6 py-4 shadow-sm">
+        <div
+          id="app-main-header"
+          className="sticky top-0 z-30 bg-slate-100 px-6 pt-5 pb-4 border-b border-slate-200"
+        >
+          <div className="rounded-3xl border border-slate-200 bg-white/95 px-6 py-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-start gap-4">
                 <Button
@@ -580,33 +653,30 @@ export default function WMKsolveApp() {
                   variant="outline"
                   size="icon"
                   className="rounded-2xl border-slate-200"
-                  onClick={() =>
-                    setSidebarOpen((prev) => !prev)
-                  }
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSidebarOpen((prev) => !prev);
+                  }}
                 >
                   <Menu className="h-4 w-4" />
                 </Button>
 
                 <div>
                   <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
-                    {titleMap[activeKey || "home"]}
+                    {titleMap[activeKey || "home"] || "WM-KSOLVE"}
                   </h1>
                 </div>
               </div>
 
               <div className="flex items-center gap-3">
-                {activeKey ===
-                  "database-ksolve-invoices" && (
+                {activeKey === "database-ksolve-invoices" && (
                   <>
                     <Button
                       type="button"
                       variant="outline"
                       className="rounded-2xl border-slate-200"
-                      onClick={() =>
-                        setInvoiceUploadSignal(
-                          (prev) => prev + 1
-                        )
-                      }
+                      onClick={() => setInvoiceUploadSignal((prev) => prev + 1)}
                     >
                       <Upload className="mr-2 h-4 w-4" />
                       Upload Ksolve Invoices
@@ -616,9 +686,7 @@ export default function WMKsolveApp() {
                       type="button"
                       className="rounded-2xl bg-slate-900 hover:bg-slate-800"
                       onClick={() =>
-                        setDocumentUploadSignal(
-                          (prev) => prev + 1
-                        )
+                        setDocumentUploadSignal((prev) => prev + 1)
                       }
                     >
                       <Upload className="mr-2 h-4 w-4" />
@@ -630,21 +698,19 @@ export default function WMKsolveApp() {
                 <Button
                   type="button"
                   variant="outline"
-                  className="rounded-2xl border-red-200 text-red-600 hover:bg-red-50"
+                  className="rounded-2xl border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
                   onClick={handleLogout}
                   disabled={loggingOut}
                 >
                   <LogOut className="mr-2 h-4 w-4" />
-                  {loggingOut
-                    ? "Logging out..."
-                    : "Logout"}
+                  {loggingOut ? "Logging out..." : "Logout"}
                 </Button>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="px-6 py-5">
+        <div className={isKeheDashboard ? "px-6 pb-10" : "px-6 py-5"}>
           {renderContent()}
         </div>
       </main>
