@@ -6,6 +6,8 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase/client";
 
+type BrokerageStatus = "" | "Invoice Confirmed" | "Bill Paid";
+
 type TargetInvoiceRow = {
   id: number;
   month: string | null;
@@ -19,6 +21,7 @@ type TargetInvoiceRow = {
   cash_discount: number | null;
   withholding_tax_amount: number | null;
   net_amount: number | null;
+  brokerage_status?: BrokerageStatus | null;
 };
 
 type ReasonGroup = {
@@ -26,6 +29,12 @@ type ReasonGroup = {
   rows: TargetInvoiceRow[];
   total: number;
 };
+
+const STATUS_OPTIONS: Array<{ value: BrokerageStatus; label: string }> = [
+  { value: "", label: "Select Status" },
+  { value: "Invoice Confirmed", label: "Invoice Confirmed" },
+  { value: "Bill Paid", label: "Bill Paid" },
+];
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -135,9 +144,30 @@ function groupRowsByReason(rows: TargetInvoiceRow[]): ReasonGroup[] {
     });
 }
 
+function getStatusForRows(rows: TargetInvoiceRow[]): BrokerageStatus {
+  const statuses = Array.from(
+    new Set(
+      rows
+        .map((row) => row.brokerage_status || "")
+        .filter((status): status is BrokerageStatus => status !== "")
+    )
+  );
+
+  if (statuses.length === 1) return statuses[0];
+
+  return "";
+}
+
+function getStatusRowClass(status: BrokerageStatus) {
+  if (status === "Invoice Confirmed") return "bg-[#C1EBE9]";
+  if (status === "Bill Paid") return "bg-[#FFE0C5]";
+  return "bg-white";
+}
+
 export default function TargetBrokerCommissionView() {
   const [rows, setRows] = useState<TargetInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [savingStatusKey, setSavingStatusKey] = useState<string | null>(null);
 
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>(
     {}
@@ -147,29 +177,29 @@ export default function TargetBrokerCommissionView() {
     Record<string, boolean>
   >({});
 
+  const loadData = async () => {
+    setLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("target_invoices")
+        .select(
+          "id, month, check_date, check_number, doc_header_text, reason_code_description, sap_doc_number, doc_date, gross_amount, cash_discount, withholding_tax_amount, net_amount, brokerage_status"
+        )
+        .order("check_date", { ascending: false })
+        .order("check_number", { ascending: false });
+
+      if (error) throw error;
+
+      setRows((data || []) as TargetInvoiceRow[]);
+    } catch (error) {
+      console.error("Target broker commission load error:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-
-      try {
-        const { data, error } = await supabase
-          .from("target_invoices")
-          .select(
-            "id, month, check_date, check_number, doc_header_text, reason_code_description, sap_doc_number, doc_date, gross_amount, cash_discount, withholding_tax_amount, net_amount"
-          )
-          .order("check_date", { ascending: false })
-          .order("check_number", { ascending: false });
-
-        if (error) throw error;
-
-        setRows((data || []) as TargetInvoiceRow[]);
-      } catch (error) {
-        console.error("Target broker commission load error:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     loadData();
   }, []);
 
@@ -187,6 +217,41 @@ export default function TargetBrokerCommissionView() {
       ...prev,
       [key]: !prev[key],
     }));
+  };
+
+  const updateMonthStatus = async (
+    month: string,
+    monthRows: TargetInvoiceRow[],
+    status: BrokerageStatus
+  ) => {
+    const rowIds = monthRows.map((row) => row.id);
+    const dbStatus = status || null;
+
+    setSavingStatusKey(month);
+
+    setRows((prev) =>
+      prev.map((row) =>
+        rowIds.includes(row.id)
+          ? {
+              ...row,
+              brokerage_status: status,
+            }
+          : row
+      )
+    );
+
+    const { error } = await supabase
+      .from("target_invoices")
+      .update({ brokerage_status: dbStatus })
+      .in("id", rowIds);
+
+    if (error) {
+      console.error("Status update error:", error);
+      await loadData();
+      alert("Could not update status.");
+    }
+
+    setSavingStatusKey(null);
   };
 
   return (
@@ -217,19 +282,21 @@ export default function TargetBrokerCommissionView() {
         monthGroups.map((monthGroup) => {
           const isMonthOpen = !!expandedMonths[monthGroup.month];
           const reasonGroups = groupRowsByReason(monthGroup.rows);
+          const monthStatus = getStatusForRows(monthGroup.rows);
+          const statusClass = getStatusRowClass(monthStatus);
 
           return (
             <Card
               key={monthGroup.month}
-              className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm"
+              className={`overflow-hidden rounded-3xl border border-slate-200 shadow-sm ${statusClass}`}
             >
               <CardContent className="p-0">
-                <button
-                  type="button"
-                  onClick={() => toggleMonth(monthGroup.month)}
-                  className="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50"
-                >
-                  <div className="flex items-center gap-3">
+                <div className="flex w-full items-center justify-between px-5 py-4">
+                  <button
+                    type="button"
+                    onClick={() => toggleMonth(monthGroup.month)}
+                    className="flex flex-1 items-center gap-3 text-left"
+                  >
                     <div>
                       {isMonthOpen ? (
                         <ChevronDown className="h-4 w-4 text-slate-500" />
@@ -247,9 +314,9 @@ export default function TargetBrokerCommissionView() {
                         {reasonGroups.length} reason code buckets
                       </p>
                     </div>
-                  </div>
+                  </button>
 
-                  <div className="grid grid-cols-4 gap-8 text-right">
+                  <div className="grid grid-cols-[120px_120px_120px_120px_170px] items-end gap-8 text-right">
                     <div>
                       <div className="text-[10px] uppercase tracking-wide text-slate-400">
                         WM Invoice
@@ -289,8 +356,33 @@ export default function TargetBrokerCommissionView() {
                         {formatCurrency(monthGroup.totals.brokerFee)}
                       </div>
                     </div>
+
+                    <div className="text-left">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                        Status
+                      </div>
+
+                      <select
+                        value={monthStatus}
+                        disabled={savingStatusKey === monthGroup.month}
+                        onChange={(event) =>
+                          updateMonthStatus(
+                            monthGroup.month,
+                            monthGroup.rows,
+                            event.target.value as BrokerageStatus
+                          )
+                        }
+                        className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 shadow-sm"
+                      >
+                        {STATUS_OPTIONS.map((option) => (
+                          <option key={option.value || "blank"} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
-                </button>
+                </div>
 
                 {isMonthOpen && (
                   <div className="border-t border-slate-200 bg-slate-50 p-3">
