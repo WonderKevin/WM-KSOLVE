@@ -101,7 +101,14 @@ export default function WMKsolveApp() {
         return <TargetBrokerCommissionView />;
 
       case "ksolve-invoices":
-        return <InvoicesView />;
+        return (
+          <InvoicesView
+            invoiceUploadSignal={0}
+            documentUploadSignal={0}
+            canReprocess={true}
+            isAdmin={true}
+          />
+        );
 
       case "target-invoices":
         return <TargetView />;
