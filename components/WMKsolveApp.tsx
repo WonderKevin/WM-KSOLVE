@@ -1,718 +1,437 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { useMemo, useState } from "react";
+
+import DashboardView from "@/components/Views/DashboardView";
+import KeheDashboardView from "@/components/Views/KeheDashboardView";
+import TonyDashboardView from "@/components/Views/TonyDashboardView";
+
+import BrokerCommissionSummaryView from "@/components/Views/BrokerCommissionSummaryView";
+import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDataSetsView";
+
+import InvoicesView from "@/components/Views/InvoicesView";
+import KeheVelocityView from "@/components/Views/KeheVelocityView";
+import TonyVelocityView from "@/components/Views/TonyVelocityView";
+import ProductListView from "@/components/Views/ProductListView";
+import LocationsView from "@/components/Views/LocationsView";
+import DeductionTypesView from "@/components/Views/DeductionTypesView";
+
+import AccountingSummaryView from "@/components/Views/AccountingSummaryView";
+import CheckDetailsView from "@/components/Views/CheckDetailsView";
+
+import UserAccountView from "@/components/Views/UserAccountView";
+
+import TargetView from "@/components/Views/TargetView";
+import TargetBrokerCommissionView from "@/components/Views/TargetBrokerCommissionView";
+
 import {
   ChevronDown,
   ChevronRight,
   Database,
   LayoutDashboard,
-  Receipt,
-  Upload,
-  BadgeDollarSign,
-  Menu,
-  LogOut,
   Shield,
+  Wallet,
+  LogOut,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/lib/supabase/client";
 
-import BrokerCommissionSummaryView from "@/components/Views/BrokerCommissionSummaryView";
-import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDataSetsView";
-import AccountingSummaryView from "@/components/Views/AccountingSummaryView";
-import CheckDetailsView from "@/components/Views/CheckDetailsView";
-import WMInvoiceDiscrepancyView from "@/components/Views/WMInvoiceDiscrepancyView";
-import InvoicesView from "@/components/Views/InvoicesView";
-import ProductListView from "@/components/Views/ProductListView";
-import LocationsView from "@/components/Views/LocationsView";
-import DeductionTypesView from "@/components/Views/DeductionTypesView";
-import UserAccountView from "@/components/Views/UserAccountView";
-import AutomationView from "@/components/Views/AutomationView";
-import KeHeVelocityView from "@/components/Views/KeHeVelocityView";
-import KeheDashboardView from "@/components/Views/KeheDashboardView";
-import TonyDashboardView from "@/components/Views/TonyDashboardView";
-import TonyVelocityView from "@/components/Views/TonyVelocityView";
-import HomeView from "@/components/Views/HomeView";
-import TargetView from "@/components/Views/TargetView";
-
-type Permissions = {
-  email: string;
-
-  can_view_dashboard: boolean;
-  can_view_dashboard_kehe?: boolean;
-  can_view_dashboard_tony?: boolean;
-
-  can_view_broker_commission_summary: boolean;
-  can_view_broker_commission_data_sets: boolean;
-
-  can_view_accounting_summary: boolean;
-  can_view_accounting_check_details: boolean;
-
-  can_view_database_ksolve_invoices: boolean;
-  can_view_database_target_invoices?: boolean;
-  can_view_database_kehe_velocity: boolean;
-  can_view_database_tony_velocity?: boolean;
-  can_view_database_product_list: boolean;
-  can_view_database_locations: boolean;
-  can_view_database_deduction_type: boolean;
-
-  can_view_admin: boolean;
-  can_view_user_account: boolean;
-
-  can_reprocess_invoices: boolean;
-};
-
-function SidebarItem({
-  item,
-  activeKey,
-  setActiveKey,
-  openGroups,
-  setOpenGroups,
-}: any) {
-  const isGroup = !!item.children?.length;
-  const isOpen = openGroups[item.key];
-  const isActive = activeKey === item.key;
-  const Icon = item.icon;
-
-  const hasActiveChild = item.children?.some(
-    (child: any) => child.key === activeKey
-  );
-
-  if (!isGroup) {
-    return (
-      <button
-        type="button"
-        onClick={() => setActiveKey(item.key)}
-        className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
-          isActive
-            ? "bg-slate-900 text-white shadow-sm"
-            : "text-slate-700 hover:bg-slate-100"
-        }`}
-      >
-        <Icon className="h-4 w-4" />
-        <span>{item.label}</span>
-      </button>
-    );
-  }
-
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() =>
-          setOpenGroups((prev: any) => ({
-            ...prev,
-            [item.key]: !prev[item.key],
-          }))
-        }
-        className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
-          hasActiveChild || isOpen
-            ? "bg-slate-100 text-slate-900"
-            : "text-slate-700 hover:bg-slate-100"
-        }`}
-      >
-        <div className="flex items-center gap-3">
-          <Icon className="h-4 w-4" />
-          <span>{item.label}</span>
-        </div>
-
-        {isOpen ? (
-          <ChevronDown className="h-4 w-4" />
-        ) : (
-          <ChevronRight className="h-4 w-4" />
-        )}
-      </button>
-
-      {isOpen && (
-        <div className="ml-8 mt-2 space-y-1">
-          {item.children.map((child: any) => (
-            <button
-              type="button"
-              key={child.key}
-              onClick={() => setActiveKey(child.key)}
-              className={`block w-full rounded-xl px-4 py-2 text-left text-sm transition ${
-                activeKey === child.key
-                  ? "bg-slate-200 font-medium text-slate-900"
-                  : "text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              {child.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+type MenuKey =
+  | "dashboard"
+  | "kehe-dashboard"
+  | "tony-dashboard"
+  | "broker-commission-summary"
+  | "broker-commission-datasets"
+  | "target-broker-commission"
+  | "ksolve-invoices"
+  | "target-invoices"
+  | "kehe-velocity"
+  | "tony-velocity"
+  | "product-list"
+  | "locations"
+  | "deduction-types"
+  | "summary"
+  | "check-details"
+  | "user-account";
 
 export default function WMKsolveApp() {
-  const router = useRouter();
+  const [selectedView, setSelectedView] =
+    useState<MenuKey>("dashboard");
 
-  const [checkingSession, setCheckingSession] = useState(true);
-  const [activeKey, setActiveKey] = useState("");
-
-  const [openGroups, setOpenGroups] = useState({
-    dashboard: false,
-    "broker-commission": false,
-    accounting: false,
-    database: false,
-    admin: false,
+  const [openSections, setOpenSections] = useState({
+    dashboard: true,
+    broker: true,
+    database: true,
+    accounting: true,
+    admin: true,
   });
 
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [documentUploadSignal, setDocumentUploadSignal] = useState(0);
-  const [invoiceUploadSignal, setInvoiceUploadSignal] = useState(0);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [userEmail, setUserEmail] = useState("");
-  const [permissions, setPermissions] = useState<Permissions | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const checkSession = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!mounted) return;
-
-      if (!session) {
-        router.replace("/login");
-        return;
-      }
-
-      const email = session.user.email || "";
-      setUserEmail(email);
-
-      const { data: permissionRow } = await supabase
-        .from("user_permissions")
-        .select("*")
-        .eq("email", email)
-        .maybeSingle();
-
-      const isAdmin = email.toLowerCase() === "kevin@wondermonday.com";
-
-      setPermissions(
-        permissionRow || {
-          email,
-
-          can_view_dashboard: true,
-          can_view_dashboard_kehe: true,
-          can_view_dashboard_tony: true,
-
-          can_view_broker_commission_summary: false,
-          can_view_broker_commission_data_sets: false,
-
-          can_view_accounting_summary: false,
-          can_view_accounting_check_details: false,
-
-          can_view_database_ksolve_invoices: false,
-          can_view_database_target_invoices: isAdmin,
-          can_view_database_kehe_velocity: false,
-          can_view_database_tony_velocity: isAdmin,
-          can_view_database_product_list: false,
-          can_view_database_locations: false,
-          can_view_database_deduction_type: false,
-
-          can_view_admin: isAdmin,
-          can_view_user_account: isAdmin,
-
-          can_reprocess_invoices: isAdmin,
-        }
-      );
-
-      setCheckingSession(false);
-    };
-
-    checkSession();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        router.replace("/login");
-      }
-    });
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
-  }, [router]);
-
-  useEffect(() => {
-    if (!permissions) return;
-
-    const canViewKeheDashboard =
-      permissions.can_view_dashboard_kehe ?? permissions.can_view_dashboard;
-
-    const canViewTonyDashboard =
-      permissions.can_view_dashboard_tony ?? permissions.can_view_dashboard;
-
-    const allowedKeys: string[] = [];
-
-    if (canViewKeheDashboard) allowedKeys.push("dashboard-kehe");
-    if (canViewTonyDashboard) allowedKeys.push("dashboard-tony");
-
-    if (permissions.can_view_broker_commission_summary) {
-      allowedKeys.push("target-broker-commission");
-      allowedKeys.push("broker-commission-summary");
-    }
-
-    if (permissions.can_view_broker_commission_data_sets) {
-      allowedKeys.push("broker-commission-data-sets");
-    }
-
-    if (permissions.can_view_accounting_summary) {
-      allowedKeys.push("accounting-summary");
-      allowedKeys.push("accounting-wm-invoice-discrepancy");
-    }
-
-    if (permissions.can_view_accounting_check_details) {
-      allowedKeys.push("accounting-check-details");
-    }
-
-    if (permissions.can_view_database_ksolve_invoices) {
-      allowedKeys.push("database-ksolve-invoices");
-    }
-
-    if (permissions.can_view_database_target_invoices) {
-      allowedKeys.push("database-target-invoices");
-    }
-
-    if (permissions.can_view_database_kehe_velocity) {
-      allowedKeys.push("database-kehe-velocity");
-    }
-
-    if (
-      permissions.can_view_database_tony_velocity ??
-      permissions.can_view_database_kehe_velocity
-    ) {
-      allowedKeys.push("database-tony-velocity");
-    }
-
-    if (permissions.can_view_database_product_list) {
-      allowedKeys.push("database-product-list");
-    }
-
-    if (permissions.can_view_database_locations) {
-      allowedKeys.push("database-locations");
-    }
-
-    if (permissions.can_view_database_deduction_type) {
-      allowedKeys.push("database-deduction-type");
-    }
-
-    if (permissions.can_view_user_account) {
-      allowedKeys.push("admin-user-account");
-    }
-
-    if (permissions.can_view_admin) {
-      allowedKeys.push("admin-automation");
-    }
-
-    if (activeKey && !allowedKeys.includes(activeKey)) {
-      setActiveKey("");
-    }
-
-    setOpenGroups((prev) => ({
+  const toggleSection = (
+    section:
+      | "dashboard"
+      | "broker"
+      | "database"
+      | "accounting"
+      | "admin"
+  ) => {
+    setOpenSections((prev) => ({
       ...prev,
-
-      "broker-commission":
-        activeKey === "target-broker-commission" ||
-        activeKey === "broker-commission-summary" ||
-        activeKey === "broker-commission-data-sets"
-          ? true
-          : prev["broker-commission"],
-
-      accounting:
-        activeKey === "accounting-summary" ||
-        activeKey === "accounting-check-details" ||
-        activeKey === "accounting-wm-invoice-discrepancy"
-          ? true
-          : prev.accounting,
-
-      database:
-        activeKey === "database-ksolve-invoices" ||
-        activeKey === "database-target-invoices" ||
-        activeKey === "database-kehe-velocity" ||
-        activeKey === "database-tony-velocity" ||
-        activeKey === "database-product-list" ||
-        activeKey === "database-locations" ||
-        activeKey === "database-deduction-type"
-          ? true
-          : prev.database,
-
-      admin:
-        activeKey === "admin-user-account" || activeKey === "admin-automation"
-          ? true
-          : prev.admin,
+      [section]: !prev[section],
     }));
-  }, [permissions, activeKey]);
-
-  const handleLogout = async () => {
-    try {
-      setLoggingOut(true);
-      await supabase.auth.signOut();
-      router.replace("/login");
-      router.refresh();
-    } finally {
-      setLoggingOut(false);
-    }
   };
 
-  const sidebarItems = useMemo(() => {
-    if (!permissions) return [];
+  const renderView = useMemo(() => {
+    switch (selectedView) {
+      case "dashboard":
+        return <DashboardView />;
 
-    const items: any[] = [];
-
-    const canViewKeheDashboard =
-      permissions.can_view_dashboard_kehe ?? permissions.can_view_dashboard;
-
-    const canViewTonyDashboard =
-      permissions.can_view_dashboard_tony ?? permissions.can_view_dashboard;
-
-    const dashboardChildren = [
-      canViewKeheDashboard
-        ? { label: "Kehe Dashboard", key: "dashboard-kehe" }
-        : null,
-
-      canViewTonyDashboard
-        ? { label: "Tony's Dashboard", key: "dashboard-tony" }
-        : null,
-    ].filter(Boolean);
-
-    if (dashboardChildren.length) {
-      items.push({
-        label: "Dashboard",
-        icon: LayoutDashboard,
-        key: "dashboard",
-        children: dashboardChildren,
-      });
-    }
-
-    const brokerChildren = [
-      permissions.can_view_broker_commission_summary
-        ? {
-            label: "Target Broker Commission",
-            key: "target-broker-commission",
-          }
-        : null,
-
-      permissions.can_view_broker_commission_summary
-        ? {
-            label: "KeHe Broker Commission",
-            key: "broker-commission-summary",
-          }
-        : null,
-
-      permissions.can_view_broker_commission_data_sets
-        ? {
-            label: "KeHe Data Sets",
-            key: "broker-commission-data-sets",
-          }
-        : null,
-    ].filter(Boolean);
-
-    if (brokerChildren.length) {
-      items.push({
-        label: "Broker Commission",
-        icon: Receipt,
-        key: "broker-commission",
-        children: brokerChildren,
-      });
-    }
-
-    const accountingChildren = [
-      permissions.can_view_accounting_summary
-        ? { label: "Summary", key: "accounting-summary" }
-        : null,
-
-      permissions.can_view_accounting_check_details
-        ? { label: "Check Details", key: "accounting-check-details" }
-        : null,
-
-      permissions.can_view_accounting_summary
-        ? {
-            label: "WM Invoice Discrepancy",
-            key: "accounting-wm-invoice-discrepancy",
-          }
-        : null,
-    ].filter(Boolean);
-
-    if (accountingChildren.length) {
-      items.push({
-        label: "Accounting",
-        icon: BadgeDollarSign,
-        key: "accounting",
-        children: accountingChildren,
-      });
-    }
-
-    const databaseChildren = [
-      permissions.can_view_database_ksolve_invoices
-        ? { label: "Ksolve Invoices", key: "database-ksolve-invoices" }
-        : null,
-
-      permissions.can_view_database_target_invoices
-        ? { label: "Target Invoices", key: "database-target-invoices" }
-        : null,
-
-      permissions.can_view_database_kehe_velocity
-        ? { label: "KeHe Velocity", key: "database-kehe-velocity" }
-        : null,
-
-      permissions.can_view_database_tony_velocity ??
-      permissions.can_view_database_kehe_velocity
-        ? { label: "Tony's Velocity", key: "database-tony-velocity" }
-        : null,
-
-      permissions.can_view_database_product_list
-        ? { label: "Product List", key: "database-product-list" }
-        : null,
-
-      permissions.can_view_database_locations
-        ? { label: "Locations", key: "database-locations" }
-        : null,
-
-      permissions.can_view_database_deduction_type
-        ? { label: "Deduction Type", key: "database-deduction-type" }
-        : null,
-    ].filter(Boolean);
-
-    if (databaseChildren.length) {
-      items.push({
-        label: "Database",
-        icon: Database,
-        key: "database",
-        children: databaseChildren,
-      });
-    }
-
-    const adminChildren = [
-      permissions.can_view_user_account
-        ? { label: "User Account", key: "admin-user-account" }
-        : null,
-
-      permissions.can_view_admin
-        ? { label: "Automation", key: "admin-automation" }
-        : null,
-    ].filter(Boolean);
-
-    if (permissions.can_view_admin && adminChildren.length) {
-      items.push({
-        label: "Admin",
-        icon: Shield,
-        key: "admin",
-        children: adminChildren,
-      });
-    }
-
-    return items;
-  }, [permissions]);
-
-  const titleMap: Record<string, string> = {
-    home: "WM-KSOLVE",
-
-    "dashboard-kehe": "Kehe Dashboard",
-    "dashboard-tony": "Tony's Dashboard",
-
-    "target-broker-commission": "Target Broker Commission",
-    "broker-commission-summary": "KeHe Broker Commission",
-    "broker-commission-data-sets": "KeHe Data Sets",
-
-    "accounting-summary": "Summary",
-    "accounting-check-details": "Check Details",
-    "accounting-wm-invoice-discrepancy": "WM Invoice Discrepancy",
-
-    "database-ksolve-invoices": "Ksolve Invoices",
-    "database-target-invoices": "Target Invoices",
-    "database-kehe-velocity": "KeHe Velocity",
-    "database-tony-velocity": "Tony's Velocity",
-    "database-product-list": "Product List",
-    "database-locations": "Locations",
-    "database-deduction-type": "Deduction Type",
-
-    "admin-user-account": "User Account",
-    "admin-automation": "Automation",
-  };
-
-  const isKeheDashboard = activeKey === "dashboard-kehe";
-
-  const renderContent = () => {
-    switch (activeKey) {
-      case "dashboard-kehe":
+      case "kehe-dashboard":
         return <KeheDashboardView />;
 
-      case "dashboard-tony":
+      case "tony-dashboard":
         return <TonyDashboardView />;
-
-      case "target-broker-commission":
-        return <AccountingSummaryView />;
 
       case "broker-commission-summary":
         return <BrokerCommissionSummaryView />;
 
-      case "broker-commission-data-sets":
+      case "broker-commission-datasets":
         return <BrokerCommissionDataSetsView />;
 
-      case "accounting-summary":
-        return <AccountingSummaryView />;
+      case "target-broker-commission":
+        return <TargetBrokerCommissionView />;
 
-      case "accounting-check-details":
-        return <CheckDetailsView />;
+      case "ksolve-invoices":
+        return <InvoicesView />;
 
-      case "accounting-wm-invoice-discrepancy":
-        return <WMInvoiceDiscrepancyView />;
-
-      case "database-ksolve-invoices":
-        return (
-          <InvoicesView
-            invoiceUploadSignal={invoiceUploadSignal}
-            documentUploadSignal={documentUploadSignal}
-            canReprocess={!!permissions?.can_reprocess_invoices}
-            isAdmin={userEmail.toLowerCase() === "kevin@wondermonday.com"}
-          />
-        );
-
-      case "database-target-invoices":
+      case "target-invoices":
         return <TargetView />;
 
-      case "database-kehe-velocity":
-        return <KeHeVelocityView />;
+      case "kehe-velocity":
+        return <KeheVelocityView />;
 
-      case "database-tony-velocity":
+      case "tony-velocity":
         return <TonyVelocityView />;
 
-      case "database-product-list":
+      case "product-list":
         return <ProductListView />;
 
-      case "database-locations":
+      case "locations":
         return <LocationsView />;
 
-      case "database-deduction-type":
+      case "deduction-types":
         return <DeductionTypesView />;
 
-      case "admin-user-account":
+      case "summary":
+        return <AccountingSummaryView />;
+
+      case "check-details":
+        return <CheckDetailsView />;
+
+      case "user-account":
         return <UserAccountView />;
 
-      case "admin-automation":
-        return <AutomationView />;
-
       default:
-        return <HomeView />;
+        return <DashboardView />;
     }
-  };
+  }, [selectedView]);
 
-  if (checkingSession) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
-        <div className="rounded-3xl border border-slate-200 bg-white px-6 py-4 text-sm text-slate-500 shadow-sm">
-          Checking session...
-        </div>
-      </div>
-    );
-  }
+  const menuButtonClass =
+    "flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm font-medium transition hover:bg-slate-100";
+
+  const subMenuButtonClass =
+    "w-full rounded-xl px-3 py-2 text-left text-sm transition hover:bg-slate-100";
 
   return (
     <div className="flex min-h-screen bg-slate-100">
-      {sidebarOpen && (
-        <aside className="w-72 border-r border-slate-200 bg-white px-4 py-6">
-          <div className="mb-8 px-3">
-            <div className="text-2xl font-extrabold tracking-tight text-slate-900">
-              WM-KSOLVE
-            </div>
-          </div>
+      {/* SIDEBAR */}
+      <aside className="w-[300px] border-r border-slate-200 bg-white p-5">
+        <div className="mb-8">
+          <h1 className="text-3xl font-black tracking-tight text-slate-900">
+            WM-KSOLVE
+          </h1>
+        </div>
 
-          <div className="space-y-2">
-            {sidebarItems.map((item) => (
-              <SidebarItem
-                key={item.key}
-                item={item}
-                activeKey={activeKey}
-                setActiveKey={setActiveKey}
-                openGroups={openGroups}
-                setOpenGroups={setOpenGroups}
-              />
-            ))}
-          </div>
-        </aside>
-      )}
-
-      <main className="flex-1 h-screen overflow-y-auto">
-        <div
-          id="app-main-header"
-          className="sticky top-0 z-30 bg-slate-100 px-6 pt-5 pb-4 border-b border-slate-200"
-        >
-          <div className="rounded-3xl border border-slate-200 bg-white/95 px-6 py-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-start gap-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="rounded-2xl border-slate-200"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSidebarOpen((prev) => !prev);
-                  }}
-                >
-                  <Menu className="h-4 w-4" />
-                </Button>
-
-                <div>
-                  <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
-                    {titleMap[activeKey || "home"] || "WM-KSOLVE"}
-                  </h1>
-                </div>
+        <div className="space-y-3">
+          {/* DASHBOARD */}
+          <div className="rounded-2xl border border-slate-200 bg-slate-50">
+            <button
+              onClick={() => toggleSection("dashboard")}
+              className={menuButtonClass}
+            >
+              <div className="flex items-center gap-2">
+                <LayoutDashboard className="h-4 w-4" />
+                <span>Dashboard</span>
               </div>
 
-              <div className="flex items-center gap-3">
-                {activeKey === "database-ksolve-invoices" && (
-                  <>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="rounded-2xl border-slate-200"
-                      onClick={() => setInvoiceUploadSignal((prev) => prev + 1)}
-                    >
-                      <Upload className="mr-2 h-4 w-4" />
-                      Upload Ksolve Invoices
-                    </Button>
+              {openSections.dashboard ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
 
-                    <Button
-                      type="button"
-                      className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-                      onClick={() =>
-                        setDocumentUploadSignal((prev) => prev + 1)
-                      }
-                    >
-                      <Upload className="mr-2 h-4 w-4" />
-                      Upload Files
-                    </Button>
-                  </>
-                )}
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="rounded-2xl border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
-                  onClick={handleLogout}
-                  disabled={loggingOut}
+            {openSections.dashboard && (
+              <div className="space-y-1 px-2 pb-2">
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("dashboard")
+                  }
                 >
-                  <LogOut className="mr-2 h-4 w-4" />
-                  {loggingOut ? "Logging out..." : "Logout"}
-                </Button>
+                  Dashboard
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("kehe-dashboard")
+                  }
+                >
+                  Kehe Dashboard
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("tony-dashboard")
+                  }
+                >
+                  Tony&apos;s Dashboard
+                </button>
               </div>
-            </div>
+            )}
+          </div>
+
+          {/* BROKER COMMISSION */}
+          <div className="rounded-2xl border border-slate-200 bg-slate-50">
+            <button
+              onClick={() => toggleSection("broker")}
+              className={menuButtonClass}
+            >
+              <div className="flex items-center gap-2">
+                <Wallet className="h-4 w-4" />
+                <span>Broker Commission</span>
+              </div>
+
+              {openSections.broker ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
+
+            {openSections.broker && (
+              <div className="space-y-1 px-2 pb-2">
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView(
+                      "target-broker-commission"
+                    )
+                  }
+                >
+                  Target Broker Commission
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView(
+                      "broker-commission-summary"
+                    )
+                  }
+                >
+                  Kehe Broker Commission
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView(
+                      "broker-commission-datasets"
+                    )
+                  }
+                >
+                  KeHe Data Sets
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* DATABASE */}
+          <div className="rounded-2xl border border-slate-200 bg-slate-50">
+            <button
+              onClick={() => toggleSection("database")}
+              className={menuButtonClass}
+            >
+              <div className="flex items-center gap-2">
+                <Database className="h-4 w-4" />
+                <span>Database</span>
+              </div>
+
+              {openSections.database ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
+
+            {openSections.database && (
+              <div className="space-y-1 px-2 pb-2">
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("ksolve-invoices")
+                  }
+                >
+                  Ksolve Invoices
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("target-invoices")
+                  }
+                >
+                  Target Invoices
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("kehe-velocity")
+                  }
+                >
+                  KeHe Velocity
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("tony-velocity")
+                  }
+                >
+                  Tony&apos;s Velocity
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("product-list")
+                  }
+                >
+                  Product List
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("locations")
+                  }
+                >
+                  Locations
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("deduction-types")
+                  }
+                >
+                  Deduction Type
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* ACCOUNTING */}
+          <div className="rounded-2xl border border-slate-200 bg-slate-50">
+            <button
+              onClick={() => toggleSection("accounting")}
+              className={menuButtonClass}
+            >
+              <div className="flex items-center gap-2">
+                <Wallet className="h-4 w-4" />
+                <span>Accounting</span>
+              </div>
+
+              {openSections.accounting ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
+
+            {openSections.accounting && (
+              <div className="space-y-1 px-2 pb-2">
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("summary")
+                  }
+                >
+                  Summary
+                </button>
+
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("check-details")
+                  }
+                >
+                  Check Details
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* ADMIN */}
+          <div className="rounded-2xl border border-slate-200 bg-slate-50">
+            <button
+              onClick={() => toggleSection("admin")}
+              className={menuButtonClass}
+            >
+              <div className="flex items-center gap-2">
+                <Shield className="h-4 w-4" />
+                <span>Admin</span>
+              </div>
+
+              {openSections.admin ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
+
+            {openSections.admin && (
+              <div className="space-y-1 px-2 pb-2">
+                <button
+                  className={subMenuButtonClass}
+                  onClick={() =>
+                    setSelectedView("user-account")
+                  }
+                >
+                  User Account
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className={isKeheDashboard ? "px-6 pb-10" : "px-6 py-5"}>
-          {renderContent()}
+        <div className="mt-10">
+          <Button
+            variant="outline"
+            className="w-full rounded-2xl border-red-200 text-red-600 hover:bg-red-50"
+          >
+            <LogOut className="mr-2 h-4 w-4" />
+            Logout
+          </Button>
         </div>
+      </aside>
+
+      {/* CONTENT */}
+      <main className="flex-1 overflow-auto p-6">
+        {renderView}
       </main>
     </div>
   );
