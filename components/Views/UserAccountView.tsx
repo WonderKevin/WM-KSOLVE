@@ -16,6 +16,7 @@ type UserPermissionRow = {
   can_view_tonys_dashboard: boolean;
 
   // Broker Commission
+  can_view_target_broker_commission: boolean;
   can_view_broker_commission_summary: boolean;
   can_view_broker_commission_data_sets: boolean;
 
@@ -25,13 +26,16 @@ type UserPermissionRow = {
 
   // Database
   can_view_database_ksolve_invoices: boolean;
+  can_view_database_target_invoices: boolean;
   can_view_database_kehe_velocity: boolean;
+  can_view_database_tony_velocity: boolean;
   can_view_database_product_list: boolean;
   can_view_database_locations: boolean;
   can_view_database_deduction_type: boolean;
 
   // Admin
   can_view_user_account: boolean;
+  can_view_admin_automation: boolean;
 
   // Special
   can_reprocess_invoices: boolean;
@@ -55,6 +59,7 @@ const PERMISSION_GROUPS: Array<{
   {
     label: "Broker Commission",
     children: [
+      "can_view_target_broker_commission",
       "can_view_broker_commission_summary",
       "can_view_broker_commission_data_sets",
     ],
@@ -70,7 +75,9 @@ const PERMISSION_GROUPS: Array<{
     label: "Database",
     children: [
       "can_view_database_ksolve_invoices",
+      "can_view_database_target_invoices",
       "can_view_database_kehe_velocity",
+      "can_view_database_tony_velocity",
       "can_view_database_product_list",
       "can_view_database_locations",
       "can_view_database_deduction_type",
@@ -78,7 +85,7 @@ const PERMISSION_GROUPS: Array<{
   },
   {
     label: "Admin",
-    children: ["can_view_user_account"],
+    children: ["can_view_user_account", "can_view_admin_automation"],
   },
   {
     label: "Special",
@@ -87,31 +94,55 @@ const PERMISSION_GROUPS: Array<{
 ];
 
 const LABEL_MAP: Record<string, string> = {
-  // Dashboard
   can_view_dashboard: "Dashboard",
   can_view_kehe_dashboard: "Kehe Dashboard",
   can_view_tonys_dashboard: "Tony's Dashboard",
 
-  // Broker Commission
-  can_view_broker_commission_summary: "Broker Commission Summary",
-  can_view_broker_commission_data_sets: "Data Sets",
+  can_view_target_broker_commission: "Target Broker Commission",
+  can_view_broker_commission_summary: "KeHe Broker Commission",
+  can_view_broker_commission_data_sets: "KeHe Data Sets",
 
-  // Accounting
   can_view_accounting_summary: "Summary",
   can_view_accounting_check_details: "Check Details",
 
-  // Database
   can_view_database_ksolve_invoices: "Ksolve Invoices",
+  can_view_database_target_invoices: "Target Invoices",
   can_view_database_kehe_velocity: "KeHe Velocity",
+  can_view_database_tony_velocity: "Tony's Velocity",
   can_view_database_product_list: "Product List",
   can_view_database_locations: "Locations",
   can_view_database_deduction_type: "Deduction Type",
 
-  // Admin
   can_view_user_account: "User Account",
+  can_view_admin_automation: "Automation",
 
-  // Special
   can_reprocess_invoices: "Reprocess Invoices",
+};
+
+const DEFAULT_PERMISSION_VALUES = {
+  can_view_dashboard: false,
+  can_view_kehe_dashboard: false,
+  can_view_tonys_dashboard: false,
+
+  can_view_target_broker_commission: false,
+  can_view_broker_commission_summary: false,
+  can_view_broker_commission_data_sets: false,
+
+  can_view_accounting_summary: false,
+  can_view_accounting_check_details: false,
+
+  can_view_database_ksolve_invoices: false,
+  can_view_database_target_invoices: false,
+  can_view_database_kehe_velocity: false,
+  can_view_database_tony_velocity: false,
+  can_view_database_product_list: false,
+  can_view_database_locations: false,
+  can_view_database_deduction_type: false,
+
+  can_view_user_account: false,
+  can_view_admin_automation: false,
+
+  can_reprocess_invoices: false,
 };
 
 export default function UserAccountView() {
@@ -248,32 +279,7 @@ export default function UserAccountView() {
     try {
       const { error } = await supabase.from("user_permissions").insert({
         email,
-
-        // Dashboard
-        can_view_dashboard: false,
-        can_view_kehe_dashboard: false,
-        can_view_tonys_dashboard: false,
-
-        // Broker Commission
-        can_view_broker_commission_summary: false,
-        can_view_broker_commission_data_sets: false,
-
-        // Accounting
-        can_view_accounting_summary: false,
-        can_view_accounting_check_details: false,
-
-        // Database
-        can_view_database_ksolve_invoices: false,
-        can_view_database_kehe_velocity: false,
-        can_view_database_product_list: false,
-        can_view_database_locations: false,
-        can_view_database_deduction_type: false,
-
-        // Admin
-        can_view_user_account: false,
-
-        // Special
-        can_reprocess_invoices: false,
+        ...DEFAULT_PERMISSION_VALUES,
       });
 
       if (error) throw error;
