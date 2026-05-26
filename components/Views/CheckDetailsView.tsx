@@ -10,7 +10,7 @@ import { supabase } from "@/lib/supabase/client";
 type Retailer = "all" | "kehe" | "target" | "unfi";
 
 type InvoiceRecord = {
-  id: number;
+  id: string;
   month: string | null;
   check_date: string | null;
   check_number: string | null;
@@ -20,13 +20,26 @@ type InvoiceRecord = {
   dc_name: string | null;
   status: string | null;
   type: string | null;
+  retailer: Retailer;
+};
 
-  // All current invoice rows are KeHE.
-  // Target and UNFI can be added later.
-  retailer?: Retailer;
+type TargetInvoiceRow = {
+  id: number;
+  month: string | null;
+  check_date: string | null;
+  check_number: string | null;
+  doc_header_text: string | null;
+  reason_code_description: string | null;
+  sap_doc_number: string | null;
+  doc_date: string | null;
+  gross_amount: number | null;
+  cash_discount: number | null;
+  withholding_tax_amount: number | null;
+  net_amount: number | null;
 };
 
 type CheckGroup = {
+  retailer: Retailer;
   month: string;
   check_date: string;
   check_number: string;
@@ -50,17 +63,26 @@ function formatCurrency(value: number | null | undefined) {
   }).format(value);
 }
 
+function retailerLabel(value: Retailer) {
+  if (value === "kehe") return "KeHE";
+  if (value === "target") return "Target";
+  if (value === "unfi") return "UNFI";
+  return "All";
+}
+
 function groupByCheck(rows: InvoiceRecord[]): CheckGroup[] {
   const map = new Map<string, CheckGroup>();
 
   for (const row of rows) {
+    const retailer = row.retailer;
     const month = row.month || "";
     const check_date = row.check_date || "";
     const check_number = row.check_number || "";
-    const key = `${month}__${check_date}__${check_number}`;
+    const key = `${retailer}__${month}__${check_date}__${check_number}`;
 
     if (!map.has(key)) {
       map.set(key, {
+        retailer,
         month,
         check_date,
         check_number,
@@ -73,6 +95,17 @@ function groupByCheck(rows: InvoiceRecord[]): CheckGroup[] {
   }
 
   return Array.from(map.values());
+}
+
+function getTargetCheckAmounts(rows: TargetInvoiceRow[]) {
+  const map = new Map<string, number>();
+
+  for (const row of rows) {
+    const key = `${row.check_date || ""}__${row.check_number || ""}`;
+    map.set(key, (map.get(key) || 0) + Number(row.net_amount || 0));
+  }
+
+  return map;
 }
 
 export default function CheckDetailsView() {
@@ -90,23 +123,65 @@ export default function CheckDetailsView() {
       try {
         setLoading(true);
 
-        const { data, error } = await supabase
-          .from("invoices")
-          .select(
-            "id, month, check_date, check_number, check_amt, invoice_number, invoice_amt, dc_name, status, type"
-          )
-          .order("check_date", { ascending: false })
-          .order("check_number", { ascending: false });
+        const [keheRes, targetRes] = await Promise.all([
+          supabase
+            .from("invoices")
+            .select(
+              "id, month, check_date, check_number, check_amt, invoice_number, invoice_amt, dc_name, status, type"
+            )
+            .order("check_date", { ascending: false })
+            .order("check_number", { ascending: false }),
 
-        if (error) throw error;
+          supabase
+            .from("target_invoices")
+            .select(
+              "id, month, check_date, check_number, doc_header_text, reason_code_description, sap_doc_number, doc_date, gross_amount, cash_discount, withholding_tax_amount, net_amount"
+            )
+            .order("check_date", { ascending: false })
+            .order("check_number", { ascending: false }),
+        ]);
 
-        // All existing/current rows are KeHE.
-        const taggedRows = ((data || []) as InvoiceRecord[]).map((row) => ({
-          ...row,
-          retailer: "kehe" as Retailer,
-        }));
+        if (keheRes.error) throw keheRes.error;
+        if (targetRes.error) throw targetRes.error;
 
-        setRows(taggedRows);
+        const keheRows: InvoiceRecord[] = ((keheRes.data || []) as any[]).map(
+          (row) => ({
+            id: `kehe-${row.id}`,
+            month: row.month,
+            check_date: row.check_date,
+            check_number: row.check_number,
+            check_amt: row.check_amt,
+            invoice_number: row.invoice_number,
+            invoice_amt: row.invoice_amt,
+            dc_name: row.dc_name,
+            status: row.status,
+            type: row.type,
+            retailer: "kehe",
+          })
+        );
+
+        const rawTargetRows = (targetRes.data || []) as TargetInvoiceRow[];
+        const targetCheckAmounts = getTargetCheckAmounts(rawTargetRows);
+
+        const targetRows: InvoiceRecord[] = rawTargetRows.map((row) => {
+          const checkKey = `${row.check_date || ""}__${row.check_number || ""}`;
+
+          return {
+            id: `target-${row.id}`,
+            month: row.month,
+            check_date: row.check_date,
+            check_number: row.check_number,
+            check_amt: targetCheckAmounts.get(checkKey) || 0,
+            invoice_number: row.sap_doc_number || row.doc_header_text,
+            invoice_amt: row.net_amount,
+            dc_name: row.doc_header_text,
+            status: row.doc_date,
+            type: row.reason_code_description || "Unknown",
+            retailer: "target",
+          };
+        });
+
+        setRows([...keheRows, ...targetRows]);
       } catch (error) {
         console.error("Check details load error:", error);
       } finally {
@@ -126,21 +201,22 @@ export default function CheckDetailsView() {
   const filteredRows = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
 
-    const baseRows = retailerFilteredRows;
+    if (!search) return retailerFilteredRows;
 
-    if (!search) return baseRows;
-
-    return baseRows.filter((row) => {
+    return retailerFilteredRows.filter((row) => {
       return (
+        retailerLabel(row.retailer).toLowerCase().includes(search) ||
         (row.month || "").toLowerCase().includes(search) ||
         (row.check_date || "").toLowerCase().includes(search) ||
         (row.check_number || "").toLowerCase().includes(search) ||
         String(row.check_amt ?? "").toLowerCase().includes(search) ||
+        formatCurrency(row.check_amt).toLowerCase().includes(search) ||
         (row.invoice_number || "").toLowerCase().includes(search) ||
+        String(row.invoice_amt ?? "").toLowerCase().includes(search) ||
+        formatCurrency(row.invoice_amt).toLowerCase().includes(search) ||
         (row.dc_name || "").toLowerCase().includes(search) ||
         (row.status || "").toLowerCase().includes(search) ||
-        (row.type || "").toLowerCase().includes(search) ||
-        (row.retailer || "").toLowerCase().includes(search)
+        (row.type || "").toLowerCase().includes(search)
       );
     });
   }, [retailerFilteredRows, searchTerm]);
@@ -189,7 +265,7 @@ export default function CheckDetailsView() {
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
 
                 <Input
-                  placeholder="Search month, check, invoice, DC, type..."
+                  placeholder="Search retailer, month, check, invoice, DC, type..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="rounded-xl border-slate-200 pl-9"
@@ -209,7 +285,7 @@ export default function CheckDetailsView() {
           ) : (
             <div className="space-y-4">
               {checkGroups.map((group) => {
-                const checkKey = `${group.month}__${group.check_date}__${group.check_number}`;
+                const checkKey = `${group.retailer}__${group.month}__${group.check_date}__${group.check_number}`;
                 const isCheckOpen = !!openChecks[checkKey];
 
                 const typeMap = new Map<string, InvoiceRecord[]>();
@@ -243,7 +319,7 @@ export default function CheckDetailsView() {
                     <button
                       type="button"
                       onClick={() => toggleCheck(checkKey)}
-                      className={`grid w-full grid-cols-[48px_1.2fr_1fr_1fr_1fr] items-center px-4 py-4 text-left transition ${
+                      className={`grid w-full grid-cols-[48px_0.8fr_1.2fr_1fr_1fr_1fr] items-center px-4 py-4 text-left transition ${
                         isCheckOpen ? "bg-slate-100" : "hover:bg-slate-50"
                       }`}
                     >
@@ -253,6 +329,15 @@ export default function CheckDetailsView() {
                         ) : (
                           <ChevronRight className="h-4 w-4 text-slate-600" />
                         )}
+                      </div>
+
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          Retailer
+                        </div>
+                        <div className="mt-1 font-semibold text-slate-900">
+                          {retailerLabel(group.retailer)}
+                        </div>
                       </div>
 
                       <div>
@@ -342,8 +427,8 @@ export default function CheckDetailsView() {
                                       <div className="grid grid-cols-[1.4fr_180px_1.2fr_140px] bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700">
                                         <div>Invoice #</div>
                                         <div>Invoice Amt</div>
-                                        <div>DC Name</div>
-                                        <div>Status</div>
+                                        <div>DC / Reference</div>
+                                        <div>Status / Doc Date</div>
                                       </div>
 
                                       {entry.rows.map((item) => (
