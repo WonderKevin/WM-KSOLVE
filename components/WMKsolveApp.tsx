@@ -21,56 +21,41 @@ import { supabase } from "@/lib/supabase/client";
 
 import BrokerCommissionSummaryView from "@/components/Views/BrokerCommissionSummaryView";
 import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDataSetsView";
-
 import AccountingSummaryView from "@/components/Views/AccountingSummaryView";
 import CheckDetailsView from "@/components/Views/CheckDetailsView";
 import WMInvoiceDiscrepancyView from "@/components/Views/WMInvoiceDiscrepancyView";
-
 import InvoicesView from "@/components/Views/InvoicesView";
 import ProductListView from "@/components/Views/ProductListView";
 import LocationsView from "@/components/Views/LocationsView";
 import DeductionTypesView from "@/components/Views/DeductionTypesView";
-
 import UserAccountView from "@/components/Views/UserAccountView";
 import AutomationView from "@/components/Views/AutomationView";
-
 import KeHeVelocityView from "@/components/Views/KeHeVelocityView";
 import KeheDashboardView from "@/components/Views/KeheDashboardView";
-
 import TonyDashboardView from "@/components/Views/TonyDashboardView";
 import TonyVelocityView from "@/components/Views/TonyVelocityView";
-
 import HomeView from "@/components/Views/HomeView";
-
 import TargetView from "@/components/Views/TargetView";
 import TargetBrokerCommissionView from "@/components/Views/TargetBrokerCommissionView";
 
 type Permissions = {
   email: string;
-
   can_view_dashboard: boolean;
   can_view_dashboard_kehe?: boolean;
   can_view_dashboard_tony?: boolean;
-
   can_view_broker_commission_summary: boolean;
   can_view_broker_commission_data_sets: boolean;
-
   can_view_accounting_summary: boolean;
   can_view_accounting_check_details: boolean;
-
   can_view_database_ksolve_invoices: boolean;
   can_view_database_target_invoices?: boolean;
-
   can_view_database_kehe_velocity: boolean;
   can_view_database_tony_velocity?: boolean;
-
   can_view_database_product_list: boolean;
   can_view_database_locations: boolean;
   can_view_database_deduction_type: boolean;
-
   can_view_admin: boolean;
   can_view_user_account: boolean;
-
   can_reprocess_invoices: boolean;
 };
 
@@ -83,9 +68,7 @@ function SidebarItem({
 }: any) {
   const isGroup = !!item.children?.length;
   const isOpen = openGroups[item.key];
-
   const isActive = activeKey === item.key;
-
   const Icon = item.icon;
 
   const hasActiveChild = item.children?.some(
@@ -130,11 +113,7 @@ function SidebarItem({
           <span>{item.label}</span>
         </div>
 
-        {isOpen ? (
-          <ChevronDown className="h-4 w-4" />
-        ) : (
-          <ChevronRight className="h-4 w-4" />
-        )}
+        {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
       </button>
 
       {isOpen && (
@@ -163,9 +142,7 @@ export default function WMKsolveApp() {
   const router = useRouter();
 
   const [checkingSession, setCheckingSession] = useState(true);
-
   const [activeKey, setActiveKey] = useState("");
-
   const [openGroups, setOpenGroups] = useState({
     dashboard: false,
     "broker-commission": false,
@@ -173,19 +150,12 @@ export default function WMKsolveApp() {
     database: false,
     admin: false,
   });
-
   const [sidebarOpen, setSidebarOpen] = useState(true);
-
   const [documentUploadSignal, setDocumentUploadSignal] = useState(0);
-
   const [invoiceUploadSignal, setInvoiceUploadSignal] = useState(0);
-
   const [loggingOut, setLoggingOut] = useState(false);
-
   const [userEmail, setUserEmail] = useState("");
-
-  const [permissions, setPermissions] =
-    useState<Permissions | null>(null);
+  const [permissions, setPermissions] = useState<Permissions | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -203,7 +173,6 @@ export default function WMKsolveApp() {
       }
 
       const email = session.user.email || "";
-
       setUserEmail(email);
 
       const { data: permissionRow } = await supabase
@@ -212,36 +181,27 @@ export default function WMKsolveApp() {
         .eq("email", email)
         .maybeSingle();
 
-      const isAdmin =
-        email.toLowerCase() === "kevin@wondermonday.com";
+      const isAdmin = email.toLowerCase() === "kevin@wondermonday.com";
 
       setPermissions(
         permissionRow || {
           email,
-
           can_view_dashboard: true,
           can_view_dashboard_kehe: true,
           can_view_dashboard_tony: true,
-
           can_view_broker_commission_summary: false,
           can_view_broker_commission_data_sets: false,
-
           can_view_accounting_summary: false,
           can_view_accounting_check_details: false,
-
           can_view_database_ksolve_invoices: false,
           can_view_database_target_invoices: isAdmin,
-
           can_view_database_kehe_velocity: false,
           can_view_database_tony_velocity: isAdmin,
-
           can_view_database_product_list: false,
           can_view_database_locations: false,
           can_view_database_deduction_type: false,
-
           can_view_admin: isAdmin,
           can_view_user_account: isAdmin,
-
           can_reprocess_invoices: isAdmin,
         }
       );
@@ -253,13 +213,9 @@ export default function WMKsolveApp() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        if (!session) {
-          router.replace("/login");
-        }
-      }
-    );
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) router.replace("/login");
+    });
 
     return () => {
       mounted = false;
@@ -267,194 +223,122 @@ export default function WMKsolveApp() {
     };
   }, [router]);
 
+  const handleLogout = async () => {
+    try {
+      setLoggingOut(true);
+      await supabase.auth.signOut();
+      router.replace("/login");
+      router.refresh();
+    } finally {
+      setLoggingOut(false);
+    }
+  };
+
   const sidebarItems = useMemo(() => {
     if (!permissions) return [];
 
-    const items: any[] = [];
-
-    items.push({
-      label: "Dashboard",
-      icon: LayoutDashboard,
-      key: "dashboard",
-      children: [
-        {
-          label: "Kehe Dashboard",
-          key: "dashboard-kehe",
-        },
-        {
-          label: "Tony's Dashboard",
-          key: "dashboard-tony",
-        },
-      ],
-    });
-
-    items.push({
-      label: "Broker Commission",
-      icon: Receipt,
-      key: "broker-commission",
-      children: [
-        {
-          label: "Target Broker Commission",
-          key: "target-broker-commission",
-        },
-        {
-          label: "KeHe Broker Commission",
-          key: "broker-commission-summary",
-        },
-        {
-          label: "KeHe Data Sets",
-          key: "broker-commission-data-sets",
-        },
-      ],
-    });
-
-    items.push({
-      label: "Accounting",
-      icon: BadgeDollarSign,
-      key: "accounting",
-      children: [
-        {
-          label: "Summary",
-          key: "accounting-summary",
-        },
-        {
-          label: "Check Details",
-          key: "accounting-check-details",
-        },
-        {
-          label: "WM Invoice Discrepancy",
-          key: "accounting-wm-invoice-discrepancy",
-        },
-      ],
-    });
-
-    items.push({
-      label: "Database",
-      icon: Database,
-      key: "database",
-      children: [
-        {
-          label: "Ksolve Invoices",
-          key: "database-ksolve-invoices",
-        },
-
-        {
-          label: "Target Invoices",
-          key: "database-target-invoices",
-        },
-
-        {
-          label: "KeHe Velocity",
-          key: "database-kehe-velocity",
-        },
-
-        {
-          label: "Tony's Velocity",
-          key: "database-tony-velocity",
-        },
-
-        {
-          label: "Product List",
-          key: "database-product-list",
-        },
-
-        {
-          label: "Locations",
-          key: "database-locations",
-        },
-
-        {
-          label: "Deduction Type",
-          key: "database-deduction-type",
-        },
-      ],
-    });
-
-    items.push({
-      label: "Admin",
-      icon: Shield,
-      key: "admin",
-      children: [
-        {
-          label: "User Account",
-          key: "admin-user-account",
-        },
-
-        {
-          label: "Automation",
-          key: "admin-automation",
-        },
-      ],
-    });
-
-    return items;
+    return [
+      {
+        label: "Dashboard",
+        icon: LayoutDashboard,
+        key: "dashboard",
+        children: [
+          { label: "Kehe Dashboard", key: "dashboard-kehe" },
+          { label: "Tony's Dashboard", key: "dashboard-tony" },
+        ],
+      },
+      {
+        label: "Broker Commission",
+        icon: Receipt,
+        key: "broker-commission",
+        children: [
+          { label: "Target Broker Commission", key: "target-broker-commission" },
+          { label: "KeHe Broker Commission", key: "broker-commission-summary" },
+          { label: "KeHe Data Sets", key: "broker-commission-data-sets" },
+        ],
+      },
+      {
+        label: "Accounting",
+        icon: BadgeDollarSign,
+        key: "accounting",
+        children: [
+          { label: "Summary", key: "accounting-summary" },
+          { label: "Check Details", key: "accounting-check-details" },
+          {
+            label: "WM Invoice Discrepancy",
+            key: "accounting-wm-invoice-discrepancy",
+          },
+        ],
+      },
+      {
+        label: "Database",
+        icon: Database,
+        key: "database",
+        children: [
+          { label: "Ksolve Invoices", key: "database-ksolve-invoices" },
+          { label: "Target Invoices", key: "database-target-invoices" },
+          { label: "KeHe Velocity", key: "database-kehe-velocity" },
+          { label: "Tony's Velocity", key: "database-tony-velocity" },
+          { label: "Product List", key: "database-product-list" },
+          { label: "Locations", key: "database-locations" },
+          { label: "Deduction Type", key: "database-deduction-type" },
+        ],
+      },
+      {
+        label: "Admin",
+        icon: Shield,
+        key: "admin",
+        children: [
+          { label: "User Account", key: "admin-user-account" },
+          { label: "Automation", key: "admin-automation" },
+        ],
+      },
+    ];
   }, [permissions]);
 
   const renderContent = () => {
     switch (activeKey) {
       case "dashboard-kehe":
         return <KeheDashboardView />;
-
       case "dashboard-tony":
         return <TonyDashboardView />;
-
       case "target-broker-commission":
         return <TargetBrokerCommissionView />;
-
       case "broker-commission-summary":
         return <BrokerCommissionSummaryView />;
-
       case "broker-commission-data-sets":
         return <BrokerCommissionDataSetsView />;
-
       case "accounting-summary":
         return <AccountingSummaryView />;
-
       case "accounting-check-details":
         return <CheckDetailsView />;
-
       case "accounting-wm-invoice-discrepancy":
         return <WMInvoiceDiscrepancyView />;
-
       case "database-ksolve-invoices":
         return (
           <InvoicesView
             invoiceUploadSignal={invoiceUploadSignal}
             documentUploadSignal={documentUploadSignal}
-            canReprocess={
-              !!permissions?.can_reprocess_invoices
-            }
-            isAdmin={
-              userEmail.toLowerCase() ===
-              "kevin@wondermonday.com"
-            }
+            canReprocess={!!permissions?.can_reprocess_invoices}
+            isAdmin={userEmail.toLowerCase() === "kevin@wondermonday.com"}
           />
         );
-
       case "database-target-invoices":
         return <TargetView />;
-
       case "database-kehe-velocity":
         return <KeHeVelocityView />;
-
       case "database-tony-velocity":
         return <TonyVelocityView />;
-
       case "database-product-list":
         return <ProductListView />;
-
       case "database-locations":
         return <LocationsView />;
-
       case "database-deduction-type":
         return <DeductionTypesView />;
-
       case "admin-user-account":
         return <UserAccountView />;
-
       case "admin-automation":
         return <AutomationView />;
-
       default:
         return <HomeView />;
     }
@@ -511,7 +395,6 @@ export default function WMKsolveApp() {
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-
                     setSidebarOpen((prev) => !prev);
                   }}
                 >
@@ -526,18 +409,13 @@ export default function WMKsolveApp() {
               </div>
 
               <div className="flex items-center gap-3">
-                {activeKey ===
-                  "database-ksolve-invoices" && (
+                {activeKey === "database-ksolve-invoices" && (
                   <>
                     <Button
                       type="button"
                       variant="outline"
                       className="rounded-2xl border-slate-200"
-                      onClick={() =>
-                        setInvoiceUploadSignal(
-                          (prev) => prev + 1
-                        )
-                      }
+                      onClick={() => setInvoiceUploadSignal((prev) => prev + 1)}
                     >
                       <Upload className="mr-2 h-4 w-4" />
                       Upload Ksolve Invoices
@@ -547,9 +425,7 @@ export default function WMKsolveApp() {
                       type="button"
                       className="rounded-2xl bg-slate-900 hover:bg-slate-800"
                       onClick={() =>
-                        setDocumentUploadSignal(
-                          (prev) => prev + 1
-                        )
+                        setDocumentUploadSignal((prev) => prev + 1)
                       }
                     >
                       <Upload className="mr-2 h-4 w-4" />
@@ -566,19 +442,14 @@ export default function WMKsolveApp() {
                   disabled={loggingOut}
                 >
                   <LogOut className="mr-2 h-4 w-4" />
-
-                  {loggingOut
-                    ? "Logging out..."
-                    : "Logout"}
+                  {loggingOut ? "Logging out..." : "Logout"}
                 </Button>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="px-6 py-5">
-          {renderContent()}
-        </div>
+        <div className="px-6 py-5">{renderContent()}</div>
       </main>
     </div>
   );
