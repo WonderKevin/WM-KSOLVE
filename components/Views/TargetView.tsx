@@ -63,7 +63,9 @@ function parseDate(value: unknown) {
   if (typeof value === "number") {
     const parsed = XLSX.SSF.parse_date_code(value);
     if (!parsed) return null;
-    return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+    return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(
+      parsed.d
+    ).padStart(2, "0")}`;
   }
 
   const text = clean(value);
@@ -71,7 +73,10 @@ function parseDate(value: unknown) {
 
   if (match) {
     const [, mm, dd, yyyy] = match;
-    return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(
+      2,
+      "0"
+    )}`;
   }
 
   const date = new Date(text);
@@ -81,6 +86,7 @@ function parseDate(value: unknown) {
 
 function monthFromDate(value: string | null) {
   if (!value) return null;
+
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return null;
 
@@ -90,9 +96,19 @@ function monthFromDate(value: string | null) {
   });
 }
 
+function monthSortValue(month: string | null) {
+  if (!month) return 0;
+
+  const date = new Date(`1 ${month}`);
+  if (Number.isNaN(date.getTime())) return 0;
+
+  return date.getFullYear() * 100 + date.getMonth() + 1;
+}
+
 function toNumber(value: unknown) {
   const original = clean(value);
   const text = original.replace(/[$,]/g, "").replace(/[()]/g, "").trim();
+
   if (!text) return null;
 
   const number = Number(text);
@@ -271,6 +287,9 @@ export default function TargetView() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
 
+  const [selectedReason, setSelectedReason] = useState("all");
+  const [selectedMonth, setSelectedMonth] = useState("all");
+
   const loadRows = async () => {
     setLoading(true);
 
@@ -301,6 +320,43 @@ export default function TargetView() {
         .map((row) => `${row.check_date}__${row.check_number}`)
     );
   }, [rows]);
+
+  const monthOptions = useMemo(() => {
+    return Array.from(new Set(rows.map((row) => row.month).filter(Boolean)))
+      .sort((a, b) => monthSortValue(b) - monthSortValue(a)) as string[];
+  }, [rows]);
+
+  const reasonOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        rows
+          .map(
+            (row) =>
+              row.reason_code_description ||
+              resolveReasonDescription(row.doc_header_text) ||
+              "Unknown"
+          )
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [rows]);
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      const reason =
+        row.reason_code_description ||
+        resolveReasonDescription(row.doc_header_text) ||
+        "Unknown";
+
+      const matchesReason =
+        selectedReason === "all" || reason === selectedReason;
+
+      const matchesMonth =
+        selectedMonth === "all" || row.month === selectedMonth;
+
+      return matchesReason && matchesMonth;
+    });
+  }, [rows, selectedReason, selectedMonth]);
 
   const handleUpload = async (files: FileList) => {
     setUploading(true);
@@ -369,7 +425,7 @@ export default function TargetView() {
   };
 
   const totals = useMemo(() => {
-    return rows.reduce(
+    return filteredRows.reduce(
       (acc, row) => {
         acc.gross += Number(row.gross_amount || 0);
         acc.cashDiscount += Number(row.cash_discount || 0);
@@ -384,12 +440,12 @@ export default function TargetView() {
         net: 0,
       }
     );
-  }, [rows]);
+  }, [filteredRows]);
 
   return (
     <div className="space-y-5">
       <Card className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <CardContent className="flex flex-col gap-3 pt-6 sm:flex-row sm:items-center sm:justify-between">
+        <CardContent className="flex flex-col gap-4 pt-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h2 className="text-xl font-bold text-slate-900">
               Target Invoices
@@ -400,27 +456,65 @@ export default function TargetView() {
             </p>
           </div>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            multiple
-            className="hidden"
-            onChange={(event) => {
-              const files = event.target.files;
-              if (files && files.length > 0) handleUpload(files);
-            }}
-          />
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-500">
+                Month
+              </label>
+              <select
+                value={selectedMonth}
+                onChange={(event) => setSelectedMonth(event.target.value)}
+                className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                <option value="all">All</option>
+                {monthOptions.map((month) => (
+                  <option key={month} value={month}>
+                    {month}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <Button
-            type="button"
-            className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-            disabled={uploading}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Upload className="mr-2 h-4 w-4" />
-            {uploading ? "Uploading..." : "Upload Target Files"}
-          </Button>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-500">
+                Reason Code Description
+              </label>
+              <select
+                value={selectedReason}
+                onChange={(event) => setSelectedReason(event.target.value)}
+                className="min-w-[260px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                <option value="all">All</option>
+                {reasonOptions.map((reason) => (
+                  <option key={reason} value={reason}>
+                    {reason}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              multiple
+              className="hidden"
+              onChange={(event) => {
+                const files = event.target.files;
+                if (files && files.length > 0) handleUpload(files);
+              }}
+            />
+
+            <Button
+              type="button"
+              className="rounded-2xl bg-slate-900 hover:bg-slate-800"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              {uploading ? "Uploading..." : "Upload Target Files"}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -432,8 +526,8 @@ export default function TargetView() {
             </p>
           ) : (
             <div className="max-h-[70vh] overflow-auto rounded-2xl border border-slate-200">
-  <table className="min-w-full border-separate border-spacing-0 text-sm">
-    <thead className="sticky top-0 z-20 bg-slate-100 shadow-sm">
+              <table className="min-w-full border-separate border-spacing-0 text-sm">
+                <thead className="sticky top-0 z-20 bg-slate-100 shadow-sm">
                   <tr>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Month</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Check Date</th>
@@ -450,39 +544,61 @@ export default function TargetView() {
                 </thead>
 
                 <tbody>
-                  {rows.length === 0 && (
+                  {filteredRows.length === 0 && (
                     <tr>
-                      <td colSpan={11} className="px-4 py-6 text-center text-sm text-slate-500">
+                      <td
+                        colSpan={11}
+                        className="px-4 py-6 text-center text-sm text-slate-500"
+                      >
                         No Target invoices found.
                       </td>
                     </tr>
                   )}
 
-                  {rows.map((row) => (
+                  {filteredRows.map((row) => (
                     <tr key={row.id} className="border-t border-slate-200">
                       <td className="whitespace-nowrap px-4 py-3">{row.month}</td>
                       <td className="whitespace-nowrap px-4 py-3">{row.check_date}</td>
                       <td className="whitespace-nowrap px-4 py-3">{row.check_number}</td>
                       <td className="whitespace-nowrap px-4 py-3">{row.doc_header_text}</td>
                       <td className="whitespace-nowrap px-4 py-3">
-                        {row.reason_code_description || resolveReasonDescription(row.doc_header_text)}
+                        {row.reason_code_description ||
+                          resolveReasonDescription(row.doc_header_text)}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3">{row.sap_doc_number}</td>
                       <td className="whitespace-nowrap px-4 py-3">{row.doc_date}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(row.gross_amount)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(row.cash_discount)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(row.withholding_tax_amount)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-slate-900">{formatCurrency(row.net_amount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(row.gross_amount)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(row.cash_discount)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(row.withholding_tax_amount)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-slate-900">
+                        {formatCurrency(row.net_amount)}
+                      </td>
                     </tr>
                   ))}
 
-                  {rows.length > 0 && (
+                  {filteredRows.length > 0 && (
                     <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
-                      <td className="px-4 py-3" colSpan={7}>Total</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(totals.gross)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(totals.cashDiscount)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(totals.withholding)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right">{formatCurrency(totals.net)}</td>
+                      <td className="px-4 py-3" colSpan={7}>
+                        Total
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(totals.gross)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(totals.cashDiscount)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(totals.withholding)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {formatCurrency(totals.net)}
+                      </td>
                     </tr>
                   )}
                 </tbody>
