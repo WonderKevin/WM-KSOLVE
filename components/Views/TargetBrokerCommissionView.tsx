@@ -59,10 +59,6 @@ function monthSortValue(month: string | null | undefined) {
   return parsed.getFullYear() * 100 + parsed.getMonth() + 1;
 }
 
-function formatMonthLabel(month: string | null | undefined) {
-  return month || "Unknown";
-}
-
 function getTotals(rows: TargetInvoiceRow[]) {
   const wmInvoiceTotal = round2(
     rows
@@ -194,26 +190,26 @@ export default function TargetBrokerCommissionView() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-3xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
-        <h1 className="text-3xl font-black tracking-tight text-slate-900">
+    <div className="space-y-4">
+      <div className="rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+        <h1 className="text-xl font-bold tracking-tight text-slate-900">
           Target Brokerage Commission
         </h1>
 
-        <p className="mt-1 text-sm text-slate-500">
+        <p className="mt-1 text-xs text-slate-500">
           Target brokerage summary by month and reason code description.
         </p>
       </div>
 
       {loading ? (
         <Card className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-          <CardContent className="py-10 text-sm text-slate-500">
+          <CardContent className="py-8 text-sm text-slate-500">
             Loading Target brokerage commission...
           </CardContent>
         </Card>
       ) : monthGroups.length === 0 ? (
         <Card className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-          <CardContent className="py-10 text-sm text-slate-500">
+          <CardContent className="py-8 text-sm text-slate-500">
             No Target brokerage commission data found.
           </CardContent>
         </Card>
@@ -231,10 +227,10 @@ export default function TargetBrokerCommissionView() {
                 <button
                   type="button"
                   onClick={() => toggleMonth(monthGroup.month)}
-                  className="flex w-full items-start justify-between px-6 py-5 text-left hover:bg-slate-50"
+                  className="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50"
                 >
-                  <div className="flex items-start gap-3">
-                    <div className="pt-1">
+                  <div className="flex items-center gap-3">
+                    <div>
                       {isMonthOpen ? (
                         <ChevronDown className="h-4 w-4 text-slate-500" />
                       ) : (
@@ -243,53 +239,53 @@ export default function TargetBrokerCommissionView() {
                     </div>
 
                     <div>
-                      <h2 className="text-2xl font-bold text-slate-900">
-                        {formatMonthLabel(monthGroup.month)}
+                      <h2 className="text-base font-bold text-slate-900">
+                        {monthGroup.month}
                       </h2>
 
-                      <p className="text-sm text-slate-500">
+                      <p className="text-xs text-slate-500">
                         {reasonGroups.length} reason code buckets
                       </p>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-4 gap-10 text-right">
+                  <div className="grid grid-cols-4 gap-8 text-right">
                     <div>
-                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-400">
                         WM Invoice
                       </div>
 
-                      <div className="text-xl font-bold text-slate-900">
+                      <div className="text-sm font-bold text-slate-900">
                         {formatCurrency(monthGroup.totals.wmInvoiceTotal)}
                       </div>
                     </div>
 
                     <div>
-                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-400">
                         Deductions
                       </div>
 
-                      <div className="text-xl font-bold text-red-600">
+                      <div className="text-sm font-bold text-red-600">
                         {formatCurrency(monthGroup.totals.deductions)}
                       </div>
                     </div>
 
                     <div>
-                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-400">
                         Net
                       </div>
 
-                      <div className="text-xl font-bold text-slate-900">
+                      <div className="text-sm font-bold text-slate-900">
                         {formatCurrency(monthGroup.totals.netTotal)}
                       </div>
                     </div>
 
                     <div>
-                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-400">
                         4% Fee
                       </div>
 
-                      <div className="text-xl font-bold text-emerald-600">
+                      <div className="text-sm font-bold text-emerald-600">
                         {formatCurrency(monthGroup.totals.brokerFee)}
                       </div>
                     </div>
@@ -297,55 +293,55 @@ export default function TargetBrokerCommissionView() {
                 </button>
 
                 {isMonthOpen && (
-                  <div className="border-t border-slate-200 bg-slate-50 p-4">
+                  <div className="border-t border-slate-200 bg-slate-50 p-3">
                     <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
-                      <div className="grid grid-cols-[1fr_1fr_1fr_1fr] gap-6 border-b border-slate-200 px-4 py-4">
+                      <div className="grid grid-cols-[1fr_1fr_1fr_1fr] gap-6 border-b border-slate-200 px-4 py-3">
                         <div>
-                          <div className="text-xs font-medium text-slate-400">
+                          <div className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
                             Retailer
                           </div>
 
-                          <div className="font-bold text-slate-900">
+                          <div className="text-sm font-bold text-slate-900">
                             Target
                           </div>
                         </div>
 
                         <div>
-                          <div className="text-xs font-medium text-slate-400">
+                          <div className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
                             WM Invoice Total
                           </div>
 
-                          <div className="font-bold text-slate-900">
+                          <div className="text-sm font-bold text-slate-900">
                             {formatCurrency(monthGroup.totals.wmInvoiceTotal)}
                           </div>
                         </div>
 
                         <div>
-                          <div className="text-xs font-medium text-slate-400">
+                          <div className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
                             Deductions
                           </div>
 
-                          <div className="font-bold text-red-600">
+                          <div className="text-sm font-bold text-red-600">
                             {formatCurrency(monthGroup.totals.deductions)}
                           </div>
                         </div>
 
                         <div>
-                          <div className="text-xs font-medium text-slate-400">
+                          <div className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
                             Net Total / 4% Broker Fee
                           </div>
 
-                          <div className="font-bold text-slate-900">
+                          <div className="text-sm font-bold text-slate-900">
                             {formatCurrency(monthGroup.totals.netTotal)}
                           </div>
 
-                          <div className="font-bold text-emerald-600">
+                          <div className="text-sm font-bold text-emerald-600">
                             {formatCurrency(monthGroup.totals.brokerFee)}
                           </div>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-[1fr_180px] bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700">
+                      <div className="grid grid-cols-[1fr_160px] bg-slate-100 px-4 py-2.5 text-xs font-semibold text-slate-700">
                         <div>Line Item</div>
                         <div className="text-right">Amount</div>
                       </div>
@@ -363,7 +359,7 @@ export default function TargetBrokerCommissionView() {
                             <button
                               type="button"
                               onClick={() => toggleReason(reasonKey)}
-                              className="grid w-full grid-cols-[24px_1fr_180px] items-center px-4 py-3 text-left hover:bg-slate-50"
+                              className="grid w-full grid-cols-[24px_1fr_160px] items-center px-4 py-2.5 text-left hover:bg-slate-50"
                             >
                               <div>
                                 {isReasonOpen ? (
@@ -373,12 +369,12 @@ export default function TargetBrokerCommissionView() {
                                 )}
                               </div>
 
-                              <div className="font-medium text-slate-900">
+                              <div className="text-sm font-medium text-slate-900">
                                 {reasonGroup.reason}
                               </div>
 
                               <div
-                                className={`text-right font-medium ${
+                                className={`text-right text-sm font-medium ${
                                   isDeduction ? "text-red-600" : "text-slate-900"
                                 }`}
                               >
@@ -388,7 +384,7 @@ export default function TargetBrokerCommissionView() {
 
                             {isReasonOpen && (
                               <div className="border-t border-slate-200 bg-slate-50">
-                                <div className="grid grid-cols-[1fr_150px_150px_150px_150px] bg-slate-100 px-4 py-3 text-xs font-semibold text-slate-600">
+                                <div className="grid grid-cols-[1fr_130px_130px_130px_130px] bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-600">
                                   <div>Doc.Header Text</div>
                                   <div>Check #</div>
                                   <div>SAP Doc #</div>
@@ -404,7 +400,7 @@ export default function TargetBrokerCommissionView() {
                                   return (
                                     <div
                                       key={row.id}
-                                      className="grid grid-cols-[1fr_150px_150px_150px_150px] border-t border-slate-200 px-4 py-3 text-sm text-slate-700"
+                                      className="grid grid-cols-[1fr_130px_130px_130px_130px] border-t border-slate-200 px-4 py-2 text-xs text-slate-700"
                                     >
                                       <div>{row.doc_header_text}</div>
                                       <div>{row.check_number}</div>
