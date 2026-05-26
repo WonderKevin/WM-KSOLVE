@@ -22,6 +22,7 @@ type TargetInvoiceRow = {
   withholding_tax_amount: number | null;
   net_amount: number | null;
   brokerage_status?: BrokerageStatus | null;
+  brokerage_invoice_number?: string | null;
 };
 
 type ReasonGroup = {
@@ -158,6 +159,20 @@ function getStatusForRows(rows: TargetInvoiceRow[]): BrokerageStatus {
   return "";
 }
 
+function getInvoiceNumberForRows(rows: TargetInvoiceRow[]) {
+  const invoiceNumbers = Array.from(
+    new Set(
+      rows
+        .map((row) => String(row.brokerage_invoice_number || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  if (invoiceNumbers.length === 1) return invoiceNumbers[0];
+
+  return "";
+}
+
 function getStatusRowClass(status: BrokerageStatus) {
   if (status === "Invoice Confirmed") return "bg-[#C1EBE9]";
   if (status === "Bill Paid") return "bg-[#FFE0C5]";
@@ -168,6 +183,7 @@ export default function TargetBrokerCommissionView() {
   const [rows, setRows] = useState<TargetInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingStatusKey, setSavingStatusKey] = useState<string | null>(null);
+  const [savingInvoiceKey, setSavingInvoiceKey] = useState<string | null>(null);
 
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>(
     {}
@@ -184,7 +200,7 @@ export default function TargetBrokerCommissionView() {
       const { data, error } = await supabase
         .from("target_invoices")
         .select(
-          "id, month, check_date, check_number, doc_header_text, reason_code_description, sap_doc_number, doc_date, gross_amount, cash_discount, withholding_tax_amount, net_amount, brokerage_status"
+          "id, month, check_date, check_number, doc_header_text, reason_code_description, sap_doc_number, doc_date, gross_amount, cash_discount, withholding_tax_amount, net_amount, brokerage_status, brokerage_invoice_number"
         )
         .order("check_date", { ascending: false })
         .order("check_number", { ascending: false });
@@ -254,6 +270,43 @@ export default function TargetBrokerCommissionView() {
     setSavingStatusKey(null);
   };
 
+  const updateMonthInvoiceNumber = async (
+    month: string,
+    monthRows: TargetInvoiceRow[],
+    invoiceNumber: string
+  ) => {
+    const cleanInvoiceNumber = invoiceNumber.slice(0, 10);
+    const rowIds = monthRows.map((row) => row.id);
+
+    setSavingInvoiceKey(month);
+
+    setRows((prev) =>
+      prev.map((row) =>
+        rowIds.includes(row.id)
+          ? {
+              ...row,
+              brokerage_invoice_number: cleanInvoiceNumber,
+            }
+          : row
+      )
+    );
+
+    const { error } = await supabase
+      .from("target_invoices")
+      .update({
+        brokerage_invoice_number: cleanInvoiceNumber || null,
+      })
+      .in("id", rowIds);
+
+    if (error) {
+      console.error("Invoice number update error:", error);
+      await loadData();
+      alert("Could not update invoice number.");
+    }
+
+    setSavingInvoiceKey(null);
+  };
+
   return (
     <div className="space-y-4">
       <div className="rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
@@ -284,6 +337,7 @@ export default function TargetBrokerCommissionView() {
           const reasonGroups = groupRowsByReason(monthGroup.rows);
           const monthStatus = getStatusForRows(monthGroup.rows);
           const statusClass = getStatusRowClass(monthStatus);
+          const monthInvoiceNumber = getInvoiceNumberForRows(monthGroup.rows);
 
           return (
             <Card
@@ -306,9 +360,32 @@ export default function TargetBrokerCommissionView() {
                     </div>
 
                     <div>
-                      <h2 className="text-base font-bold text-slate-900">
-                        {monthGroup.month}
-                      </h2>
+                      <div className="flex items-center gap-3">
+                        <h2 className="text-base font-bold text-slate-900">
+                          {monthGroup.month}
+                        </h2>
+
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs font-semibold text-slate-500">
+                            Invoice#
+                          </label>
+
+                          <input
+                            value={monthInvoiceNumber}
+                            maxLength={10}
+                            disabled={savingInvoiceKey === monthGroup.month}
+                            onClick={(event) => event.stopPropagation()}
+                            onChange={(event) =>
+                              updateMonthInvoiceNumber(
+                                monthGroup.month,
+                                monthGroup.rows,
+                                event.target.value
+                              )
+                            }
+                            className="w-[10ch] rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-900 shadow-sm"
+                          />
+                        </div>
+                      </div>
 
                       <p className="text-xs text-slate-500">
                         {reasonGroups.length} reason code buckets
@@ -375,7 +452,10 @@ export default function TargetBrokerCommissionView() {
                         className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 shadow-sm"
                       >
                         {STATUS_OPTIONS.map((option) => (
-                          <option key={option.value || "blank"} value={option.value}>
+                          <option
+                            key={option.value || "blank"}
+                            value={option.value}
+                          >
                             {option.label}
                           </option>
                         ))}
