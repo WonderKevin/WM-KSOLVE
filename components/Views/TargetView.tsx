@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { Upload } from "lucide-react";
+import { Search, Upload } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -280,6 +280,39 @@ function getUploadErrorMessage(error: unknown) {
   return JSON.stringify(error);
 }
 
+function rowMatchesSearch(row: TargetInvoiceRow, searchTerm: string) {
+  const search = searchTerm.trim().toLowerCase();
+
+  if (!search) return true;
+
+  const reason =
+    row.reason_code_description ||
+    resolveReasonDescription(row.doc_header_text) ||
+    "Unknown";
+
+  const searchableText = [
+    row.month,
+    row.check_date,
+    row.check_number,
+    row.doc_header_text,
+    reason,
+    row.sap_doc_number,
+    row.doc_date,
+    row.gross_amount,
+    row.cash_discount,
+    row.withholding_tax_amount,
+    row.net_amount,
+    formatCurrency(row.gross_amount),
+    formatCurrency(row.cash_discount),
+    formatCurrency(row.withholding_tax_amount),
+    formatCurrency(row.net_amount),
+  ]
+    .map((value) => clean(value).toLowerCase())
+    .join(" ");
+
+  return searchableText.includes(search);
+}
+
 export default function TargetView() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -289,6 +322,7 @@ export default function TargetView() {
 
   const [selectedReason, setSelectedReason] = useState("all");
   const [selectedMonth, setSelectedMonth] = useState("all");
+  const [searchTerm, setSearchTerm] = useState("");
 
   const loadRows = async () => {
     setLoading(true);
@@ -354,9 +388,11 @@ export default function TargetView() {
       const matchesMonth =
         selectedMonth === "all" || row.month === selectedMonth;
 
-      return matchesReason && matchesMonth;
+      const matchesSearch = rowMatchesSearch(row, searchTerm);
+
+      return matchesReason && matchesMonth && matchesSearch;
     });
-  }, [rows, selectedReason, selectedMonth]);
+  }, [rows, selectedReason, selectedMonth, searchTerm]);
 
   const handleUpload = async (files: FileList) => {
     setUploading(true);
@@ -456,64 +492,85 @@ export default function TargetView() {
             </p>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-slate-500">
-                Month
-              </label>
-              <select
-                value={selectedMonth}
-                onChange={(event) => setSelectedMonth(event.target.value)}
-                className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+          <div className="flex flex-col gap-3 lg:items-end">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-slate-500">
+                  Search
+                </label>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
+                    placeholder="Search any word or number..."
+                    className="min-w-[260px] rounded-xl border border-slate-200 bg-white px-3 py-2 pl-9 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-slate-500">
+                  Month
+                </label>
+                <select
+                  value={selectedMonth}
+                  onChange={(event) => setSelectedMonth(event.target.value)}
+                  className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="all">All</option>
+                  {monthOptions.map((month) => (
+                    <option key={month} value={month}>
+                      {month}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-slate-500">
+                  Reason Code Description
+                </label>
+                <select
+                  value={selectedReason}
+                  onChange={(event) => setSelectedReason(event.target.value)}
+                  className="min-w-[260px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="all">All</option>
+                  {reasonOptions.map((reason) => (
+                    <option key={reason} value={reason}>
+                      {reason}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  const files = event.target.files;
+                  if (files && files.length > 0) handleUpload(files);
+                }}
+              />
+
+              <Button
+                type="button"
+                className="rounded-2xl bg-slate-900 hover:bg-slate-800"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
               >
-                <option value="all">All</option>
-                {monthOptions.map((month) => (
-                  <option key={month} value={month}>
-                    {month}
-                  </option>
-                ))}
-              </select>
+                <Upload className="mr-2 h-4 w-4" />
+                {uploading ? "Uploading..." : "Upload Target Files"}
+              </Button>
             </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-slate-500">
-                Reason Code Description
-              </label>
-              <select
-                value={selectedReason}
-                onChange={(event) => setSelectedReason(event.target.value)}
-                className="min-w-[260px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-              >
-                <option value="all">All</option>
-                {reasonOptions.map((reason) => (
-                  <option key={reason} value={reason}>
-                    {reason}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              multiple
-              className="hidden"
-              onChange={(event) => {
-                const files = event.target.files;
-                if (files && files.length > 0) handleUpload(files);
-              }}
-            />
-
-            <Button
-              type="button"
-              className="rounded-2xl bg-slate-900 hover:bg-slate-800"
-              disabled={uploading}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Upload className="mr-2 h-4 w-4" />
-              {uploading ? "Uploading..." : "Upload Target Files"}
-            </Button>
+            <p className="text-xs text-slate-500">
+              Showing {filteredRows.length} of {rows.length} rows
+            </p>
           </div>
         </CardContent>
       </Card>
