@@ -357,13 +357,7 @@ async function fetchAllBrokerCommissionRows(): Promise<BrokerCommissionDbRow[]> 
     const { data, error } = await supabase
       .from("broker_commission_datasets")
       .select("id, month, check_date, invoice, type, upc, item, cust_name, amt")
-      .order("check_date", {
-        ascending: false,
-        nullsFirst: false,
-      })
-      .order("invoice", {
-        ascending: false,
-      })
+      .order("id", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
