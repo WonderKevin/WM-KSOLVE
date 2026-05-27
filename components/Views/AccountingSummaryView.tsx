@@ -74,18 +74,15 @@ function parseUsDate(value: string | null | undefined) {
   if (!value) return null;
 
   const trimmed = String(value).trim();
-
   const match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
 
   if (match) {
     const [, mm, dd, yyyy] = match;
     const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-
     if (!Number.isNaN(date.getTime())) return date;
   }
 
   const fallback = new Date(trimmed);
-
   if (!Number.isNaN(fallback.getTime())) return fallback;
 
   return null;
@@ -116,7 +113,6 @@ function formatMonthFromDate(value: string | null | undefined) {
   if (!value) return "";
 
   const parsed = parseUsDate(value) || new Date(value);
-
   if (Number.isNaN(parsed.getTime())) return "";
 
   return parsed.toLocaleDateString("en-US", {
@@ -135,7 +131,6 @@ function normalizeMonthLabel(value: string) {
   if (!trimmed) return "";
 
   const match = trimmed.match(/^([A-Za-z]+)\s*'?(\d{2}|\d{4})$/);
-
   if (!match) return trimmed;
 
   const year = match[2].length === 2 ? `20${match[2]}` : match[2];
@@ -160,13 +155,11 @@ function monthLabelToKey(label: string) {
   };
 
   const normalized = normalizeMonthLabel(label);
-
   const match = normalized.match(/^([A-Za-z]+)\s+(\d{4})$/);
 
   if (!match) return null;
 
   const mm = monthMap[match[1].toLowerCase()];
-
   if (!mm) return null;
 
   return `${match[2]}-${mm}`;
@@ -177,12 +170,10 @@ function deriveBrokerMonthKey(row: BrokerCommissionDbRow) {
   const rawCheckDate = String(row.check_date ?? "").trim();
 
   const monthKeyFromRawMonth = monthLabelToKey(rawMonth);
-
   if (monthKeyFromRawMonth) return monthKeyFromRawMonth;
 
   const monthLabelFromCheckDate = formatMonthFromDate(rawCheckDate);
   const monthKeyFromCheckDate = monthLabelToKey(monthLabelFromCheckDate);
-
   if (monthKeyFromCheckDate) return monthKeyFromCheckDate;
 
   return "";
@@ -209,10 +200,70 @@ function normalizeType(value: string | null | undefined) {
   return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function normalizeDiscrepancyType(value: string | null | undefined) {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+
+  const compact = cleaned.replace(/[^a-z0-9$]/g, "");
+
+  if (compact === "wminvoice") return "wm invoice";
+
+  if (
+    compact === "$1promotion" ||
+    compact === "1promotion" ||
+    compact.includes("$1promotion") ||
+    compact.includes("1promotion")
+  ) {
+    return "$1 promotion";
+  }
+
+  if (compact.includes("customerspoilsallowance")) {
+    return "customer spoils allowance";
+  }
+
+  if (compact.includes("passthrudeduction")) {
+    return "pass thru deduction";
+  }
+
+  if (compact.includes("promoandplacementfund")) {
+    return "promo and placement fund";
+  }
+
+  if (compact.includes("introductionallowance")) {
+    return "introduction allowance";
+  }
+
+  if (compact.includes("newitemsetupfee")) {
+    return "new item setup fee";
+  }
+
+  return cleaned;
+}
+
+function displayDiscrepancyType(value: string) {
+  if (value === "wm invoice") return "WM Invoice";
+  if (value === "$1 promotion") return "$1 Promotion";
+  if (value === "customer spoils allowance") return "Customer Spoils Allowance";
+  if (value === "pass thru deduction") return "Pass Thru Deduction";
+  if (value === "promo and placement fund") return "Promo and Placement Fund";
+  if (value === "introduction allowance") return "Introduction Allowance";
+  if (value === "new item setup fee") return "New Item Setup Fee";
+
+  return value
+    .split(" ")
+    .map((word) =>
+      word.length > 0 ? `${word[0].toUpperCase()}${word.slice(1)}` : word
+    )
+    .join(" ");
+}
+
 function sortTypesWithWMFirst(types: string[]) {
   return [...types].sort((a, b) => {
-    if (a === "WM Invoice") return -1;
-    if (b === "WM Invoice") return 1;
+    if (a === "WM Invoice" || a === "wm invoice") return -1;
+    if (b === "WM Invoice" || b === "wm invoice") return 1;
 
     return a.localeCompare(b);
   });
@@ -511,7 +562,7 @@ export default function AccountingSummaryView() {
     return brokerRows.filter((row) => row.retailer === retailer);
   }, [brokerRows, retailer]);
 
-  const accountingMonthOptions = useMemo<MonthOption[]>((() => {
+  const accountingMonthOptions = useMemo<MonthOption[]>(() => {
     const map = new Map<string, MonthOption>();
 
     for (const row of filteredInvoiceRows) {
@@ -547,7 +598,7 @@ export default function AccountingSummaryView() {
     }
 
     return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
-  }) as () => MonthOption[], [filteredInvoiceRows, filteredTargetRows]);
+  }, [filteredInvoiceRows, filteredTargetRows]);
 
   const discrepancyMonthOptions = useMemo<MonthOption[]>(() => {
     const map = new Map<string, MonthOption>();
@@ -668,7 +719,6 @@ export default function AccountingSummaryView() {
         if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
 
         const current = typeMonthTotals.get(typeName)!;
-
         current[monthKey] = (current[monthKey] || 0) + amount;
       }
     }
@@ -689,7 +739,6 @@ export default function AccountingSummaryView() {
         if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
 
         const current = typeMonthTotals.get(typeName)!;
-
         current[monthKey] = (current[monthKey] || 0) + amount;
       }
     }
@@ -766,9 +815,11 @@ export default function AccountingSummaryView() {
       }
 
       const rawType = row.type?.trim() || "Unknown";
-      const normType = normalizeType(rawType);
+      const normType = normalizeDiscrepancyType(rawType);
 
-      if (!displayTypeMap.has(normType)) displayTypeMap.set(normType, rawType);
+      if (!displayTypeMap.has(normType)) {
+        displayTypeMap.set(normType, displayDiscrepancyType(normType));
+      }
 
       ksolveTypeTotals.set(
         normType,
@@ -782,9 +833,11 @@ export default function AccountingSummaryView() {
       if (row.derivedMonthKey !== appliedDiscrepancyMonth) continue;
 
       const rawType = String(row.type ?? "").trim() || "Unknown";
-      const normType = normalizeType(rawType);
+      const normType = normalizeDiscrepancyType(rawType);
 
-      if (!displayTypeMap.has(normType)) displayTypeMap.set(normType, rawType);
+      if (!displayTypeMap.has(normType)) {
+        displayTypeMap.set(normType, displayDiscrepancyType(normType));
+      }
 
       const amount = isWmInvoiceType(row.type ?? "")
         ? Math.abs(row.adjustedAmt)
@@ -800,13 +853,10 @@ export default function AccountingSummaryView() {
       new Set([...ksolveTypeTotals.keys(), ...brokerTypeTotals.keys()])
     );
 
-    const orderedTypes = sortTypesWithWMFirst(
-      allNormTypes.map((key) => displayTypeMap.get(key) || key)
-    );
+    const orderedNormTypes = sortTypesWithWMFirst(allNormTypes);
 
-    const typeRows = orderedTypes.map((displayTypeName) => {
-      const normType = normalizeType(displayTypeName);
-      const typeName = displayTypeMap.get(normType) || displayTypeName;
+    const typeRows = orderedNormTypes.map((normType) => {
+      const typeName = displayTypeMap.get(normType) || displayDiscrepancyType(normType);
 
       const ksolveTotal = ksolveTypeTotals.get(normType) || 0;
       const invoiceTotal = brokerTypeTotals.get(normType) || 0;
