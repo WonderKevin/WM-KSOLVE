@@ -74,15 +74,18 @@ function parseUsDate(value: string | null | undefined) {
   if (!value) return null;
 
   const trimmed = String(value).trim();
+
   const match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
 
   if (match) {
     const [, mm, dd, yyyy] = match;
     const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+
     if (!Number.isNaN(date.getTime())) return date;
   }
 
   const fallback = new Date(trimmed);
+
   if (!Number.isNaN(fallback.getTime())) return fallback;
 
   return null;
@@ -96,7 +99,10 @@ function formatCurrency(value: number | null | undefined) {
 }
 
 function monthKeyFromDate(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+    2,
+    "0"
+  )}`;
 }
 
 function monthLabelFromDate(date: Date) {
@@ -106,10 +112,11 @@ function monthLabelFromDate(date: Date) {
   });
 }
 
-function formatMonthFromDate(value: string) {
+function formatMonthFromDate(value: string | null | undefined) {
   if (!value) return "";
 
-  const parsed = new Date(value);
+  const parsed = parseUsDate(value) || new Date(value);
+
   if (Number.isNaN(parsed.getTime())) return "";
 
   return parsed.toLocaleDateString("en-US", {
@@ -121,13 +128,14 @@ function formatMonthFromDate(value: string) {
 function normalizeMonthLabel(value: string) {
   const trimmed = String(value || "")
     .replace(/\u00a0/g, " ")
-    .replace(/['\`]/g, "'")
+    .replace(/[’‘`]/g, "'")
     .replace(/\s+/g, " ")
     .trim();
 
   if (!trimmed) return "";
 
-  const match = trimmed.match(/^([A-Za-z]+)\s+[' ]?(\d{2}|\d{4})$/);
+  const match = trimmed.match(/^([A-Za-z]+)\s*'?(\d{2}|\d{4})$/);
+
   if (!match) return trimmed;
 
   const year = match[2].length === 2 ? `20${match[2]}` : match[2];
@@ -151,13 +159,33 @@ function monthLabelToKey(label: string) {
     december: "12",
   };
 
-  const match = label.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  const normalized = normalizeMonthLabel(label);
+
+  const match = normalized.match(/^([A-Za-z]+)\s+(\d{4})$/);
+
   if (!match) return null;
 
   const mm = monthMap[match[1].toLowerCase()];
+
   if (!mm) return null;
 
   return `${match[2]}-${mm}`;
+}
+
+function deriveBrokerMonthKey(row: BrokerCommissionDbRow) {
+  const rawMonth = String(row.month ?? "").trim();
+  const rawCheckDate = String(row.check_date ?? "").trim();
+
+  const monthKeyFromRawMonth = monthLabelToKey(rawMonth);
+
+  if (monthKeyFromRawMonth) return monthKeyFromRawMonth;
+
+  const monthLabelFromCheckDate = formatMonthFromDate(rawCheckDate);
+  const monthKeyFromCheckDate = monthLabelToKey(monthLabelFromCheckDate);
+
+  if (monthKeyFromCheckDate) return monthKeyFromCheckDate;
+
+  return "";
 }
 
 function normalizeInvoice(value: string) {
@@ -185,6 +213,7 @@ function sortTypesWithWMFirst(types: string[]) {
   return [...types].sort((a, b) => {
     if (a === "WM Invoice") return -1;
     if (b === "WM Invoice") return 1;
+
     return a.localeCompare(b);
   });
 }
@@ -194,6 +223,7 @@ function getRetailerMonthlyTotalLabel(retailer: Retailer) {
   if (retailer === "kehe") return "KeHE Monthly Summary Total";
   if (retailer === "target") return "Target Monthly Summary Total";
   if (retailer === "unfi") return "UNFI Monthly Summary Total";
+
   return "Monthly Summary Total";
 }
 
@@ -209,14 +239,18 @@ function applyAmountBasedDiscrepancy(
 
   for (const row of rawRows) {
     const key = normalizeInvoice(row.invoice ?? "");
+
     if (!grouped.has(key)) grouped.set(key, []);
+
     grouped.get(key)!.push(row);
   }
 
   const result: (BrokerCommissionDbRow & { adjustedAmt: number })[] = [];
 
   for (const [invoiceKey, invoiceRows] of grouped.entries()) {
-    const invoiceDiscrepancy = round2(discrepancyByInvoice.get(invoiceKey) ?? 0);
+    const invoiceDiscrepancy = round2(
+      discrepancyByInvoice.get(invoiceKey) ?? 0
+    );
 
     const wmRows = invoiceRows.filter(
       (r) => isWmInvoiceType(r.type ?? "") && Number(r.amt ?? 0) !== 0
@@ -247,6 +281,7 @@ function applyAmountBasedDiscrepancy(
           share = round2(
             invoiceDiscrepancy * (Number(row.amt ?? 0) / totalWmAmount)
           );
+
           runningShare = round2(runningShare + share);
         }
 
@@ -313,6 +348,7 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveInvoiceRow[]> {
     if (error) throw error;
 
     const batch = (data ?? []) as KsolveInvoiceRow[];
+
     allRows = allRows.concat(batch);
 
     if (batch.length < PAGE_SIZE) break;
@@ -399,11 +435,14 @@ export default function AccountingSummaryView() {
 
         for (const row of ksolveWmRows) {
           const inv = normalizeInvoice(row.invoice_number ?? "");
+
           if (!inv) continue;
 
           ksolveByInvoice.set(
             inv,
-            round2((ksolveByInvoice.get(inv) ?? 0) + Number(row.invoice_amt ?? 0))
+            round2(
+              (ksolveByInvoice.get(inv) ?? 0) + Number(row.invoice_amt ?? 0)
+            )
           );
         }
 
@@ -437,20 +476,11 @@ export default function AccountingSummaryView() {
           discrepancyByInvoice
         );
 
-        const withMonthKey: BrokerCommissionRow[] = adjusted.map((row) => {
-          const rawMonth = String(row.month ?? "").trim();
-          const rawCheckDate = String(row.check_date ?? "").trim();
-
-          const label = normalizeMonthLabel(
-            rawMonth || formatMonthFromDate(rawCheckDate) || ""
-          );
-
-          return {
-            ...row,
-            retailer: row.retailer ?? "kehe",
-            derivedMonthKey: monthLabelToKey(label) ?? "",
-          };
-        });
+        const withMonthKey: BrokerCommissionRow[] = adjusted.map((row) => ({
+          ...row,
+          retailer: row.retailer ?? "kehe",
+          derivedMonthKey: deriveBrokerMonthKey(row),
+        }));
 
         setBrokerRows(withMonthKey);
       } catch (error) {
@@ -465,24 +495,28 @@ export default function AccountingSummaryView() {
 
   const filteredInvoiceRows = useMemo(() => {
     if (retailer === "all") return invoiceRows;
+
     return invoiceRows.filter((row) => row.retailer === retailer);
   }, [invoiceRows, retailer]);
 
   const filteredTargetRows = useMemo(() => {
     if (retailer === "all") return targetRows;
+
     return targetRows.filter((row) => row.retailer === retailer);
   }, [targetRows, retailer]);
 
   const filteredBrokerRows = useMemo(() => {
     if (retailer === "all") return brokerRows;
+
     return brokerRows.filter((row) => row.retailer === retailer);
   }, [brokerRows, retailer]);
 
-  const accountingMonthOptions = useMemo<MonthOption[]>(() => {
+  const accountingMonthOptions = useMemo<MonthOption[]>((() => {
     const map = new Map<string, MonthOption>();
 
     for (const row of filteredInvoiceRows) {
       const date = parseUsDate(row.check_date);
+
       if (!date) continue;
 
       const key = monthKeyFromDate(date);
@@ -498,6 +532,7 @@ export default function AccountingSummaryView() {
 
     for (const row of filteredTargetRows) {
       const date = parseUsDate(row.check_date);
+
       if (!date) continue;
 
       const key = monthKeyFromDate(date);
@@ -512,13 +547,14 @@ export default function AccountingSummaryView() {
     }
 
     return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
-  }, [filteredInvoiceRows, filteredTargetRows]);
+  }) as () => MonthOption[], [filteredInvoiceRows, filteredTargetRows]);
 
   const discrepancyMonthOptions = useMemo<MonthOption[]>(() => {
     const map = new Map<string, MonthOption>();
 
     for (const row of filteredInvoiceRows) {
       const date = parseUsDate(row.check_date);
+
       if (!date) continue;
 
       const key = monthKeyFromDate(date);
@@ -534,6 +570,7 @@ export default function AccountingSummaryView() {
 
     for (const row of filteredBrokerRows) {
       const key = row.derivedMonthKey;
+
       if (!key || map.has(key)) continue;
 
       const [yyyy, mm] = key.split("-");
@@ -559,7 +596,12 @@ export default function AccountingSummaryView() {
         (m) => m.key === appliedToMonth
       );
 
-      if (!appliedFromMonth || !appliedToMonth || !currentFromStillExists || !currentToStillExists) {
+      if (
+        !appliedFromMonth ||
+        !appliedToMonth ||
+        !currentFromStillExists ||
+        !currentToStillExists
+      ) {
         const sortedAsc = [...accountingMonthOptions.slice(0, 6)].sort(
           (a, b) => a.sortValue - b.sortValue
         );
@@ -613,9 +655,11 @@ export default function AccountingSummaryView() {
     if (retailer === "all" || retailer === "kehe") {
       for (const row of filteredInvoiceRows) {
         const date = parseUsDate(row.check_date);
+
         if (!date) continue;
 
         const monthKey = monthKeyFromDate(date);
+
         if (!monthKeySet.has(monthKey)) continue;
 
         const typeName = row.type?.trim() || "Unknown";
@@ -624,6 +668,7 @@ export default function AccountingSummaryView() {
         if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
 
         const current = typeMonthTotals.get(typeName)!;
+
         current[monthKey] = (current[monthKey] || 0) + amount;
       }
     }
@@ -631,9 +676,11 @@ export default function AccountingSummaryView() {
     if (retailer === "all" || retailer === "target") {
       for (const row of filteredTargetRows) {
         const date = parseUsDate(row.check_date);
+
         if (!date) continue;
 
         const monthKey = monthKeyFromDate(date);
+
         if (!monthKeySet.has(monthKey)) continue;
 
         const typeName = row.reason_code_description?.trim() || "Unknown";
@@ -642,6 +689,7 @@ export default function AccountingSummaryView() {
         if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
 
         const current = typeMonthTotals.get(typeName)!;
+
         current[monthKey] = (current[monthKey] || 0) + amount;
       }
     }
@@ -653,6 +701,7 @@ export default function AccountingSummaryView() {
 
     const typeRows = orderedTypes.map((typeName) => {
       const monthlyValues = typeMonthTotals.get(typeName) || {};
+
       const total = monthKeys.reduce(
         (sum, key) => sum + (monthlyValues[key] || 0),
         0
@@ -678,7 +727,10 @@ export default function AccountingSummaryView() {
       monthKeys,
       typeRows,
       monthlyTotals,
-      grandTotal: Object.values(monthlyTotals).reduce((sum, val) => sum + val, 0),
+      grandTotal: Object.values(monthlyTotals).reduce(
+        (sum, val) => sum + val,
+        0
+      ),
     };
   }, [filteredInvoiceRows, filteredTargetRows, filteredMonthOptions, retailer]);
 
@@ -720,7 +772,9 @@ export default function AccountingSummaryView() {
 
       ksolveTypeTotals.set(
         normType,
-        round2((ksolveTypeTotals.get(normType) || 0) + Number(row.invoice_amt || 0))
+        round2(
+          (ksolveTypeTotals.get(normType) || 0) + Number(row.invoice_amt || 0)
+        )
       );
     }
 
@@ -796,6 +850,7 @@ export default function AccountingSummaryView() {
 
   const handleApplyDiscrepancyMonth = () => {
     if (!discrepancyMonth) return;
+
     setAppliedDiscrepancyMonth(discrepancyMonth);
   };
 
