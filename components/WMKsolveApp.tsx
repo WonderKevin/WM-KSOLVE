@@ -40,13 +40,19 @@ import TargetBrokerCommissionView from "@/components/Views/TargetBrokerCommissio
 
 type Permissions = {
   email: string;
+
   can_view_dashboard: boolean;
-  can_view_dashboard_kehe?: boolean;
-  can_view_dashboard_tony?: boolean;
+  can_view_kehe_dashboard?: boolean;
+  can_view_tonys_dashboard?: boolean;
+
+  can_view_target_broker_commission?: boolean;
   can_view_broker_commission_summary: boolean;
   can_view_broker_commission_data_sets: boolean;
+
   can_view_accounting_summary: boolean;
   can_view_accounting_check_details: boolean;
+  can_view_accounting_wm_invoice_discrepancy?: boolean;
+
   can_view_database_ksolve_invoices: boolean;
   can_view_database_target_invoices?: boolean;
   can_view_database_kehe_velocity: boolean;
@@ -54,8 +60,10 @@ type Permissions = {
   can_view_database_product_list: boolean;
   can_view_database_locations: boolean;
   can_view_database_deduction_type: boolean;
-  can_view_admin: boolean;
+
   can_view_user_account: boolean;
+  can_view_admin_automation?: boolean;
+
   can_reprocess_invoices: boolean;
 };
 
@@ -113,7 +121,11 @@ function SidebarItem({
           <span>{item.label}</span>
         </div>
 
-        {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        {isOpen ? (
+          <ChevronDown className="h-4 w-4" />
+        ) : (
+          <ChevronRight className="h-4 w-4" />
+        )}
       </button>
 
       {isOpen && (
@@ -187,21 +199,28 @@ export default function WMKsolveApp() {
         permissionRow || {
           email,
           can_view_dashboard: true,
-          can_view_dashboard_kehe: true,
-          can_view_dashboard_tony: true,
-          can_view_broker_commission_summary: false,
-          can_view_broker_commission_data_sets: false,
-          can_view_accounting_summary: false,
-          can_view_accounting_check_details: false,
-          can_view_database_ksolve_invoices: false,
+          can_view_kehe_dashboard: true,
+          can_view_tonys_dashboard: true,
+
+          can_view_target_broker_commission: isAdmin,
+          can_view_broker_commission_summary: isAdmin,
+          can_view_broker_commission_data_sets: isAdmin,
+
+          can_view_accounting_summary: isAdmin,
+          can_view_accounting_check_details: isAdmin,
+          can_view_accounting_wm_invoice_discrepancy: isAdmin,
+
+          can_view_database_ksolve_invoices: isAdmin,
           can_view_database_target_invoices: isAdmin,
-          can_view_database_kehe_velocity: false,
+          can_view_database_kehe_velocity: isAdmin,
           can_view_database_tony_velocity: isAdmin,
-          can_view_database_product_list: false,
-          can_view_database_locations: false,
-          can_view_database_deduction_type: false,
-          can_view_admin: isAdmin,
+          can_view_database_product_list: isAdmin,
+          can_view_database_locations: isAdmin,
+          can_view_database_deduction_type: isAdmin,
+
           can_view_user_account: isAdmin,
+          can_view_admin_automation: isAdmin,
+
           can_reprocess_invoices: isAdmin,
         }
       );
@@ -237,63 +256,132 @@ export default function WMKsolveApp() {
   const sidebarItems = useMemo(() => {
     if (!permissions) return [];
 
-    return [
-      {
+    const items: any[] = [];
+
+    const dashboardChildren = [
+      permissions.can_view_kehe_dashboard
+        ? { label: "Kehe Dashboard", key: "dashboard-kehe" }
+        : null,
+      permissions.can_view_tonys_dashboard
+        ? { label: "Tony's Dashboard", key: "dashboard-tony" }
+        : null,
+    ].filter(Boolean);
+
+    if (permissions.can_view_dashboard || dashboardChildren.length) {
+      items.push({
         label: "Dashboard",
         icon: LayoutDashboard,
         key: "dashboard",
-        children: [
-          { label: "Kehe Dashboard", key: "dashboard-kehe" },
-          { label: "Tony's Dashboard", key: "dashboard-tony" },
-        ],
-      },
-      {
+        children: dashboardChildren,
+      });
+    }
+
+    const brokerChildren = [
+      permissions.can_view_target_broker_commission
+        ? {
+            label: "Target Broker Commission",
+            key: "target-broker-commission",
+          }
+        : null,
+      permissions.can_view_broker_commission_summary
+        ? {
+            label: "KeHe Broker Commission",
+            key: "broker-commission-summary",
+          }
+        : null,
+      permissions.can_view_broker_commission_data_sets
+        ? {
+            label: "KeHe Data Sets",
+            key: "broker-commission-data-sets",
+          }
+        : null,
+    ].filter(Boolean);
+
+    if (brokerChildren.length) {
+      items.push({
         label: "Broker Commission",
         icon: Receipt,
         key: "broker-commission",
-        children: [
-          { label: "Target Broker Commission", key: "target-broker-commission" },
-          { label: "KeHe Broker Commission", key: "broker-commission-summary" },
-          { label: "KeHe Data Sets", key: "broker-commission-data-sets" },
-        ],
-      },
-      {
+        children: brokerChildren,
+      });
+    }
+
+    const accountingChildren = [
+      permissions.can_view_accounting_summary
+        ? { label: "Summary", key: "accounting-summary" }
+        : null,
+      permissions.can_view_accounting_check_details
+        ? { label: "Check Details", key: "accounting-check-details" }
+        : null,
+      permissions.can_view_accounting_wm_invoice_discrepancy
+        ? {
+            label: "WM Invoice Discrepancy",
+            key: "accounting-wm-invoice-discrepancy",
+          }
+        : null,
+    ].filter(Boolean);
+
+    if (accountingChildren.length) {
+      items.push({
         label: "Accounting",
         icon: BadgeDollarSign,
         key: "accounting",
-        children: [
-          { label: "Summary", key: "accounting-summary" },
-          { label: "Check Details", key: "accounting-check-details" },
-          {
-            label: "WM Invoice Discrepancy",
-            key: "accounting-wm-invoice-discrepancy",
-          },
-        ],
-      },
-      {
+        children: accountingChildren,
+      });
+    }
+
+    const databaseChildren = [
+      permissions.can_view_database_ksolve_invoices
+        ? { label: "Ksolve Invoices", key: "database-ksolve-invoices" }
+        : null,
+      permissions.can_view_database_target_invoices
+        ? { label: "Target Invoices", key: "database-target-invoices" }
+        : null,
+      permissions.can_view_database_kehe_velocity
+        ? { label: "KeHe Velocity", key: "database-kehe-velocity" }
+        : null,
+      permissions.can_view_database_tony_velocity
+        ? { label: "Tony's Velocity", key: "database-tony-velocity" }
+        : null,
+      permissions.can_view_database_product_list
+        ? { label: "Product List", key: "database-product-list" }
+        : null,
+      permissions.can_view_database_locations
+        ? { label: "Locations", key: "database-locations" }
+        : null,
+      permissions.can_view_database_deduction_type
+        ? { label: "Deduction Type", key: "database-deduction-type" }
+        : null,
+    ].filter(Boolean);
+
+    if (databaseChildren.length) {
+      items.push({
         label: "Database",
         icon: Database,
         key: "database",
-        children: [
-          { label: "Ksolve Invoices", key: "database-ksolve-invoices" },
-          { label: "Target Invoices", key: "database-target-invoices" },
-          { label: "KeHe Velocity", key: "database-kehe-velocity" },
-          { label: "Tony's Velocity", key: "database-tony-velocity" },
-          { label: "Product List", key: "database-product-list" },
-          { label: "Locations", key: "database-locations" },
-          { label: "Deduction Type", key: "database-deduction-type" },
-        ],
-      },
-      {
+        children: databaseChildren,
+      });
+    }
+
+    const adminChildren = [
+      permissions.can_view_user_account
+        ? { label: "User Account", key: "admin-user-account" }
+        : null,
+      permissions.can_view_admin_automation
+        ? { label: "Automation", key: "admin-automation" }
+        : null,
+    ].filter(Boolean);
+
+    if (adminChildren.length) {
+      items.push({
         label: "Admin",
         icon: Shield,
         key: "admin",
-        children: [
-          { label: "User Account", key: "admin-user-account" },
-          { label: "Automation", key: "admin-automation" },
-        ],
-      },
-    ];
+        children: adminChildren,
+      });
+    }
+
+    return items;
   }, [permissions]);
 
   const renderContent = () => {

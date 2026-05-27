@@ -10,21 +10,18 @@ type UserPermissionRow = {
   id: string;
   email: string;
 
-  // Dashboard
   can_view_dashboard: boolean;
   can_view_kehe_dashboard: boolean;
   can_view_tonys_dashboard: boolean;
 
-  // Broker Commission
   can_view_target_broker_commission: boolean;
   can_view_broker_commission_summary: boolean;
   can_view_broker_commission_data_sets: boolean;
 
-  // Accounting
   can_view_accounting_summary: boolean;
   can_view_accounting_check_details: boolean;
+  can_view_accounting_wm_invoice_discrepancy: boolean;
 
-  // Database
   can_view_database_ksolve_invoices: boolean;
   can_view_database_target_invoices: boolean;
   can_view_database_kehe_velocity: boolean;
@@ -33,11 +30,9 @@ type UserPermissionRow = {
   can_view_database_locations: boolean;
   can_view_database_deduction_type: boolean;
 
-  // Admin
   can_view_user_account: boolean;
   can_view_admin_automation: boolean;
 
-  // Special
   can_reprocess_invoices: boolean;
 
   created_at?: string;
@@ -69,6 +64,7 @@ const PERMISSION_GROUPS: Array<{
     children: [
       "can_view_accounting_summary",
       "can_view_accounting_check_details",
+      "can_view_accounting_wm_invoice_discrepancy",
     ],
   },
   {
@@ -104,6 +100,7 @@ const LABEL_MAP: Record<string, string> = {
 
   can_view_accounting_summary: "Summary",
   can_view_accounting_check_details: "Check Details",
+  can_view_accounting_wm_invoice_discrepancy: "WM Invoice Discrepancy",
 
   can_view_database_ksolve_invoices: "Ksolve Invoices",
   can_view_database_target_invoices: "Target Invoices",
@@ -130,6 +127,7 @@ const DEFAULT_PERMISSION_VALUES = {
 
   can_view_accounting_summary: false,
   can_view_accounting_check_details: false,
+  can_view_accounting_wm_invoice_discrepancy: false,
 
   can_view_database_ksolve_invoices: false,
   can_view_database_target_invoices: false,
