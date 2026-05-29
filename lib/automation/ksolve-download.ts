@@ -59,6 +59,8 @@ type InvoiceSummaryUpload = {
 type RunKsolveAutomationInput = {
   startDate: string;
   endDate: string;
+  includeInvoiceSummary?: boolean;
+  includeInvoiceFiles?: boolean;
 };
 
 function parseIsoDate(date: string) {
@@ -149,6 +151,43 @@ function isSupportingDocument(document: KsolveDocument) {
   return document.DocumentType?.toLowerCase().trim() === "supporting document";
 }
 
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  retries = 3
+) {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      return response;
+    } catch (error) {
+      clearTimeout(timeout);
+
+      lastError = error;
+
+      console.warn(`Fetch attempt ${attempt} failed for ${url}`);
+      console.warn(error);
+
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 async function uploadBufferToSupabase({
   buffer,
   filename,
@@ -177,7 +216,9 @@ async function uploadBufferToSupabase({
     });
 
   if (uploadError) {
-    throw new Error(`Supabase upload failed for ${filename}: ${uploadError.message}`);
+    throw new Error(
+      `Supabase upload failed for ${filename}: ${uploadError.message}`
+    );
   }
 
   const { data: signedUrlData, error: signedUrlError } = await supabase.storage
@@ -185,7 +226,10 @@ async function uploadBufferToSupabase({
     .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
 
   if (signedUrlError) {
-    console.warn(`Failed creating signed URL for ${filename}:`, signedUrlError.message);
+    console.warn(
+      `Failed creating signed URL for ${filename}:`,
+      signedUrlError.message
+    );
   }
 
   return {
@@ -203,7 +247,7 @@ async function uploadDocumentToSupabase({
   startDate: string;
   endDate: string;
 }): Promise<UploadedKsolveDocument> {
-  const downloadResponse = await fetch(document.DocumentLink, {
+  const downloadResponse = await fetchWithRetry(document.DocumentLink, {
     method: "GET",
     headers: getKsolveHeaders(),
   });
@@ -298,6 +342,8 @@ async function uploadInvoiceSummaryToSupabase({
 export async function runKsolveAutomation({
   startDate,
   endDate,
+  includeInvoiceSummary = true,
+  includeInvoiceFiles = true,
 }: RunKsolveAutomationInput) {
   console.log("Running K-Solve API automation...");
   console.log(`Selected check date range: ${startDate} to ${endDate}`);
@@ -341,45 +387,58 @@ export async function runKsolveAutomation({
     isCheckDateInRange(row.CheckDate, startDate, endDate)
   );
 
-  const invoiceSummary = await uploadInvoiceSummaryToSupabase({
-    rows: matchingRows,
-    startDate,
-    endDate,
-  });
+  const documents: Array<InvoiceSummaryUpload | UploadedKsolveDocument> = [];
 
-  const invoiceFiles: UploadedKsolveDocument[] = [];
-
-  for (const row of matchingRows) {
-    if (!row.HasDocuments) continue;
-
-    const documentsEndpoint = `https://connect.kehe.com/ksolve/services/api/ksolve/list/documents/${row.Id}`;
-
-    const documentsResponse = await fetch(documentsEndpoint, {
-      method: "GET",
-      headers: getKsolveHeaders(),
+  if (includeInvoiceSummary) {
+    const invoiceSummary = await uploadInvoiceSummaryToSupabase({
+      rows: matchingRows,
+      startDate,
+      endDate,
     });
 
-    if (!documentsResponse.ok) {
-      console.warn(
-        `K-Solve document lookup failed for row ${row.Id}: ${documentsResponse.status}`
-      );
-      continue;
-    }
+    documents.push(invoiceSummary);
+  }
 
-    const rowDocuments = (await documentsResponse.json()) as KsolveDocument[];
+  if (includeInvoiceFiles) {
+    for (const row of matchingRows) {
+      if (!row.HasDocuments) continue;
 
-    const filteredDocuments = rowDocuments.filter(
-      (document) => !isSupportingDocument(document)
-    );
+      const documentsEndpoint = `https://connect.kehe.com/ksolve/services/api/ksolve/list/documents/${row.Id}`;
 
-    for (const document of filteredDocuments) {
-      const uploadedDocument = await uploadDocumentToSupabase({
-        document,
-        startDate,
-        endDate,
+      const documentsResponse = await fetch(documentsEndpoint, {
+        method: "GET",
+        headers: getKsolveHeaders(),
       });
 
-      invoiceFiles.push(uploadedDocument);
+      if (!documentsResponse.ok) {
+        console.warn(
+          `K-Solve document lookup failed for row ${row.Id}: ${documentsResponse.status}`
+        );
+        continue;
+      }
+
+      const rowDocuments = (await documentsResponse.json()) as KsolveDocument[];
+
+      const filteredDocuments = rowDocuments.filter(
+        (document) => !isSupportingDocument(document)
+      );
+
+      for (const document of filteredDocuments) {
+        try {
+          const uploadedDocument = await uploadDocumentToSupabase({
+            document,
+            startDate,
+            endDate,
+          });
+
+          documents.push(uploadedDocument);
+        } catch (error) {
+          console.error(
+            `Failed uploading ${document.DocumentDisplayName}:`,
+            error
+          );
+        }
+      }
     }
   }
 
@@ -389,10 +448,8 @@ export async function runKsolveAutomation({
     searchedInvoiceDateFrom: formatKsolveDate(searchStart),
     searchedInvoiceDateTo: formatKsolveDate(searchEnd),
     matchedRowCount: matchingRows.length,
-    invoiceSummary,
-    invoiceFileCount: invoiceFiles.length,
-    invoiceFiles,
-    documents: [invoiceSummary, ...invoiceFiles],
+    documentCount: documents.length,
+    documents,
     searchRows: matchingRows,
   };
 }
