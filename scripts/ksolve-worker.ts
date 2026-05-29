@@ -119,11 +119,9 @@ async function loginAndGetKsolveAuth() {
 
     await loginButton.click();
 
-    await page
-      .waitForLoadState("networkidle", {
-        timeout: 60000,
-      })
-      .catch(() => null);
+    await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(
+      () => null
+    );
 
     await page.goto("https://connect.kehe.com/ksolve/", {
       waitUntil: "networkidle",
