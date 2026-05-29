@@ -21,12 +21,7 @@ type KsolveSearchRow = {
   CheckDate: string | null;
   CheckAmount?: number | null;
   DocumentUrl?: string | null;
-  HasDispute?: boolean;
-  Dispute?: unknown;
-  HasNotes?: boolean;
-  Notes?: unknown[];
   HasDocuments: boolean;
-  Documents?: unknown[];
   CurrencyCode?: string | null;
   [key: string]: unknown;
 };
@@ -35,23 +30,12 @@ type KsolveDocument = {
   DocumentLink: string;
   DocumentType: string;
   DocumentDisplayName: string;
-  FileSizeInBytes: number;
+  FileSizeInBytes: number | null;
   CreatedOn: string;
   FileSizeDisplayable: string;
 };
 
 type UploadedKsolveDocument = KsolveDocument & {
-  StoragePath: string;
-  SignedUrl: string | null;
-};
-
-type InvoiceSummaryUpload = {
-  DocumentLink: string;
-  DocumentType: "Invoice Summary";
-  DocumentDisplayName: string;
-  FileSizeInBytes: number;
-  CreatedOn: string;
-  FileSizeDisplayable: string;
   StoragePath: string;
   SignedUrl: string | null;
 };
@@ -75,14 +59,9 @@ function formatDisplayDate(date: string | null | undefined) {
   if (!date) return "";
 
   const parsedDate = new Date(date);
+  if (Number.isNaN(parsedDate.getTime())) return "";
 
-  if (Number.isNaN(parsedDate.getTime())) {
-    return "";
-  }
-
-  return `${parsedDate.getMonth() + 1}/${parsedDate.getDate()}/${String(
-    parsedDate.getFullYear()
-  ).slice(-2)}`;
+  return `${parsedDate.getMonth() + 1}/${parsedDate.getDate()}/${parsedDate.getFullYear()}`;
 }
 
 function subtractDays(date: Date, days: number) {
@@ -135,14 +114,21 @@ function safeFilename(filename: string) {
   return filename.replace(/[<>:"/\\|?*]/g, "_");
 }
 
+function getFileType(filename: string) {
+  const lower = filename.toLowerCase();
+
+  if (lower.endsWith(".pdf")) return "pdf";
+  if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) return "excel";
+  if (lower.endsWith(".csv")) return "csv";
+
+  return "file";
+}
+
 function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
 
   const kilobytes = bytes / 1024;
-
-  if (kilobytes < 1024) {
-    return `${Math.round(kilobytes)} KB`;
-  }
+  if (kilobytes < 1024) return `${Math.round(kilobytes)} KB`;
 
   return `${(kilobytes / 1024).toFixed(1)} MB`;
 }
@@ -169,11 +155,9 @@ async function fetchWithRetry(
       });
 
       clearTimeout(timeout);
-
       return response;
     } catch (error) {
       clearTimeout(timeout);
-
       lastError = error;
 
       console.warn(`Fetch attempt ${attempt} failed for ${url}`);
@@ -188,25 +172,61 @@ async function fetchWithRetry(
   throw lastError;
 }
 
+async function insertUploadRecord({
+  fileName,
+  storagePath,
+  category,
+  invoice,
+  pdfDate,
+  fileType,
+}: {
+  fileName: string;
+  storagePath: string;
+  category: string;
+  invoice: string;
+  pdfDate: string;
+  fileType: string;
+}) {
+  const supabase = getSupabaseClient();
+
+  const { error } = await supabase.from("uploads").insert({
+    file_name: fileName,
+    file_path: storagePath,
+    category,
+    invoice,
+    pdf_date: pdfDate,
+    file_type: fileType,
+  });
+
+  if (error) {
+    throw new Error(`Failed inserting upload record: ${error.message}`);
+  }
+}
+
 async function uploadBufferToSupabase({
   buffer,
   filename,
   contentType,
   startDate,
   endDate,
+  category,
+  invoice,
+  pdfDate,
 }: {
   buffer: Buffer;
   filename: string;
   contentType: string;
   startDate: string;
   endDate: string;
+  category: string;
+  invoice: string;
+  pdfDate: string;
 }) {
   const bucket = process.env.SUPABASE_STORAGE_BUCKET || "ksolve-documents";
   const supabase = getSupabaseClient();
 
-  const storagePath = `ksolve/${startDate}_to_${endDate}/${Date.now()}-${safeFilename(
-    filename
-  )}`;
+  const safeName = safeFilename(filename);
+  const storagePath = `ksolve/${startDate}_to_${endDate}/${Date.now()}-${safeName}`;
 
   const { error: uploadError } = await supabase.storage
     .from(bucket)
@@ -220,6 +240,15 @@ async function uploadBufferToSupabase({
       `Supabase upload failed for ${filename}: ${uploadError.message}`
     );
   }
+
+  await insertUploadRecord({
+    fileName: safeName,
+    storagePath,
+    category,
+    invoice,
+    pdfDate,
+    fileType: getFileType(safeName),
+  });
 
   const { data: signedUrlData, error: signedUrlError } = await supabase.storage
     .from(bucket)
@@ -240,10 +269,12 @@ async function uploadBufferToSupabase({
 
 async function uploadDocumentToSupabase({
   document,
+  row,
   startDate,
   endDate,
 }: {
   document: KsolveDocument;
+  row: KsolveSearchRow;
   startDate: string;
   endDate: string;
 }): Promise<UploadedKsolveDocument> {
@@ -272,6 +303,9 @@ async function uploadDocumentToSupabase({
     contentType,
     startDate,
     endDate,
+    category: document.DocumentType || "K-Solve Document",
+    invoice: row.InvoiceNumber || document.DocumentDisplayName,
+    pdfDate: formatDisplayDate(row.CheckDate || row.InvoiceDate),
   });
 
   return {
@@ -289,7 +323,7 @@ async function uploadInvoiceSummaryToSupabase({
   rows: KsolveSearchRow[];
   startDate: string;
   endDate: string;
-}): Promise<InvoiceSummaryUpload> {
+}): Promise<UploadedKsolveDocument> {
   const summaryRows = rows.map((row) => ({
     "Invoice #": row.InvoiceNumber || "",
     Date: formatDisplayDate(row.InvoiceDate),
@@ -325,6 +359,9 @@ async function uploadInvoiceSummaryToSupabase({
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     startDate,
     endDate,
+    category: "Invoice Summary",
+    invoice: `invoice-summary-${startDate}-to-${endDate}`,
+    pdfDate: formatDisplayDate(endDate),
   });
 
   return {
@@ -387,7 +424,7 @@ export async function runKsolveAutomation({
     isCheckDateInRange(row.CheckDate, startDate, endDate)
   );
 
-  const documents: Array<InvoiceSummaryUpload | UploadedKsolveDocument> = [];
+  const documents: UploadedKsolveDocument[] = [];
 
   if (includeInvoiceSummary) {
     const invoiceSummary = await uploadInvoiceSummaryToSupabase({
@@ -427,6 +464,7 @@ export async function runKsolveAutomation({
         try {
           const uploadedDocument = await uploadDocumentToSupabase({
             document,
+            row,
             startDate,
             endDate,
           });
