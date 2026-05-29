@@ -68,18 +68,17 @@ export default function AutomationView() {
 
     const label = includeInvoiceSummary ? "Invoice Summary" : "Invoice File";
 
-    const confirmed = window.confirm(
-      `Run ${label} for check dates from ${startDate} to ${endDate}?`
-    );
-
-    if (!confirmed) return;
+    if (
+      !window.confirm(
+        `Run ${label} for check dates from ${startDate} to ${endDate}?`
+      )
+    ) {
+      return;
+    }
 
     try {
-      if (includeInvoiceSummary) {
-        setRunningInvoiceSummary(true);
-      } else {
-        setRunningInvoiceFile(true);
-      }
+      if (includeInvoiceSummary) setRunningInvoiceSummary(true);
+      else setRunningInvoiceFile(true);
 
       setDocuments([]);
 
@@ -101,7 +100,10 @@ export default function AutomationView() {
       }
 
       setDocuments(result?.result?.documents || []);
-      alert(result?.message || `${label} completed.`);
+      alert(
+        result?.message ||
+          `${label} automation was triggered. Check GitHub Actions for progress.`
+      );
     } catch (error) {
       console.error(error);
       alert(error instanceof Error ? error.message : `Failed to run ${label}.`);
@@ -125,11 +127,8 @@ export default function AutomationView() {
     const label = includeInvoiceSummary ? "Invoice Summary" : "Invoice File";
 
     try {
-      if (includeInvoiceSummary) {
-        setSavingInvoiceSummary(true);
-      } else {
-        setSavingInvoiceFile(true);
-      }
+      if (includeInvoiceSummary) setSavingInvoiceSummary(true);
+      else setSavingInvoiceFile(true);
 
       const response = await fetch("/api/automation/ksolve/schedule", {
         method: "POST",
@@ -150,10 +149,17 @@ export default function AutomationView() {
 
       setDocuments(result?.result?.documents || []);
 
-      alert(result?.message || `${label} schedule saved: every ${day} at ${time}`);
+      alert(
+        result?.message ||
+          `${label} schedule saved: every ${day} at ${time}. It will process the last 7 days ending yesterday.`
+      );
     } catch (error) {
       console.error(error);
-      alert(error instanceof Error ? error.message : `Failed to save ${label} schedule.`);
+      alert(
+        error instanceof Error
+          ? error.message
+          : `Failed to save ${label} schedule.`
+      );
     } finally {
       setSavingInvoiceFile(false);
       setSavingInvoiceSummary(false);
@@ -163,9 +169,12 @@ export default function AutomationView() {
   return (
     <div className="space-y-6">
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-2xl font-bold text-slate-900">K-Solve Automation</h2>
+        <h2 className="text-2xl font-bold text-slate-900">
+          K-Solve Automation
+        </h2>
         <p className="mt-2 text-sm text-slate-500">
-          Run K-Solve downloads manually by check date range, or schedule weekly uploads.
+          Run K-Solve downloads manually by check date range, or schedule
+          recurring uploads.
         </p>
       </div>
 
@@ -174,12 +183,19 @@ export default function AutomationView() {
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <h3 className="text-lg font-semibold text-slate-900">Manual Run</h3>
             <p className="mt-1 text-sm text-slate-500">
-              Select the check date range to download and upload eligible documents.
+              Select the check date range to download and upload eligible
+              documents.
             </p>
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900">Invoice File</h3>
+            <h3 className="text-lg font-semibold text-slate-900">
+              Invoice File
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Downloads K-Solve invoice documents and ImageIt files for the
+              selected check date range.
+            </p>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <label className="text-sm font-medium text-slate-700">
@@ -217,12 +233,18 @@ export default function AutomationView() {
               disabled={runningInvoiceFile || runningInvoiceSummary}
             >
               <Play className="mr-2 h-4 w-4" />
-              {runningInvoiceFile ? "Running..." : "Run Invoice File"}
+              {runningInvoiceFile ? "Triggering..." : "Run Invoice File"}
             </Button>
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900">Invoice Summary</h3>
+            <h3 className="text-lg font-semibold text-slate-900">
+              Invoice Summary
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Creates the K-Solve invoice summary spreadsheet for rows matching
+              the selected check date range.
+            </p>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <label className="text-sm font-medium text-slate-700">
@@ -260,21 +282,31 @@ export default function AutomationView() {
               disabled={runningInvoiceFile || runningInvoiceSummary}
             >
               <Play className="mr-2 h-4 w-4" />
-              {runningInvoiceSummary ? "Running..." : "Run Invoice Summary"}
+              {runningInvoiceSummary
+                ? "Triggering..."
+                : "Run Invoice Summary"}
             </Button>
           </div>
         </div>
 
         <div className="space-y-6">
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900">Schedule Upload</h3>
+            <h3 className="text-lg font-semibold text-slate-900">
+              Schedule Upload
+            </h3>
             <p className="mt-1 text-sm text-slate-500">
-              Scheduled uploads run for the previous Monday through Sunday.
+              Scheduled uploads run for the last 7 days ending yesterday.
             </p>
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900">Invoice File</h3>
+            <h3 className="text-lg font-semibold text-slate-900">
+              Invoice File
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Example: if this runs Saturday, it processes Friday through the
+              previous Saturday.
+            </p>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <label className="text-sm font-medium text-slate-700">
@@ -320,12 +352,20 @@ export default function AutomationView() {
               disabled={savingInvoiceFile || savingInvoiceSummary}
             >
               <Save className="mr-2 h-4 w-4" />
-              {savingInvoiceFile ? "Saving..." : "Schedule Invoice File"}
+              {savingInvoiceFile
+                ? "Saving..."
+                : "Schedule Invoice File"}
             </Button>
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900">Invoice Summary</h3>
+            <h3 className="text-lg font-semibold text-slate-900">
+              Invoice Summary
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Schedules the invoice summary export for the last 7 days ending
+              yesterday.
+            </p>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <label className="text-sm font-medium text-slate-700">
@@ -371,7 +411,9 @@ export default function AutomationView() {
               disabled={savingInvoiceFile || savingInvoiceSummary}
             >
               <Save className="mr-2 h-4 w-4" />
-              {savingInvoiceSummary ? "Saving..." : "Schedule Invoice Summary"}
+              {savingInvoiceSummary
+                ? "Saving..."
+                : "Schedule Invoice Summary"}
             </Button>
           </div>
         </div>
@@ -380,7 +422,9 @@ export default function AutomationView() {
       {documents.length > 0 && (
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-lg font-semibold text-slate-900">Available downloads</h3>
+            <h3 className="text-lg font-semibold text-slate-900">
+              Available downloads
+            </h3>
 
             <Button
               type="button"
