@@ -1,48 +1,86 @@
 import { NextResponse } from "next/server";
-import { runKsolveAutomation } from "@/lib/automation/ksolve-download";
 
-function toIsoDate(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function getPreviousMondayToSunday() {
-  const today = new Date();
-  const day = today.getDay();
-
-  const daysSinceMonday = day === 0 ? 6 : day - 1;
-
-  const thisMonday = new Date(today);
-  thisMonday.setDate(today.getDate() - daysSinceMonday);
-  thisMonday.setHours(0, 0, 0, 0);
-
-  const previousMonday = new Date(thisMonday);
-  previousMonday.setDate(thisMonday.getDate() - 7);
-
-  const previousSunday = new Date(thisMonday);
-  previousSunday.setDate(thisMonday.getDate() - 1);
-
-  return {
-    startDate: toIsoDate(previousMonday),
-    endDate: toIsoDate(previousSunday),
-  };
-}
-
-export async function POST() {
+export async function POST(request: Request) {
   try {
-    const { startDate, endDate } = getPreviousMondayToSunday();
+    const body = await request.json().catch(() => ({}));
 
-    const result = await runKsolveAutomation({
-      startDate,
-      endDate,
-    });
+    const startDate = String(body?.startDate || "").trim();
+    const endDate = String(body?.endDate || "").trim();
+
+    const includeInvoiceSummary = Boolean(body?.includeInvoiceSummary);
+    const includeInvoiceFiles = Boolean(body?.includeInvoiceFiles);
+
+    if (!startDate || !endDate) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: "Start date and end date are required.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!includeInvoiceSummary && !includeInvoiceFiles) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: "Select Invoice Summary or Invoice File.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const githubToken = process.env.GITHUB_ACTIONS_TOKEN;
+    const owner = process.env.GITHUB_REPO_OWNER || "WonderKevin";
+    const repo = process.env.GITHUB_REPO_NAME || "WM-KSOLVE";
+    const workflowFile = "ksolve-weekly.yml";
+
+    if (!githubToken) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: "Missing GITHUB_ACTIONS_TOKEN.",
+        },
+        { status: 500 }
+      );
+    }
+
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflowFile}/dispatches`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${githubToken}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ref: "main",
+          inputs: {
+            startDate,
+            endDate,
+            includeInvoiceSummary: String(includeInvoiceSummary),
+            includeInvoiceFiles: String(includeInvoiceFiles),
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      throw new Error(
+        `Failed triggering GitHub Action (${response.status}): ${errorText}`
+      );
+    }
 
     return NextResponse.json({
       ok: true,
-      message: `Scheduled K-Solve upload completed for previous week: ${startDate} to ${endDate}.`,
-      result,
+      message: `K-Solve automation was triggered for ${startDate} to ${endDate}. Check GitHub Actions for progress.`,
     });
   } catch (error) {
-    console.error("Scheduled K-Solve upload failed:", error);
+    console.error("K-Solve manual trigger failed:", error);
 
     return NextResponse.json(
       {
@@ -50,7 +88,7 @@ export async function POST() {
         message:
           error instanceof Error
             ? error.message
-            : "Scheduled upload failed.",
+            : "Manual automation trigger failed.",
       },
       { status: 500 }
     );

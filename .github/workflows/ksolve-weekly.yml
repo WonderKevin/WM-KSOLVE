@@ -4,6 +4,25 @@ on:
   schedule:
     - cron: "0 17 * * 0"
   workflow_dispatch:
+    inputs:
+      startDate:
+        description: "Manual start date YYYY-MM-DD"
+        required: false
+        type: string
+      endDate:
+        description: "Manual end date YYYY-MM-DD"
+        required: false
+        type: string
+      includeInvoiceSummary:
+        description: "Include invoice summary"
+        required: false
+        default: "true"
+        type: string
+      includeInvoiceFiles:
+        description: "Include invoice files"
+        required: false
+        default: "true"
+        type: string
 
 jobs:
   run-ksolve:
@@ -33,3 +52,7 @@ jobs:
           SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
           KSOLVE_USERNAME: ${{ secrets.KSOLVE_USERNAME }}
           KSOLVE_PASSWORD: ${{ secrets.KSOLVE_PASSWORD }}
+          KSOLVE_START_DATE: ${{ github.event.inputs.startDate }}
+          KSOLVE_END_DATE: ${{ github.event.inputs.endDate }}
+          KSOLVE_INCLUDE_INVOICE_SUMMARY: ${{ github.event.inputs.includeInvoiceSummary }}
+          KSOLVE_INCLUDE_INVOICE_FILES: ${{ github.event.inputs.includeInvoiceFiles }}
