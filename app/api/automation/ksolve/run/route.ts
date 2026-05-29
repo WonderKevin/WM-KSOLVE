@@ -33,7 +33,7 @@ function toUtcCron(day: string, time: string) {
   }
 
   // Eastern Time approximation.
-  // During daylight savings: ET = UTC-4.
+  // During daylight saving time: ET = UTC-4.
   // Example: Saturday 1:00 AM ET = Saturday 5:00 AM UTC.
   const utcHourRaw = localHour + 4;
   const utcHour = utcHourRaw % 24;
@@ -120,10 +120,14 @@ async function getExistingFileSha({
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Failed reading workflow file (${response.status}): ${errorText}`);
+
+    throw new Error(
+      `Failed reading workflow file (${response.status}): ${errorText}`
+    );
   }
 
   const data = await response.json();
+
   return data.sha as string;
 }
 
@@ -170,13 +174,16 @@ async function upsertWorkflowFile({
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Failed updating workflow file (${response.status}): ${errorText}`);
+
+    throw new Error(
+      `Failed updating workflow file (${response.status}): ${errorText}`
+    );
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
 
     const day = String(body?.day || "").trim().toLowerCase();
     const time = String(body?.time || "").trim();
@@ -186,14 +193,20 @@ export async function POST(request: Request) {
 
     if (!day || !time) {
       return NextResponse.json(
-        { ok: false, message: "Schedule day and time are required." },
+        {
+          ok: false,
+          message: "Schedule day and time are required.",
+        },
         { status: 400 }
       );
     }
 
     if (!includeInvoiceSummary && !includeInvoiceFiles) {
       return NextResponse.json(
-        { ok: false, message: "Select Invoice Summary or Invoice File." },
+        {
+          ok: false,
+          message: "Select Invoice Summary or Invoice File.",
+        },
         { status: 400 }
       );
     }
@@ -204,7 +217,10 @@ export async function POST(request: Request) {
 
     if (!githubToken) {
       return NextResponse.json(
-        { ok: false, message: "Missing GITHUB_ACTIONS_TOKEN." },
+        {
+          ok: false,
+          message: "Missing GITHUB_ACTIONS_TOKEN.",
+        },
         { status: 500 }
       );
     }
