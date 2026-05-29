@@ -2,7 +2,6 @@ name: K-Solve Weekly Automation
 
 on:
   schedule:
-    # Monday 1:00 AM Philippines time = Sunday 5:00 PM UTC
     - cron: "0 17 * * 0"
   workflow_dispatch:
 
@@ -29,5 +28,5 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
-          KSOLVE_BEARER_TOKEN: ${{ secrets.KSOLVE_BEARER_TOKEN }}
-          KSOLVE_COOKIE: ${{ secrets.KSOLVE_COOKIE }}
+          KSOLVE_USERNAME: ${{ secrets.KSOLVE_USERNAME }}
+          KSOLVE_PASSWORD: ${{ secrets.KSOLVE_PASSWORD }}
