@@ -5,25 +5,20 @@ function toIsoDate(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
-function getPreviousMondayToSunday() {
+function getLast7DaysEndingYesterday() {
   const today = new Date();
-  const day = today.getDay();
 
-  const daysSinceMonday = day === 0 ? 6 : day - 1;
+  const endDate = new Date(today);
+  endDate.setDate(today.getDate() - 1);
+  endDate.setHours(0, 0, 0, 0);
 
-  const thisMonday = new Date(today);
-  thisMonday.setDate(today.getDate() - daysSinceMonday);
-  thisMonday.setHours(0, 0, 0, 0);
-
-  const previousMonday = new Date(thisMonday);
-  previousMonday.setDate(thisMonday.getDate() - 7);
-
-  const previousSunday = new Date(thisMonday);
-  previousSunday.setDate(thisMonday.getDate() - 1);
+  const startDate = new Date(endDate);
+  startDate.setDate(endDate.getDate() - 6);
+  startDate.setHours(0, 0, 0, 0);
 
   return {
-    startDate: toIsoDate(previousMonday),
-    endDate: toIsoDate(previousSunday),
+    startDate: toIsoDate(startDate),
+    endDate: toIsoDate(endDate),
   };
 }
 
@@ -47,10 +42,10 @@ function getRunConfig() {
     };
   }
 
-  const previousWeek = getPreviousMondayToSunday();
+  const last7Days = getLast7DaysEndingYesterday();
 
   return {
-    ...previousWeek,
+    ...last7Days,
     includeInvoiceSummary,
     includeInvoiceFiles,
     runType: "scheduled",
