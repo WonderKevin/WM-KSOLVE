@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
-import { Download, FileSpreadsheet, Play, Save } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Download, Play, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 type KsolveDocument = {
@@ -31,13 +31,48 @@ export default function AutomationView() {
   const [summaryStartDate, setSummaryStartDate] = useState(todayIso());
   const [summaryEndDate, setSummaryEndDate] = useState(todayIso());
 
-  const [invoiceFileScheduleDay, setInvoiceFileScheduleDay] = useState("monday");
-  const [invoiceFileScheduleTime, setInvoiceFileScheduleTime] = useState("01:00");
+  const [invoiceFileScheduleDay, setInvoiceFileScheduleDay] =
+    useState("monday");
+  const [invoiceFileScheduleTime, setInvoiceFileScheduleTime] =
+    useState("01:00");
 
   const [summaryScheduleDay, setSummaryScheduleDay] = useState("monday");
   const [summaryScheduleTime, setSummaryScheduleTime] = useState("01:00");
 
   const [documents, setDocuments] = useState<KsolveDocument[]>([]);
+
+  useEffect(() => {
+    async function loadSchedules() {
+      try {
+        const response = await fetch("/api/automation/ksolve/schedule");
+        const result = await response.json();
+
+        if (!response.ok || !result?.schedules) return;
+
+        const invoiceFile = result.schedules.find(
+          (schedule: any) => schedule.id === "invoice-file"
+        );
+
+        const invoiceSummary = result.schedules.find(
+          (schedule: any) => schedule.id === "invoice-summary"
+        );
+
+        if (invoiceFile) {
+          setInvoiceFileScheduleDay(invoiceFile.run_day);
+          setInvoiceFileScheduleTime(invoiceFile.run_time);
+        }
+
+        if (invoiceSummary) {
+          setSummaryScheduleDay(invoiceSummary.run_day);
+          setSummaryScheduleTime(invoiceSummary.run_time);
+        }
+      } catch (error) {
+        console.error("Failed loading K-Solve schedules:", error);
+      }
+    }
+
+    loadSchedules();
+  }, []);
 
   const downloadAll = () => {
     documents.forEach((document, index) => {
@@ -68,14 +103,6 @@ export default function AutomationView() {
 
     const label = includeInvoiceSummary ? "Invoice Summary" : "Invoice File";
 
-    if (
-      !window.confirm(
-        `Run ${label} for check dates from ${startDate} to ${endDate}?`
-      )
-    ) {
-      return;
-    }
-
     try {
       if (includeInvoiceSummary) setRunningInvoiceSummary(true);
       else setRunningInvoiceFile(true);
@@ -100,6 +127,7 @@ export default function AutomationView() {
       }
 
       setDocuments(result?.result?.documents || []);
+
       alert(
         result?.message ||
           `${label} automation was triggered. Check GitHub Actions for progress.`
@@ -147,11 +175,9 @@ export default function AutomationView() {
         throw new Error(result?.message || "Failed to save schedule.");
       }
 
-      setDocuments(result?.result?.documents || []);
-
       alert(
         result?.message ||
-          `${label} schedule saved: every ${day} at ${time}. It will process the last 7 days ending yesterday.`
+          `${label} scheduled for every ${day} at ${time}.`
       );
     } catch (error) {
       console.error(error);
@@ -242,8 +268,8 @@ export default function AutomationView() {
               Invoice Summary
             </h3>
             <p className="mt-1 text-sm text-slate-500">
-              Creates the K-Solve invoice summary spreadsheet for rows matching
-              the selected check date range.
+              Creates the K-Solve invoice summary spreadsheet and updates the
+              invoices table for rows matching the selected check date range.
             </p>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
@@ -299,123 +325,43 @@ export default function AutomationView() {
             </p>
           </div>
 
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900">
-              Invoice File
-            </h3>
-            <p className="mt-1 text-sm text-slate-500">
-              Example: if this runs Saturday, it processes Friday through the
-              previous Saturday.
-            </p>
+          <ScheduleCard
+            title="Invoice File"
+            description="Downloads K-Solve invoice documents and ImageIt files. Example: if this runs Saturday, it processes Friday through the previous Saturday."
+            day={invoiceFileScheduleDay}
+            time={invoiceFileScheduleTime}
+            setDay={setInvoiceFileScheduleDay}
+            setTime={setInvoiceFileScheduleTime}
+            saving={savingInvoiceFile}
+            buttonText="Schedule Invoice File"
+            onSave={() =>
+              saveSchedule({
+                includeInvoiceSummary: false,
+                includeInvoiceFiles: true,
+                day: invoiceFileScheduleDay,
+                time: invoiceFileScheduleTime,
+              })
+            }
+          />
 
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              <label className="text-sm font-medium text-slate-700">
-                Run day
-                <select
-                  value={invoiceFileScheduleDay}
-                  onChange={(e) => setInvoiceFileScheduleDay(e.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
-                >
-                  <option value="monday">Every Monday</option>
-                  <option value="tuesday">Every Tuesday</option>
-                  <option value="wednesday">Every Wednesday</option>
-                  <option value="thursday">Every Thursday</option>
-                  <option value="friday">Every Friday</option>
-                  <option value="saturday">Every Saturday</option>
-                  <option value="sunday">Every Sunday</option>
-                </select>
-              </label>
-
-              <label className="text-sm font-medium text-slate-700">
-                Run time
-                <input
-                  type="time"
-                  value={invoiceFileScheduleTime}
-                  onChange={(e) => setInvoiceFileScheduleTime(e.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
-                />
-              </label>
-            </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              className="mt-6 rounded-2xl border-slate-200"
-              onClick={() =>
-                saveSchedule({
-                  includeInvoiceSummary: false,
-                  includeInvoiceFiles: true,
-                  day: invoiceFileScheduleDay,
-                  time: invoiceFileScheduleTime,
-                })
-              }
-              disabled={savingInvoiceFile || savingInvoiceSummary}
-            >
-              <Save className="mr-2 h-4 w-4" />
-              {savingInvoiceFile
-                ? "Saving..."
-                : "Schedule Invoice File"}
-            </Button>
-          </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900">
-              Invoice Summary
-            </h3>
-            <p className="mt-1 text-sm text-slate-500">
-              Schedules the invoice summary export for the last 7 days ending
-              yesterday.
-            </p>
-
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              <label className="text-sm font-medium text-slate-700">
-                Run day
-                <select
-                  value={summaryScheduleDay}
-                  onChange={(e) => setSummaryScheduleDay(e.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
-                >
-                  <option value="monday">Every Monday</option>
-                  <option value="tuesday">Every Tuesday</option>
-                  <option value="wednesday">Every Wednesday</option>
-                  <option value="thursday">Every Thursday</option>
-                  <option value="friday">Every Friday</option>
-                  <option value="saturday">Every Saturday</option>
-                  <option value="sunday">Every Sunday</option>
-                </select>
-              </label>
-
-              <label className="text-sm font-medium text-slate-700">
-                Run time
-                <input
-                  type="time"
-                  value={summaryScheduleTime}
-                  onChange={(e) => setSummaryScheduleTime(e.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
-                />
-              </label>
-            </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              className="mt-6 rounded-2xl border-slate-200"
-              onClick={() =>
-                saveSchedule({
-                  includeInvoiceSummary: true,
-                  includeInvoiceFiles: false,
-                  day: summaryScheduleDay,
-                  time: summaryScheduleTime,
-                })
-              }
-              disabled={savingInvoiceFile || savingInvoiceSummary}
-            >
-              <Save className="mr-2 h-4 w-4" />
-              {savingInvoiceSummary
-                ? "Saving..."
-                : "Schedule Invoice Summary"}
-            </Button>
-          </div>
+          <ScheduleCard
+            title="Invoice Summary"
+            description="Schedules the invoice summary export and invoices table update for the last 7 days ending yesterday."
+            day={summaryScheduleDay}
+            time={summaryScheduleTime}
+            setDay={setSummaryScheduleDay}
+            setTime={setSummaryScheduleTime}
+            saving={savingInvoiceSummary}
+            buttonText="Schedule Invoice Summary"
+            onSave={() =>
+              saveSchedule({
+                includeInvoiceSummary: true,
+                includeInvoiceFiles: false,
+                day: summaryScheduleDay,
+                time: summaryScheduleTime,
+              })
+            }
+          />
         </div>
       </div>
 
@@ -469,6 +415,75 @@ export default function AutomationView() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ScheduleCard({
+  title,
+  description,
+  day,
+  time,
+  setDay,
+  setTime,
+  saving,
+  buttonText,
+  onSave,
+}: {
+  title: string;
+  description: string;
+  day: string;
+  time: string;
+  setDay: (value: string) => void;
+  setTime: (value: string) => void;
+  saving: boolean;
+  buttonText: string;
+  onSave: () => void;
+}) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
+      <p className="mt-1 text-sm text-slate-500">{description}</p>
+
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        <label className="text-sm font-medium text-slate-700">
+          Run day
+          <select
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+            className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
+          >
+            <option value="monday">Every Monday</option>
+            <option value="tuesday">Every Tuesday</option>
+            <option value="wednesday">Every Wednesday</option>
+            <option value="thursday">Every Thursday</option>
+            <option value="friday">Every Friday</option>
+            <option value="saturday">Every Saturday</option>
+            <option value="sunday">Every Sunday</option>
+          </select>
+        </label>
+
+        <label className="text-sm font-medium text-slate-700">
+          Run time
+          <input
+            type="time"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+            className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm"
+          />
+        </label>
+      </div>
+
+      <Button
+        type="button"
+        variant="outline"
+        className="mt-6 rounded-2xl border-slate-200"
+        onClick={onSave}
+        disabled={saving}
+      >
+        <Save className="mr-2 h-4 w-4" />
+        {saving ? "Saving..." : buttonText}
+      </Button>
     </div>
   );
 }
