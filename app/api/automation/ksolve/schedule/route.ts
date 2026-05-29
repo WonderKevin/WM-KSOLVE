@@ -1,3 +1,4 @@
+import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 const DAY_TO_CRON_DAY: Record<string, number> = {
@@ -9,6 +10,17 @@ const DAY_TO_CRON_DAY: Record<string, number> = {
   friday: 5,
   saturday: 6,
 };
+
+function getSupabaseClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey);
+}
 
 function toUtcCron(day: string, time: string) {
   const cronDay = DAY_TO_CRON_DAY[day.toLowerCase()];
@@ -181,6 +193,65 @@ async function upsertWorkflowFile({
   }
 }
 
+async function saveScheduleToSupabase({
+  scheduleId,
+  day,
+  time,
+  includeInvoiceSummary,
+  includeInvoiceFiles,
+}: {
+  scheduleId: string;
+  day: string;
+  time: string;
+  includeInvoiceSummary: boolean;
+  includeInvoiceFiles: boolean;
+}) {
+  const supabase = getSupabaseClient();
+
+  const { error } = await supabase.from("ksolve_schedules").upsert({
+    id: scheduleId,
+    run_day: day,
+    run_time: time,
+    include_invoice_summary: includeInvoiceSummary,
+    include_invoice_files: includeInvoiceFiles,
+    updated_at: new Date().toISOString(),
+  });
+
+  if (error) {
+    throw new Error(`Failed saving schedule: ${error.message}`);
+  }
+}
+
+export async function GET() {
+  try {
+    const supabase = getSupabaseClient();
+
+    const { data, error } = await supabase
+      .from("ksolve_schedules")
+      .select("*");
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return NextResponse.json({
+      ok: true,
+      schedules: data || [],
+    });
+  } catch (error) {
+    console.error("K-Solve schedule load failed:", error);
+
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          error instanceof Error ? error.message : "Failed loading schedules.",
+      },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
@@ -226,8 +297,9 @@ export async function POST(request: Request) {
     }
 
     const cron = toUtcCron(day, time);
-
     const isSummaryOnly = includeInvoiceSummary && !includeInvoiceFiles;
+
+    const scheduleId = isSummaryOnly ? "invoice-summary" : "invoice-file";
 
     const workflowPath = isSummaryOnly
       ? ".github/workflows/ksolve-invoice-summary.yml"
@@ -253,11 +325,26 @@ export async function POST(request: Request) {
       githubToken,
     });
 
+    await saveScheduleToSupabase({
+      scheduleId,
+      day,
+      time,
+      includeInvoiceSummary,
+      includeInvoiceFiles,
+    });
+
     return NextResponse.json({
       ok: true,
       message: `${workflowName} scheduled for every ${day} at ${time}. It will process the last 7 days ending yesterday.`,
       cron,
       workflowPath,
+      schedule: {
+        id: scheduleId,
+        run_day: day,
+        run_time: time,
+        include_invoice_summary: includeInvoiceSummary,
+        include_invoice_files: includeInvoiceFiles,
+      },
     });
   } catch (error) {
     console.error("K-Solve schedule update failed:", error);
