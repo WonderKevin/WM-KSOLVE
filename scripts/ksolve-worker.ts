@@ -27,6 +27,36 @@ function getPreviousMondayToSunday() {
   };
 }
 
+function getRunConfig() {
+  const manualStartDate = process.env.KSOLVE_START_DATE?.trim();
+  const manualEndDate = process.env.KSOLVE_END_DATE?.trim();
+
+  const includeInvoiceSummary =
+    process.env.KSOLVE_INCLUDE_INVOICE_SUMMARY !== "false";
+
+  const includeInvoiceFiles =
+    process.env.KSOLVE_INCLUDE_INVOICE_FILES !== "false";
+
+  if (manualStartDate && manualEndDate) {
+    return {
+      startDate: manualStartDate,
+      endDate: manualEndDate,
+      includeInvoiceSummary,
+      includeInvoiceFiles,
+      runType: "manual",
+    };
+  }
+
+  const previousWeek = getPreviousMondayToSunday();
+
+  return {
+    ...previousWeek,
+    includeInvoiceSummary,
+    includeInvoiceFiles,
+    runType: "scheduled",
+  };
+}
+
 async function loginAndGetKsolveAuth() {
   const username = process.env.KSOLVE_USERNAME;
   const password = process.env.KSOLVE_PASSWORD;
@@ -74,7 +104,9 @@ async function loginAndGetKsolveAuth() {
     await nextButton.click();
 
     const passwordInput = page
-      .locator('input[type="password"], input[name*="password" i], input[id*="password" i]')
+      .locator(
+        'input[type="password"], input[name*="password" i], input[id*="password" i]'
+      )
       .first();
 
     await passwordInput.waitFor({ timeout: 30000 });
@@ -92,7 +124,11 @@ async function loginAndGetKsolveAuth() {
 
     await loginButton.click();
 
-    await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(() => null);
+    await page
+      .waitForLoadState("networkidle", {
+        timeout: 60000,
+      })
+      .catch(() => null);
 
     await page.goto("https://connect.kehe.com/ksolve/", {
       waitUntil: "networkidle",
@@ -102,22 +138,28 @@ async function loginAndGetKsolveAuth() {
     await page.waitForTimeout(5000);
 
     const cookies = await context.cookies();
+
     const cookieHeader = cookies
       .filter((cookie) => cookie.domain.includes("kehe.com"))
       .map((cookie) => `${cookie.name}=${cookie.value}`)
       .join("; ");
 
     if (!bearerToken) {
-      await page.goto("https://connect.kehe.com/ksolve/services/api/ksolve/list/dcs", {
-        waitUntil: "networkidle",
-        timeout: 60000,
-      });
+      await page.goto(
+        "https://connect.kehe.com/ksolve/services/api/ksolve/list/dcs",
+        {
+          waitUntil: "networkidle",
+          timeout: 60000,
+        }
+      );
 
       await page.waitForTimeout(3000);
     }
 
     if (!bearerToken) {
-      throw new Error("Login succeeded, but no K-Solve bearer token was captured.");
+      throw new Error(
+        "Login succeeded, but no K-Solve bearer token was captured."
+      );
     }
 
     if (!cookieHeader) {
@@ -141,13 +183,18 @@ async function main() {
 
   await loginAndGetKsolveAuth();
 
-  const { startDate, endDate } = getPreviousMondayToSunday();
+  const config = getRunConfig();
 
-  console.log(`Running previous week: ${startDate} to ${endDate}`);
+  console.log(`Run type: ${config.runType}`);
+  console.log(`Date range: ${config.startDate} to ${config.endDate}`);
+  console.log(`Include invoice summary: ${config.includeInvoiceSummary}`);
+  console.log(`Include invoice files: ${config.includeInvoiceFiles}`);
 
   const result = await runKsolveAutomation({
-    startDate,
-    endDate,
+    startDate: config.startDate,
+    endDate: config.endDate,
+    includeInvoiceSummary: config.includeInvoiceSummary,
+    includeInvoiceFiles: config.includeInvoiceFiles,
   });
 
   console.log("K-Solve worker completed.");
