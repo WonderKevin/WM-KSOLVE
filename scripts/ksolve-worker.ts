@@ -1,4 +1,3 @@
-@'
 import { chromium } from "playwright";
 import { runKsolveAutomation } from "../lib/automation/ksolve-download";
 
@@ -160,4 +159,3 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
-'@ | Set-Content .\scripts\ksolve-worker.ts
