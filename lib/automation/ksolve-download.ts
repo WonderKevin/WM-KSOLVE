@@ -61,7 +61,21 @@ function formatDisplayDate(date: string | null | undefined) {
   const parsedDate = new Date(date);
   if (Number.isNaN(parsedDate.getTime())) return "";
 
-  return `${parsedDate.getMonth() + 1}/${parsedDate.getDate()}/${parsedDate.getFullYear()}`;
+  return `${String(parsedDate.getMonth() + 1).padStart(2, "0")}/${String(
+    parsedDate.getDate()
+  ).padStart(2, "0")}/${parsedDate.getFullYear()}`;
+}
+
+function getMonthLabel(date: string | null | undefined) {
+  if (!date) return "";
+
+  const parsedDate = new Date(date);
+  if (Number.isNaN(parsedDate.getTime())) return "";
+
+  return parsedDate.toLocaleString("en-US", {
+    month: "long",
+    year: "2-digit",
+  });
 }
 
 function subtractDays(date: Date, days: number) {
@@ -137,6 +151,25 @@ function isSupportingDocument(document: KsolveDocument) {
   return document.DocumentType?.toLowerCase().trim() === "supporting document";
 }
 
+function getInvoiceType(row: KsolveSearchRow) {
+  if (row.ChargeTypeCode === "PV") return "WM Invoice";
+  if (row.DocumentUrl) return "WM Invoice";
+
+  if (row.InvoiceNumber?.toUpperCase().startsWith("CN")) {
+    return "Customer Spoils Allowance";
+  }
+
+  if (row.InvoiceNumber?.toUpperCase().startsWith("CS")) {
+    return "Customer Spoils Allowance";
+  }
+
+  if (row.InvoiceNumber?.toUpperCase().startsWith("IAA")) {
+    return "Pass Through Deduction";
+  }
+
+  return "Customer Spoils Allowance";
+}
+
 async function fetchWithRetry(
   url: string,
   options: RequestInit,
@@ -200,6 +233,34 @@ async function insertUploadRecord({
 
   if (error) {
     throw new Error(`Failed inserting upload record: ${error.message}`);
+  }
+}
+
+async function upsertInvoiceRows(rows: KsolveSearchRow[]) {
+  if (rows.length === 0) return;
+
+  const supabase = getSupabaseClient();
+
+  const invoiceRows = rows.map((row) => ({
+    month: getMonthLabel(row.CheckDate),
+    check_date: formatDisplayDate(row.CheckDate),
+    check_number: row.CheckNumber ? String(row.CheckNumber) : "",
+    invoice_number: row.InvoiceNumber || "",
+    invoice_amt: row.InvoiceAmount ?? 0,
+    dc_name: row.DcNameDisplayable || "",
+    status: row.PayStatusCode || "",
+    type: getInvoiceType(row),
+    doc_status: row.HasDocuments ? "true" : "false",
+    check_amt: row.CheckAmount ?? 0,
+    deduction_type: row.ChargeTypeCode || null,
+  }));
+
+  const { error } = await supabase.from("invoices").upsert(invoiceRows, {
+    onConflict: "invoice_number",
+  });
+
+  if (error) {
+    throw new Error(`Failed upserting invoice rows: ${error.message}`);
   }
 }
 
@@ -303,7 +364,7 @@ async function uploadDocumentToSupabase({
     contentType,
     startDate,
     endDate,
-    category: document.DocumentType || "K-Solve Document",
+    category: document.DocumentType || getInvoiceType(row),
     invoice: row.InvoiceNumber || document.DocumentDisplayName,
     pdfDate: formatDisplayDate(row.CheckDate || row.InvoiceDate),
   });
@@ -423,6 +484,10 @@ export async function runKsolveAutomation({
   const matchingRows = searchRows.filter((row) =>
     isCheckDateInRange(row.CheckDate, startDate, endDate)
   );
+
+  if (includeInvoiceSummary) {
+    await upsertInvoiceRows(matchingRows);
+  }
 
   const documents: UploadedKsolveDocument[] = [];
 
