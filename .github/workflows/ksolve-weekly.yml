@@ -1,4 +1,3 @@
-@'
 name: K-Solve Weekly Automation
 
 on:
@@ -34,4 +33,3 @@ jobs:
           SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
           KSOLVE_USERNAME: ${{ secrets.KSOLVE_USERNAME }}
           KSOLVE_PASSWORD: ${{ secrets.KSOLVE_PASSWORD }}
-'@ | Set-Content .\.github\workflows\ksolve-weekly.yml
