@@ -2,7 +2,7 @@ name: K-Solve Scheduled Invoice Summary
 
 on:
   schedule:
-    - cron: '5 5 * * 6'
+    - cron: "28 8 * * 6"
   workflow_dispatch:
 
 jobs:
@@ -33,5 +33,5 @@ jobs:
           SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
           KSOLVE_USERNAME: ${{ secrets.KSOLVE_USERNAME }}
           KSOLVE_PASSWORD: ${{ secrets.KSOLVE_PASSWORD }}
-          KSOLVE_INCLUDE_INVOICE_SUMMARY: 'true'
-          KSOLVE_INCLUDE_INVOICE_FILES: 'false'
+          KSOLVE_INCLUDE_INVOICE_SUMMARY: "true"
+          KSOLVE_INCLUDE_INVOICE_FILES: "false"
