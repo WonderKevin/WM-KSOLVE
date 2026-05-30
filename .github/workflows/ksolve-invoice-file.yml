@@ -2,7 +2,7 @@ name: K-Solve Scheduled Invoice File
 
 on:
   schedule:
-    - cron: "0 12 * * 6"
+    - cron: "0 7 * * 1"
   workflow_dispatch:
 
 jobs:
