@@ -2,7 +2,7 @@ name: K-Solve Scheduled Invoice File
 
 on:
   schedule:
-    - cron: "0 7 * * 1"
+    - cron: "0 6 * * 6"
   workflow_dispatch:
 
 jobs:
@@ -35,3 +35,6 @@ jobs:
           KSOLVE_PASSWORD: ${{ secrets.KSOLVE_PASSWORD }}
           KSOLVE_INCLUDE_INVOICE_SUMMARY: "false"
           KSOLVE_INCLUDE_INVOICE_FILES: "true"
+          KSOLVE_FETCH_TIMEOUT_MS: "60000"
+          KSOLVE_FETCH_RETRIES: "5"
+          KSOLVE_RETRY_DELAY_MS: "10000"
