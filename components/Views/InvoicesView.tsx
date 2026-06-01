@@ -119,7 +119,7 @@ type NewUpcModal = {
   pendingCategory: string;
 };
 
-const DOCUMENT_BUCKET = "document-uploads";
+const DOCUMENT_BUCKET = "ksolve-documents";
 
 function normalizeType(raw: string) {
   const c = raw.replace(/\s+/g, " ").trim().toLowerCase();
