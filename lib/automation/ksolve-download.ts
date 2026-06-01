@@ -47,6 +47,12 @@ type RunKsolveAutomationInput = {
   includeInvoiceFiles?: boolean;
 };
 
+type DeductionTypeRecord = {
+  id?: string;
+  document_type: string;
+  deduction_type: string;
+};
+
 function parseIsoDate(date: string) {
   return new Date(`${date}T00:00:00`);
 }
@@ -151,6 +157,41 @@ function isSupportingDocument(document: KsolveDocument) {
   return document.DocumentType?.toLowerCase().trim() === "supporting document";
 }
 
+function normalizeType(raw: string) {
+  const c = String(raw || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+  if (/\$\s*1\s*promotion/i.test(c) || /\b1\s*dollar\s*promotion\b/i.test(c)) {
+    return "$1 Promotion";
+  }
+
+  if (/distributor\s+charge/i.test(c)) return "$1 Promotion";
+  if (/customer\s+spoils\s+allowance/i.test(c)) return "Customer Spoils Allowance";
+  if (/customer\s+spoilage\s+natural/i.test(c)) return "Customer Spoils Allowance";
+  if (/customer\s+spoilage/i.test(c)) return "Customer Spoils Allowance";
+  if (/pass\s+thru\s+deduction/i.test(c) || /pass\s+through\s+deduction/i.test(c)) {
+    return "Pass Thru Deduction";
+  }
+  if (/fresh\s+thyme\s+ppf/i.test(c)) return "Pass Thru Deduction";
+  if (/new\s+item\s+setup\s+fee/i.test(c) || /new\s+item\s+set\s*up\s+fee/i.test(c)) {
+    return "New Item Setup Fee";
+  }
+  if (/new\s+item\s+setup/i.test(c) || /new\s+item\s+set\s*up/i.test(c)) {
+    return "New Item Setup";
+  }
+  if (/intro\s+allowance\s+audit/i.test(c)) return "Intro Allowance Audit";
+  if (/introductory\s+fee/i.test(c)) return "Introductory Fee";
+  if (/wm\s+invoice/i.test(c) || /wonder\s+monday/i.test(c)) return "WM Invoice";
+
+  return String(raw || "").replace(/\s+/g, " ").trim() || "Unknown";
+}
+
+function normalizeForMatch(raw: string | null | undefined) {
+  return normalizeType(String(raw || ""))
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 function getInvoiceType(row: KsolveSearchRow) {
   if (row.ChargeTypeCode === "PV") return "WM Invoice";
   if (row.DocumentUrl) return "WM Invoice";
@@ -164,16 +205,83 @@ function getInvoiceType(row: KsolveSearchRow) {
   }
 
   if (row.InvoiceNumber?.toUpperCase().startsWith("IAA")) {
-    return "Pass Through Deduction";
+    return "Pass Thru Deduction";
   }
 
   return "Customer Spoils Allowance";
 }
 
+async function fetchDeductionTypes(): Promise<DeductionTypeRecord[]> {
+  const supabase = getSupabaseClient();
+
+  const { data, error } = await supabase
+    .from("deduction_types")
+    .select("id, document_type, deduction_type");
+
+  if (error) {
+    console.warn(`Failed fetching deduction types: ${error.message}`);
+    return [];
+  }
+
+  return data ?? [];
+}
+
+function resolveAutomatedDeductionType({
+  document,
+  row,
+  deductionTypes,
+}: {
+  document: KsolveDocument;
+  row: KsolveSearchRow;
+  deductionTypes: DeductionTypeRecord[];
+}) {
+  const candidates = [
+    document.DocumentType,
+    document.DocumentDisplayName,
+    getInvoiceType(row),
+    row.ChargeTypeCode || "",
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  const normalizedCandidates = candidates.map(normalizeForMatch).filter(Boolean);
+
+  const exactMatch = deductionTypes.find((record) => {
+    const documentType = normalizeForMatch(record.document_type);
+    return documentType && normalizedCandidates.includes(documentType);
+  });
+
+  if (exactMatch?.deduction_type) {
+    return normalizeType(exactMatch.deduction_type);
+  }
+
+  const containsMatch = deductionTypes.find((record) => {
+    const documentType = normalizeForMatch(record.document_type);
+    if (!documentType) return false;
+
+    return normalizedCandidates.some(
+      (candidate) => candidate.includes(documentType) || documentType.includes(candidate)
+    );
+  });
+
+  if (containsMatch?.deduction_type) {
+    return normalizeType(containsMatch.deduction_type);
+  }
+
+  console.warn(
+    `No deduction type mapping found for invoice ${row.InvoiceNumber || "Unknown"}. ` +
+      `DocumentType=${document.DocumentType || "Unknown"}; ` +
+      `DocumentDisplayName=${document.DocumentDisplayName || "Unknown"}. ` +
+      `Saving upload category as Unknown.`
+  );
+
+  return "Unknown";
+}
+
 async function fetchWithRetry(
   url: string,
   options: RequestInit,
-  retries = 3
+  retries = 5
 ) {
   let lastError: unknown;
 
@@ -188,6 +296,13 @@ async function fetchWithRetry(
       });
 
       clearTimeout(timeout);
+
+      if ((response.status === 408 || response.status === 429 || response.status >= 500) && attempt < retries) {
+        console.warn(`Fetch attempt ${attempt} returned retryable status ${response.status} for ${url}`);
+        await new Promise((resolve) => setTimeout(resolve, attempt * 10000));
+        continue;
+      }
+
       return response;
     } catch (error) {
       clearTimeout(timeout);
@@ -197,7 +312,7 @@ async function fetchWithRetry(
       console.warn(error);
 
       if (attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
+        await new Promise((resolve) => setTimeout(resolve, attempt * 10000));
       }
     }
   }
@@ -333,11 +448,13 @@ async function uploadDocumentToSupabase({
   row,
   startDate,
   endDate,
+  deductionTypes,
 }: {
   document: KsolveDocument;
   row: KsolveSearchRow;
   startDate: string;
   endDate: string;
+  deductionTypes: DeductionTypeRecord[];
 }): Promise<UploadedKsolveDocument> {
   const downloadResponse = await fetchWithRetry(document.DocumentLink, {
     method: "GET",
@@ -358,13 +475,19 @@ async function uploadDocumentToSupabase({
   const arrayBuffer = await downloadResponse.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
+  const category = resolveAutomatedDeductionType({
+    document,
+    row,
+    deductionTypes,
+  });
+
   const uploaded = await uploadBufferToSupabase({
     buffer,
     filename: document.DocumentDisplayName,
     contentType,
     startDate,
     endDate,
-    category: document.DocumentType || getInvoiceType(row),
+    category,
     invoice: row.InvoiceNumber || document.DocumentDisplayName,
     pdfDate: formatDisplayDate(row.CheckDate || row.InvoiceDate),
   });
@@ -455,7 +578,7 @@ export async function runKsolveAutomation({
   const searchEndpoint =
     "https://connect.kehe.com/ksolve/services/api/ksolve/search";
 
-  const searchResponse = await fetch(searchEndpoint, {
+  const searchResponse = await fetchWithRetry(searchEndpoint, {
     method: "POST",
     headers: getKsolveHeaders(),
     body: JSON.stringify({
@@ -490,6 +613,11 @@ export async function runKsolveAutomation({
   }
 
   const documents: UploadedKsolveDocument[] = [];
+  const deductionTypes = includeInvoiceFiles ? await fetchDeductionTypes() : [];
+
+  if (includeInvoiceFiles) {
+    console.log(`Loaded ${deductionTypes.length} deduction type mapping(s).`);
+  }
 
   if (includeInvoiceSummary) {
     const invoiceSummary = await uploadInvoiceSummaryToSupabase({
@@ -507,7 +635,7 @@ export async function runKsolveAutomation({
 
       const documentsEndpoint = `https://connect.kehe.com/ksolve/services/api/ksolve/list/documents/${row.Id}`;
 
-      const documentsResponse = await fetch(documentsEndpoint, {
+      const documentsResponse = await fetchWithRetry(documentsEndpoint, {
         method: "GET",
         headers: getKsolveHeaders(),
       });
@@ -532,6 +660,7 @@ export async function runKsolveAutomation({
             row,
             startDate,
             endDate,
+            deductionTypes,
           });
 
           documents.push(uploadedDocument);
