@@ -78,10 +78,12 @@ function getMonthLabel(date: string | null | undefined) {
   const parsedDate = new Date(date);
   if (Number.isNaN(parsedDate.getTime())) return "";
 
-  return parsedDate.toLocaleString("en-US", {
+  const month = parsedDate.toLocaleString("en-US", {
     month: "long",
-    year: "2-digit",
   });
+  const year = String(parsedDate.getFullYear()).slice(-2);
+
+  return `${month} '${year}`;
 }
 
 function subtractDays(date: Date, days: number) {
