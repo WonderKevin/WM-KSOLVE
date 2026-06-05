@@ -13,7 +13,21 @@ type ProductRow = {
   item_description: string;
 };
 
-type LocationRow = Record<string, any>;
+type LocationRow = {
+  customer?: unknown;
+  retailer_name?: unknown;
+  location_name?: unknown;
+  retailer_area?: unknown;
+  area?: unknown;
+  region?: unknown;
+  retailer?: unknown;
+  chain?: unknown;
+  banner?: unknown;
+  parent?: unknown;
+  account_name?: unknown;
+};
+
+type WorksheetRow = unknown[];
 
 type VelocityRow = {
   id?: string;
@@ -25,6 +39,7 @@ type VelocityRow = {
   cases: number;
   eaches: number;
   retailer: string;
+  fill_rate?: number | string | null;
   source_file_name?: string;
 };
 
@@ -108,11 +123,48 @@ function extractUpcFromDescription(value: string) {
   return match?.[1] || "";
 }
 
-function parseCurrencyNumber(value: any): number {
+function parseCurrencyNumber(value: unknown): number {
   if (value === null || value === undefined || value === "") return 0;
   if (typeof value === "number") return value;
   const num = Number(String(value).replace(/[$,]/g, "").trim());
   return Number.isNaN(num) ? 0 : num;
+}
+
+function hasPercentMarker(value: unknown) {
+  return String(value ?? "").includes("%");
+}
+
+function parsePercentNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    return Math.abs(value) <= 1 ? value * 100 : value;
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const hasPercentSign = raw.includes("%");
+  const num = Number(raw.replace(/[%,$,]/g, "").trim());
+  if (Number.isNaN(num)) return null;
+
+  return !hasPercentSign && Math.abs(num) <= 1 ? num * 100 : num;
+}
+
+function formatFillRate(value: VelocityRow["fill_rate"]) {
+  const parsed = parsePercentNumber(value);
+  if (parsed === null) return "";
+  return `${parsed.toFixed(2)}%`;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message) return message;
+  }
+
+  return fallback;
 }
 
 function roundCases(shipped: number) {
@@ -259,7 +311,7 @@ function hasLocationMatch(
   });
 }
 
-function isLikelyRetailerAreaRow(row: any[]) {
+function isLikelyRetailerAreaRow(row: WorksheetRow) {
   const colC = String(row[2] || "").trim();
   const colD = String(row[3] || "").trim();
   const colE = String(row[4] || "").trim();
@@ -268,26 +320,90 @@ function isLikelyRetailerAreaRow(row: any[]) {
   return !!colC && !colD && !colE && !colG;
 }
 
-function isLikelyRetailerNameRow(row: any[]) {
+function isLikelyRetailerNameRow(row: WorksheetRow) {
   const colE = String(row[4] || "").trim();
   const colG = String(row[6] || "").trim();
 
   return !!colE && !colG;
 }
 
-function isLikelyItemRow(row: any[]) {
+function isLikelyItemRow(row: WorksheetRow) {
   const colG = String(row[6] || "").trim();
   return /\(\d{10,14}\)/.test(colG);
 }
 
+function findHeaderColumnIndex(rows: WorksheetRow[], headerText: string, allowPartial = true) {
+  const target = normalizeText(headerText);
+
+  for (const row of rows.slice(0, 75)) {
+    for (let index = 0; index < row.length; index++) {
+      const normalizedCell = normalizeText(String(row[index] || ""));
+      if (normalizedCell === target) {
+        return index;
+      }
+    }
+  }
+
+  if (!allowPartial) return -1;
+
+  for (const row of rows.slice(0, 75)) {
+    for (let index = 0; index < row.length; index++) {
+      const normalizedCell = normalizeText(String(row[index] || ""));
+      if (normalizedCell.includes(target)) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function findNearestOrderedValue(row: WorksheetRow, shippedColumnIndex: number) {
+  for (let index = shippedColumnIndex - 1; index >= Math.max(0, shippedColumnIndex - 8); index--) {
+    const value = row[index];
+    const text = String(value ?? "").trim();
+    if (!text || hasPercentMarker(value)) continue;
+
+    const parsed = parseCurrencyNumber(value);
+    if (parsed > 0) return parsed;
+  }
+
+  return 0;
+}
+
+function getFillRateFromRow(
+  row: WorksheetRow,
+  fillRateColumnIndex: number,
+  orderedColumnIndex: number,
+  shippedColumnIndex: number
+) {
+  if (fillRateColumnIndex >= 0) {
+    const explicitFillRate = parsePercentNumber(row[fillRateColumnIndex]);
+    if (explicitFillRate !== null) return explicitFillRate;
+  }
+
+  const ordered =
+    orderedColumnIndex >= 0
+      ? parseCurrencyNumber(row[orderedColumnIndex])
+      : findNearestOrderedValue(row, shippedColumnIndex);
+  const shipped = parseCurrencyNumber(row[shippedColumnIndex]);
+
+  if (ordered <= 0) return null;
+  return (shipped / ordered) * 100;
+}
+
 function parseKeheWorksheet(
-  rows: any[][],
+  rows: WorksheetRow[],
   monthLabel: string,
   sourceFileName: string,
   productMap: Map<string, string>,
   locations: LocationRow[]
 ): VelocityRow[] {
   const output: VelocityRow[] = [];
+  const fillRateColumnIndex = findHeaderColumnIndex(rows, "FILL RATE");
+  const orderedColumnIndex = findHeaderColumnIndex(rows, "ORDERED", false);
+  const shippedColumnIndex = findHeaderColumnIndex(rows, "SHIPPED", false);
+  const resolvedShippedColumnIndex = shippedColumnIndex >= 0 ? shippedColumnIndex : 15;
 
   let currentRetailerArea = "";
   let currentCustomer = "";
@@ -311,9 +427,15 @@ function parseKeheWorksheet(
     const upc = extractUpcFromDescription(rawItemDescription);
     if (!upc) continue;
 
-    const shipped = parseCurrencyNumber(row[15]);
+    const shipped = parseCurrencyNumber(row[resolvedShippedColumnIndex]);
     const cases = roundCases(shipped);
     const eaches = cases * 12;
+    const fillRate = getFillRateFromRow(
+      row,
+      fillRateColumnIndex,
+      orderedColumnIndex,
+      resolvedShippedColumnIndex
+    );
 
     const description = productMap.get(upc) || rawItemDescription;
     const retailer =
@@ -329,6 +451,7 @@ function parseKeheWorksheet(
       cases,
       eaches,
       retailer,
+      fill_rate: fillRate,
       source_file_name: sourceFileName,
     });
   }
@@ -460,6 +583,7 @@ export default function KeHeVelocityView() {
           row.upc,
           row.description,
           rowRetailer,
+          formatFillRate(row.fill_rate),
         ]
           .join(" ")
           .toLowerCase()
@@ -490,6 +614,7 @@ export default function KeHeVelocityView() {
       Cases: row.cases,
       Eaches: row.eaches,
       Retailer: row.retailer || "",
+      "Fill Rate": formatFillRate(row.fill_rate),
       "Source File Name": row.source_file_name || "",
     }));
 
@@ -554,7 +679,7 @@ export default function KeHeVelocityView() {
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
 
-      const rawRows = XLSX.utils.sheet_to_json<any[]>(sheet, {
+      const rawRows = XLSX.utils.sheet_to_json<WorksheetRow>(sheet, {
         header: 1,
         defval: "",
         raw: false,
@@ -584,8 +709,8 @@ export default function KeHeVelocityView() {
       }
 
       await finishInsert(parsedRows, locations);
-    } catch (error: any) {
-      alert(error.message || "Upload failed.");
+    } catch (error: unknown) {
+      alert(getErrorMessage(error, "Upload failed."));
     } finally {
       setUploading(false);
       if (inputRef.current) inputRef.current.value = "";
@@ -624,8 +749,8 @@ export default function KeHeVelocityView() {
       setShowLocationModal(false);
       setMissingLocations([]);
       setPendingRows([]);
-    } catch (error: any) {
-      alert(error.message || "Failed to save locations.");
+    } catch (error: unknown) {
+      alert(getErrorMessage(error, "Failed to save locations."));
     }
   };
 
@@ -903,6 +1028,7 @@ export default function KeHeVelocityView() {
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">Cases</th>
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">Eaches</th>
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">Retailer</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Fill Rate</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -916,6 +1042,7 @@ export default function KeHeVelocityView() {
                       <td className="px-4 py-3 text-slate-700">{row.cases}</td>
                       <td className="px-4 py-3 text-slate-700">{row.eaches}</td>
                       <td className="px-4 py-3 text-slate-700">{row.retailer}</td>
+                      <td className="px-4 py-3 text-slate-700">{formatFillRate(row.fill_rate)}</td>
                     </tr>
                   ))}
                 </tbody>

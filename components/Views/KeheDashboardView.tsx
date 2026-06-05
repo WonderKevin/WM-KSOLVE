@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 
 type TabKey = "analytics" | "velocity" | "pullout";
+type FillRateSubTabKey = "retailer" | "area";
 type VelocitySubTabKey =
   | "best-selling-store"
   | "total-cases-per-month"
@@ -11,7 +12,12 @@ type VelocitySubTabKey =
 type PulloutSubTabKey = "by-retailer-area" | "by-retailer-store";
 type PeriodMode = "lastMonth" | "custom" | "past6Months" | "past12Months";
 type TopN = 5 | 10 | 15 | 20;
-type AnalyticsSection = "summary" | "pull-rate" | "win-back" | "declining";
+type AnalyticsSection =
+  | "summary"
+  | "pull-rate"
+  | "fill-rate"
+  | "win-back"
+  | "declining";
 
 type VelocityRow = {
   id?: string;
@@ -23,6 +29,7 @@ type VelocityRow = {
   cases: number;
   eaches: number;
   retailer: string;
+  fill_rate?: number | string | null;
   source_file_name?: string;
 };
 
@@ -155,6 +162,130 @@ function sortRetailersForChart(a: string, b: string) {
   }
 
   return String(a || "").localeCompare(String(b || ""));
+}
+
+function parseFillRateValue(value: VelocityRow["fill_rate"]) {
+  if (value === null || value === undefined || value === "") return null;
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    return Math.abs(value) <= 1 ? value * 100 : value;
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const hasPercentSign = raw.includes("%");
+  const parsed = Number(raw.replace(/[%,$,]/g, "").trim());
+  if (Number.isNaN(parsed)) return null;
+
+  return !hasPercentSign && Math.abs(parsed) <= 1 ? parsed * 100 : parsed;
+}
+
+function formatFillRate(value: number | null) {
+  if (value === null) return "N/A";
+  return `${value.toFixed(2)}%`;
+}
+
+function getFillRateTone(value: number | null) {
+  if (value === null) return "text-slate-400";
+  if (value >= 95) return "text-emerald-700";
+  if (value >= 80) return "text-amber-700";
+  return "text-red-700";
+}
+
+function averageFillRate(sum: number, count: number) {
+  return count > 0 ? sum / count : null;
+}
+
+function buildFillRateSummaries(rows: VelocityRow[] | undefined, referenceMonth: string) {
+  const retailerMap = new Map<string, { retailer: string; sum: number; count: number }>();
+  const areaMap = new Map<
+    string,
+    {
+      retailer: string;
+      area: string;
+      sum: number;
+      count: number;
+      stores: Map<string, { customer: string; sum: number; count: number }>;
+    }
+  >();
+  let totalSum = 0;
+  let totalCount = 0;
+
+  for (const row of rows ?? []) {
+    if (normalizeMonthLabel(row.month) !== referenceMonth) continue;
+
+    const fillRate = parseFillRateValue(row.fill_rate);
+    if (fillRate === null) continue;
+
+    const retailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
+    const area = String(row.retailer_area || "").replace(/\u00a0/g, " ").trim();
+    const customer = String(row.customer || "").replace(/\u00a0/g, " ").trim();
+    if (!retailer) continue;
+
+    if (!retailerMap.has(retailer)) {
+      retailerMap.set(retailer, { retailer, sum: 0, count: 0 });
+    }
+    const retailerEntry = retailerMap.get(retailer)!;
+    retailerEntry.sum += fillRate;
+    retailerEntry.count += 1;
+
+    if (area) {
+      const areaKey = `${retailer}||${area}`;
+      if (!areaMap.has(areaKey)) {
+        areaMap.set(areaKey, {
+          retailer,
+          area,
+          sum: 0,
+          count: 0,
+          stores: new Map(),
+        });
+      }
+      const areaEntry = areaMap.get(areaKey)!;
+      areaEntry.sum += fillRate;
+      areaEntry.count += 1;
+
+      if (customer) {
+        if (!areaEntry.stores.has(customer)) {
+          areaEntry.stores.set(customer, { customer, sum: 0, count: 0 });
+        }
+        const storeEntry = areaEntry.stores.get(customer)!;
+        storeEntry.sum += fillRate;
+        storeEntry.count += 1;
+      }
+    }
+
+    totalSum += fillRate;
+    totalCount += 1;
+  }
+
+  return {
+    overall: averageFillRate(totalSum, totalCount),
+    retailerRows: Array.from(retailerMap.values())
+      .map((row) => ({
+        retailer: row.retailer,
+        fillRate: averageFillRate(row.sum, row.count),
+      }))
+      .sort((a, b) => sortRetailersForChart(a.retailer, b.retailer)),
+    areaRows: Array.from(areaMap.values())
+      .map((row) => ({
+        retailer: row.retailer,
+        area: row.area,
+        fillRate: averageFillRate(row.sum, row.count),
+        stores: Array.from(row.stores.values())
+          .map((store) => ({
+            customer: store.customer,
+            fillRate: averageFillRate(store.sum, store.count),
+          }))
+          .sort((a, b) => a.customer.localeCompare(b.customer)),
+      }))
+      .sort((a, b) => {
+        const retailerCompare = sortRetailersForChart(a.retailer, b.retailer);
+        if (retailerCompare !== 0) return retailerCompare;
+        return a.area.localeCompare(b.area);
+      }),
+  };
 }
 
 function formatSelectedCustomers(selected: string[]) {
@@ -1171,8 +1302,97 @@ function AreaRow({
 }
 
 // ── Analytics Header (frozen/sticky) ─────────────────────────────────────────
+function FillRateAreaRow({
+  row,
+  referenceMonth,
+}: {
+  row: ReturnType<typeof buildFillRateSummaries>["areaRows"][0];
+  referenceMonth: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <tr
+        className="border-t border-slate-200 hover:bg-slate-50 transition-colors cursor-pointer select-none"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <td className="px-4 py-3 text-slate-700">
+          <span className="inline-flex items-center gap-1.5">
+            <svg
+              className={`h-3.5 w-3.5 text-slate-400 transition-transform shrink-0 ${open ? "rotate-90" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9 5l7 7-7 7"
+              />
+            </svg>
+            {row.retailer}
+          </span>
+        </td>
+        <td className="px-4 py-3 text-slate-700 font-medium">{row.area}</td>
+        <td className="px-4 py-3 text-right text-slate-700">
+          {row.stores.length}
+        </td>
+        <td
+          className={`px-4 py-3 text-right font-semibold ${getFillRateTone(row.fillRate)}`}
+        >
+          {formatFillRate(row.fillRate)}
+        </td>
+      </tr>
+
+      {open && (
+        <tr>
+          <td
+            colSpan={4}
+            className="px-0 py-0 bg-slate-50 border-t border-slate-100"
+          >
+            <div className="px-6 py-4">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200">
+                    <th className="pb-2 text-left font-semibold text-slate-500 pr-4">
+                      Store
+                    </th>
+                    <th className="pb-2 text-right font-semibold text-slate-500 w-36">
+                      Fill Rate ({referenceMonth})
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {row.stores.map((store) => (
+                    <tr
+                      key={store.customer}
+                      className="border-b border-slate-100 last:border-0"
+                    >
+                      <td className="py-2 pr-4 text-slate-700 font-medium">
+                        {store.customer}
+                      </td>
+                      <td
+                        className={`py-2 text-right font-semibold ${getFillRateTone(store.fillRate)}`}
+                      >
+                        {formatFillRate(store.fillRate)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 function AnalyticsHeader({
   allRows,
+  fillRateRows = [],
   ctx,
   loading,
   loadError,
@@ -1190,6 +1410,7 @@ function AnalyticsHeader({
   setAnalyticsSearchQuery,
 }: {
   allRows: VelocityRow[];
+  fillRateRows: VelocityRow[];
   ctx: ReturnType<typeof buildAnalyticsContext>;
   loading: boolean;
   loadError: string;
@@ -1245,6 +1466,10 @@ function AnalyticsHeader({
     totalStores > 0 ? Math.round((totalActive / totalStores) * 100) : 0;
   const winBackCount = ctx?.winBackCandidates.length ?? 0;
   const decliningCount = ctx?.decliningStores.length ?? 0;
+  const fillRateSummary = useMemo(
+    () => buildFillRateSummaries(fillRateRows, ctx?.lastMonth ?? ""),
+    [fillRateRows, ctx?.lastMonth],
+  );
 
   const cardBase =
     "rounded-3xl border px-5 py-3 shadow-sm flex items-center justify-between gap-3 text-left transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-slate-300";
@@ -1327,7 +1552,7 @@ function AnalyticsHeader({
       </div>
 
       {/* Clickable stat cards */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <button
           type="button"
           onClick={() => setAnalyticsSection("summary")}
@@ -1363,6 +1588,24 @@ function AnalyticsHeader({
           <div className="text-right shrink-0">
             <span className="text-3xl font-extrabold leading-none">
               {overallPullPct}%
+            </span>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setAnalyticsSection("fill-rate")}
+          className={`${cardBase} bg-sky-50 text-sky-800 border-sky-200 ${analyticsSection === "fill-rate" ? selectedRing : ""}`}
+        >
+          <div>
+            <div className="text-sm font-semibold">Fill Rate Summary</div>
+            <div className="text-xs opacity-70 mt-0.5">
+              {ctx.lastMonth} velocity rows
+            </div>
+          </div>
+          <div className="text-right shrink-0">
+            <span className="text-3xl font-extrabold leading-none">
+              {formatFillRate(fillRateSummary.overall)}
             </span>
           </div>
         </button>
@@ -1522,16 +1765,21 @@ function WinBackAreaGroup({
 
 // ── Analytics Tab Component ───────────────────────────────────────────────────
 function AnalyticsTab({
+  rows,
   ctx,
   loading,
   loadError,
   analyticsSection,
 }: {
+  rows: VelocityRow[];
   ctx: ReturnType<typeof buildAnalyticsContext>;
   loading: boolean;
   loadError: string;
   analyticsSection: AnalyticsSection;
 }) {
+  const [fillRateSubTab, setFillRateSubTab] =
+    useState<FillRateSubTabKey>("retailer");
+
   const areasByPullRate = useMemo(() => {
     if (!ctx) return [];
     return [...ctx.areaSummaries].sort((a, b) => {
@@ -1599,6 +1847,11 @@ function AnalyticsTab({
       (a, b) => b.stores.length - a.stores.length,
     );
   }, [ctx]);
+
+  const fillRateSummary = useMemo(
+    () => buildFillRateSummaries(rows, ctx?.lastMonth ?? ""),
+    [rows, ctx?.lastMonth],
+  );
 
   if (loading) return null;
   if (loadError) return null;
@@ -1791,6 +2044,110 @@ function AnalyticsTab({
     </div>
   );
 
+  const renderFillRateSummary = () => {
+    const isRetailer = fillRateSubTab === "retailer";
+    const hasRows = isRetailer
+      ? fillRateSummary.retailerRows.length > 0
+      : fillRateSummary.areaRows.length > 0;
+
+    return (
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">
+              Fill Rate Summary
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              {ctx.lastMonth} fill rate from KeHE Velocity.
+            </p>
+          </div>
+          <div className="inline-flex rounded-2xl bg-slate-100 p-1">
+            <button
+              type="button"
+              onClick={() => setFillRateSubTab("retailer")}
+              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                fillRateSubTab === "retailer"
+                  ? "bg-slate-900 text-white shadow-sm"
+                  : "text-slate-700 hover:bg-white"
+              }`}
+            >
+              Retailer Summary
+            </button>
+            <button
+              type="button"
+              onClick={() => setFillRateSubTab("area")}
+              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                fillRateSubTab === "area"
+                  ? "bg-slate-900 text-white shadow-sm"
+                  : "text-slate-700 hover:bg-white"
+              }`}
+            >
+              Area Summary
+            </button>
+          </div>
+        </div>
+
+        {!hasRows ? (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+            No fill rate data found for {ctx.lastMonth}.
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <div className="max-h-[70vh] overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                      Retailer
+                    </th>
+                    {!isRetailer && (
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                        Area
+                      </th>
+                    )}
+                    {!isRetailer && (
+                      <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                        Total Stores
+                      </th>
+                    )}
+                    <th className="px-4 py-3 text-right font-semibold text-slate-700">
+                      Fill Rate ({ctx.lastMonth})
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {isRetailer
+                    ? fillRateSummary.retailerRows.map((row) => (
+                        <tr
+                          key={row.retailer}
+                          className="border-t border-slate-200 hover:bg-slate-50 transition-colors"
+                        >
+                          <td className="px-4 py-3 text-slate-700">
+                            {row.retailer}
+                          </td>
+                          <td
+                            className={`px-4 py-3 text-right font-semibold ${getFillRateTone(row.fillRate)}`}
+                          >
+                            {formatFillRate(row.fillRate)}
+                          </td>
+                        </tr>
+                      ))
+                    : fillRateSummary.areaRows.map((row) => (
+                        <FillRateAreaRow
+                          key={`${row.retailer}-${row.area}`}
+                          row={row}
+                          referenceMonth={ctx.lastMonth}
+                        />
+                      ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const WinBackCandidates = () => (
     <div className="rounded-3xl border border-amber-200 bg-slate-50 p-6 shadow-sm">
       <h3 className="mb-1 text-lg font-semibold text-slate-700">
@@ -1891,6 +2248,7 @@ function AnalyticsTab({
     <div className="space-y-6">
       {analyticsSection === "summary" && <SummaryPanels />}
       {analyticsSection === "pull-rate" && <RetailerAreaBreakdown />}
+      {analyticsSection === "fill-rate" && renderFillRateSummary()}
       {analyticsSection === "win-back" && <WinBackCandidates />}
       {analyticsSection === "declining" && <DecliningStores />}
     </div>
@@ -2874,6 +3232,7 @@ export default function KeheDashboardView() {
             <div className="pb-1">
               <AnalyticsHeader
                 allRows={rows}
+                fillRateRows={analyticsRowsByDate}
                 ctx={analyticsCtx}
                 loading={loading}
                 loadError={loadError}
@@ -2928,6 +3287,7 @@ export default function KeheDashboardView() {
       <div className="flex-1 overflow-y-auto px-6 pt-4 pb-10 space-y-6">
         {activeTab === "analytics" && (
           <AnalyticsTab
+            rows={analyticsRowsByDate}
             ctx={analyticsCtx}
             loading={loading}
             loadError={loadError}
