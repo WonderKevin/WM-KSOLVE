@@ -31,13 +31,16 @@ type VelocityRow = {
   retailer: string;
   fill_rate?: number | string | null;
   source_file_name?: string;
+  period_type?: "monthly" | "weekly" | string | null;
+  period_start_date?: string | null;
+  period_end_date?: string | null;
 };
 
 type FillRatePeriodColumn = {
   key: string;
   label: string;
   month?: string;
-  kind: "month" | "current-month" | "last-week";
+  kind: "month" | "mtd" | "last-week";
 };
 
 type FillRatePeriodStats = {
@@ -210,8 +213,38 @@ function averageFillRate(sum: number, count: number) {
   return count > 0 ? sum / count : null;
 }
 
+function formatDateInputValue(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+function parseIsoDateOnly(value: string | null | undefined) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getLastCompletedWeekRange(today = new Date()) {
+  const startOfThisWeek = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const day = startOfThisWeek.getDay();
+  const daysFromMonday = day === 0 ? 6 : day - 1;
+  startOfThisWeek.setDate(startOfThisWeek.getDate() - daysFromMonday);
+
+  const start = new Date(startOfThisWeek);
+  start.setDate(startOfThisWeek.getDate() - 7);
+
+  const end = new Date(startOfThisWeek);
+  end.setDate(startOfThisWeek.getDate() - 1);
+
+  return {
+    start: formatDateInputValue(start),
+    end: formatDateInputValue(end),
+  };
+}
+
 function buildFillRatePeriodColumns(today = new Date()): FillRatePeriodColumn[] {
-  const currentMonth = monthLabelFromDate(new Date(today.getFullYear(), today.getMonth(), 1));
   const monthColumns = [3, 2, 1].map((monthsBack) => {
     const date = new Date(today.getFullYear(), today.getMonth() - monthsBack, 1);
     const month = monthLabelFromDate(date);
@@ -226,10 +259,9 @@ function buildFillRatePeriodColumns(today = new Date()): FillRatePeriodColumn[] 
   return [
     ...monthColumns,
     {
-      key: "current-month",
-      label: currentMonth.replace(/ '\d{2}$/, ""),
-      month: currentMonth,
-      kind: "current-month",
+      key: "mtd",
+      label: "MTD",
+      kind: "mtd",
     },
     {
       key: "last-week",
@@ -258,6 +290,34 @@ function getFillRatePeriodValue(
 ) {
   const stats = periods.get(key);
   return stats ? averageFillRate(stats.sum, stats.count) ?? 0 : 0;
+}
+
+function getFillRatePeriodKeys(row: VelocityRow, monthKeys: Map<string, string[]>, today = new Date()) {
+  const periodType = String(row.period_type || "monthly").toLowerCase();
+
+  if (periodType !== "weekly") {
+    return monthKeys.get(normalizeMonthLabel(row.month)) ?? [];
+  }
+
+  const periodEndDate = parseIsoDateOnly(row.period_end_date);
+  if (!periodEndDate) return [];
+
+  const periodEnd = formatDateInputValue(periodEndDate);
+  const currentMonthStart = formatDateInputValue(new Date(today.getFullYear(), today.getMonth(), 1));
+  const todayValue = formatDateInputValue(today);
+  const lastWeek = getLastCompletedWeekRange(today);
+
+  const keys: string[] = [];
+
+  if (periodEnd >= currentMonthStart && periodEnd <= todayValue) {
+    keys.push("mtd");
+  }
+
+  if (periodEnd >= lastWeek.start && periodEnd <= lastWeek.end) {
+    keys.push("last-week");
+  }
+
+  return keys;
 }
 
 function buildFillRateSummaries(rows: VelocityRow[] | undefined, referenceMonth: string) {
@@ -297,7 +357,7 @@ function buildFillRateSummaries(rows: VelocityRow[] | undefined, referenceMonth:
       totalCount += 1;
     }
 
-    const periodKeys = periodKeysByMonth.get(rowMonth) ?? [];
+    const periodKeys = getFillRatePeriodKeys(row, periodKeysByMonth);
     if (!periodKeys.length) continue;
 
     const retailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();

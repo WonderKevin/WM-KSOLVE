@@ -41,6 +41,9 @@ type VelocityRow = {
   retailer: string;
   fill_rate?: number | string | null;
   source_file_name?: string;
+  period_type?: "monthly" | "weekly" | string | null;
+  period_start_date?: string | null;
+  period_end_date?: string | null;
 };
 
 type MissingLocationEntry = {
@@ -58,6 +61,104 @@ const ADD_NEW_RETAILER_VALUE = "__ADD_NEW_RETAILER__";
 function formatMonthLabel(monthNumber: number, year: number) {
   const date = new Date(year, monthNumber - 1, 1);
   return `${date.toLocaleString("en-US", { month: "long" })} '${String(year).slice(-2)}`;
+}
+
+function formatDateInputValue(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate()
+  ).padStart(2, "0")}`;
+}
+
+function parseDateInputValue(value: string) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getMostRecentSundayInputValue() {
+  const today = new Date();
+  const sunday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay());
+  return formatDateInputValue(sunday);
+}
+
+function formatDisplayDate(value: string | null | undefined) {
+  const parsed = parseDateInputValue(String(value || ""));
+  if (!parsed) return "";
+  return `${String(parsed.getMonth() + 1).padStart(2, "0")}/${String(parsed.getDate()).padStart(
+    2,
+    "0"
+  )}/${parsed.getFullYear()}`;
+}
+
+function buildUploadPeriodMetadata({
+  periodType,
+  monthInput,
+  yearInput,
+  weekEndingDate,
+}: {
+  periodType: "monthly" | "weekly";
+  monthInput: string;
+  yearInput: string;
+  weekEndingDate: string;
+}) {
+  if (periodType === "weekly") {
+    const endDate = parseDateInputValue(weekEndingDate);
+    if (!endDate) {
+      throw new Error("Please choose a valid week ending date.");
+    }
+    const startDate = new Date(endDate);
+    startDate.setDate(endDate.getDate() - 6);
+
+    return {
+      monthLabel: formatMonthLabel(endDate.getMonth() + 1, endDate.getFullYear()),
+      period_type: "weekly" as const,
+      period_start_date: formatDateInputValue(startDate),
+      period_end_date: formatDateInputValue(endDate),
+    };
+  }
+
+  const monthNumber = Number(monthInput);
+  const yearNumber = Number(yearInput);
+  if (!monthNumber || !yearNumber) {
+    throw new Error("Please choose a valid month and year.");
+  }
+  const startDate = new Date(yearNumber, monthNumber - 1, 1);
+  const endDate = new Date(yearNumber, monthNumber, 0);
+
+  return {
+    monthLabel: formatMonthLabel(monthNumber, yearNumber),
+    period_type: "monthly" as const,
+    period_start_date: formatDateInputValue(startDate),
+    period_end_date: formatDateInputValue(endDate),
+  };
+}
+
+function formatPeriodLabel(row: VelocityRow) {
+  const type = String(row.period_type || "monthly").toLowerCase();
+  if (type === "weekly") {
+    const start = formatDisplayDate(row.period_start_date);
+    const end = formatDisplayDate(row.period_end_date);
+    return start && end ? `Weekly ${start} - ${end}` : "Weekly";
+  }
+  return "Monthly";
+}
+
+function isMissingPeriodColumnError(error: unknown) {
+  const message = getErrorMessage(error, "").toLowerCase();
+  return (
+    message.includes("period_type") ||
+    message.includes("period_start_date") ||
+    message.includes("period_end_date")
+  );
+}
+
+function stripPeriodColumns(row: VelocityRow) {
+  const { period_type, period_start_date, period_end_date, ...rest } = row;
+  void period_type;
+  void period_start_date;
+  void period_end_date;
+  return rest;
 }
 
 function normalizeText(value: string) {
@@ -491,6 +592,8 @@ export default function KeHeVelocityView() {
 
   const [monthInput, setMonthInput] = useState("2");
   const [yearInput, setYearInput] = useState("2026");
+  const [periodType, setPeriodType] = useState<"monthly" | "weekly">("monthly");
+  const [weekEndingDate, setWeekEndingDate] = useState(getMostRecentSundayInputValue());
   const [showUploadBox, setShowUploadBox] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -584,6 +687,7 @@ export default function KeHeVelocityView() {
           row.description,
           rowRetailer,
           formatFillRate(row.fill_rate),
+          formatPeriodLabel(row),
         ]
           .join(" ")
           .toLowerCase()
@@ -615,6 +719,9 @@ export default function KeHeVelocityView() {
       Eaches: row.eaches,
       Retailer: row.retailer || "",
       "Fill Rate": formatFillRate(row.fill_rate),
+      Period: formatPeriodLabel(row),
+      "Period Start Date": row.period_start_date || "",
+      "Period End Date": row.period_end_date || "",
       "Source File Name": row.source_file_name || "",
     }));
 
@@ -649,7 +756,24 @@ export default function KeHeVelocityView() {
       .from("kehe_velocity")
       .insert(finalRows);
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      if (isMissingPeriodColumnError(insertError)) {
+        const includesWeeklyRows = finalRows.some(
+          (row) => String(row.period_type || "").toLowerCase() === "weekly"
+        );
+        if (includesWeeklyRows) {
+          throw new Error(
+            "Weekly KeHE uploads need the new period columns in Supabase. Run supabase/kehe_velocity_periods.sql, then upload again."
+          );
+        }
+
+        const retryRows = finalRows.map(stripPeriodColumns);
+        const { error: retryError } = await supabase.from("kehe_velocity").insert(retryRows);
+        if (retryError) throw retryError;
+      } else {
+        throw insertError;
+      }
+    }
 
     setShowUploadBox(false);
     await loadRows();
@@ -685,14 +809,24 @@ export default function KeHeVelocityView() {
         raw: false,
       });
 
-      const monthLabel = formatMonthLabel(Number(monthInput), Number(yearInput));
+      const uploadPeriod = buildUploadPeriodMetadata({
+        periodType,
+        monthInput,
+        yearInput,
+        weekEndingDate,
+      });
       const parsedRows = parseKeheWorksheet(
         rawRows,
-        monthLabel,
+        uploadPeriod.monthLabel,
         file.name,
         productMap,
         locations
-      );
+      ).map((row) => ({
+        ...row,
+        period_type: uploadPeriod.period_type,
+        period_start_date: uploadPeriod.period_start_date,
+        period_end_date: uploadPeriod.period_end_date,
+      }));
 
       if (!parsedRows.length) {
         alert("No KeHe Velocity rows were parsed from the file.");
@@ -839,37 +973,67 @@ export default function KeHeVelocityView() {
 
           {showUploadBox && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="grid gap-4 md:grid-cols-3">
+              <div className="grid gap-4 md:grid-cols-4">
                 <div>
                   <label className="mb-2 block text-sm font-medium text-slate-700">
-                    Month
+                    Upload Period
                   </label>
                   <select
-                    value={monthInput}
-                    onChange={(e) => setMonthInput(e.target.value)}
+                    value={periodType}
+                    onChange={(e) => setPeriodType(e.target.value as "monthly" | "weekly")}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
                   >
-                    {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                      <option key={m} value={String(m)}>
-                        {new Date(2026, m - 1, 1).toLocaleString("en-US", {
-                          month: "long",
-                        })}
-                      </option>
-                    ))}
+                    <option value="monthly">Monthly</option>
+                    <option value="weekly">Weekly</option>
                   </select>
                 </div>
 
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700">
-                    Year
-                  </label>
-                  <Input
-                    value={yearInput}
-                    onChange={(e) => setYearInput(e.target.value)}
-                    placeholder="2026"
-                    className="rounded-xl"
-                  />
-                </div>
+                {periodType === "monthly" ? (
+                  <>
+                    <div>
+                      <label className="mb-2 block text-sm font-medium text-slate-700">
+                        Month
+                      </label>
+                      <select
+                        value={monthInput}
+                        onChange={(e) => setMonthInput(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                          <option key={m} value={String(m)}>
+                            {new Date(2026, m - 1, 1).toLocaleString("en-US", {
+                              month: "long",
+                            })}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm font-medium text-slate-700">
+                        Year
+                      </label>
+                      <Input
+                        value={yearInput}
+                        onChange={(e) => setYearInput(e.target.value)}
+                        placeholder="2026"
+                        className="rounded-xl"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="md:col-span-2">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Week Ending Date
+                    </label>
+                    <Input
+                      type="date"
+                      value={weekEndingDate}
+                      onChange={(e) => setWeekEndingDate(e.target.value)}
+                      className="rounded-xl"
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="mb-2 block text-sm font-medium text-slate-700">
@@ -887,6 +1051,7 @@ export default function KeHeVelocityView() {
               </div>
 
               <p className="mt-3 text-xs text-slate-500">
+                Weekly uploads use the selected week ending date and the prior 6 days for MTD and Last Week.
                 Cases = Shipped ÷ 36.03, rounded. Eaches = Cases × 12.
               </p>
             </div>
@@ -1029,6 +1194,7 @@ export default function KeHeVelocityView() {
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">Eaches</th>
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">Retailer</th>
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">Fill Rate</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Period</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1043,6 +1209,7 @@ export default function KeHeVelocityView() {
                       <td className="px-4 py-3 text-slate-700">{row.eaches}</td>
                       <td className="px-4 py-3 text-slate-700">{row.retailer}</td>
                       <td className="px-4 py-3 text-slate-700">{formatFillRate(row.fill_rate)}</td>
+                      <td className="px-4 py-3 text-slate-700">{formatPeriodLabel(row)}</td>
                     </tr>
                   ))}
                 </tbody>
