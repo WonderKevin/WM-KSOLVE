@@ -194,6 +194,103 @@ function normalizeForMatch(raw: string | null | undefined) {
     .toLowerCase();
 }
 
+const KNOWN_DEDUCTION_TYPES = new Set([
+  "$1 Promotion",
+  "Customer Spoils Allowance",
+  "Pass Thru Deduction",
+  "New Item Setup Fee",
+  "New Item Setup",
+  "Intro Allowance Audit",
+  "Introductory Fee",
+  "WM Invoice",
+]);
+
+function getKnownDeductionType(raw: string | null | undefined) {
+  const normalized = normalizeType(String(raw || ""));
+  return KNOWN_DEDUCTION_TYPES.has(normalized) ? normalized : "";
+}
+
+function extractTextFromExcelBuffer(buffer: Buffer) {
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: false });
+  let text = "";
+
+  for (const sheetName of workbook.SheetNames) {
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+      header: 1,
+      raw: false,
+      defval: "",
+    });
+
+    text +=
+      " " +
+      rows
+        .flat()
+        .map((cell) => String(cell || "").trim())
+        .filter(Boolean)
+        .join(" ");
+  }
+
+  return text.trim();
+}
+
+async function extractTextFromPdfBuffer(buffer: Buffer) {
+  try {
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const pdf = await pdfjsLib.getDocument(new Uint8Array(buffer)).promise;
+
+    const pageTexts: string[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+      const page = await pdf.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      pageTexts.push(
+        textContent.items
+          .map((item: unknown) =>
+            typeof item === "object" && item && "str" in item
+              ? String((item as { str?: string }).str || "")
+              : ""
+          )
+          .filter(Boolean)
+          .join(" ")
+      );
+    }
+
+    return pageTexts.join("\n").trim();
+  } catch (error) {
+    console.warn("Failed reading downloaded PDF text for deduction type mapping:", error);
+    return "";
+  }
+}
+
+async function extractDocumentTextForMapping({
+  buffer,
+  filename,
+  contentType,
+}: {
+  buffer: Buffer;
+  filename: string;
+  contentType: string;
+}) {
+  const lowerName = filename.toLowerCase();
+  const lowerContentType = contentType.toLowerCase();
+
+  if (
+    lowerName.endsWith(".xlsx") ||
+    lowerName.endsWith(".xls") ||
+    lowerContentType.includes("spreadsheet") ||
+    lowerContentType.includes("excel")
+  ) {
+    return extractTextFromExcelBuffer(buffer);
+  }
+
+  if (lowerName.endsWith(".pdf") || lowerContentType.includes("pdf")) {
+    return extractTextFromPdfBuffer(buffer);
+  }
+
+  return "";
+}
+
 function getInvoiceType(row: KsolveSearchRow) {
   if (row.ChargeTypeCode === "PV") return "WM Invoice";
   if (row.DocumentUrl) return "WM Invoice";
@@ -210,7 +307,7 @@ function getInvoiceType(row: KsolveSearchRow) {
     return "Pass Thru Deduction";
   }
 
-  return "Customer Spoils Allowance";
+  return "Unknown";
 }
 
 async function fetchDeductionTypes(): Promise<DeductionTypeRecord[]> {
@@ -232,19 +329,24 @@ function resolveAutomatedDeductionType({
   document,
   row,
   deductionTypes,
+  documentText,
 }: {
   document: KsolveDocument;
   row: KsolveSearchRow;
   deductionTypes: DeductionTypeRecord[];
+  documentText?: string;
 }) {
+  const invoiceType = getInvoiceType(row);
+  const textType = getKnownDeductionType(documentText);
   const candidates = [
     document.DocumentType,
     document.DocumentDisplayName,
-    getInvoiceType(row),
     row.ChargeTypeCode || "",
+    textType || documentText || "",
+    invoiceType,
   ]
     .map((value) => String(value || "").trim())
-    .filter(Boolean);
+    .filter((value) => value && value !== "Unknown");
 
   const normalizedCandidates = candidates.map(normalizeForMatch).filter(Boolean);
 
@@ -269,6 +371,13 @@ function resolveAutomatedDeductionType({
   if (containsMatch?.deduction_type) {
     return normalizeType(containsMatch.deduction_type);
   }
+
+  for (const candidate of candidates) {
+    const knownType = getKnownDeductionType(candidate);
+    if (knownType) return knownType;
+  }
+
+  if (invoiceType !== "Unknown") return invoiceType;
 
   console.warn(
     `No deduction type mapping found for invoice ${row.InvoiceNumber || "Unknown"}. ` +
@@ -445,6 +554,21 @@ async function uploadBufferToSupabase({
   };
 }
 
+async function syncInvoiceTypeFromUpload(invoice: string, type: string) {
+  if (!invoice || invoice === "Unknown" || !type || type === "Unknown") return;
+
+  const supabase = getSupabaseClient();
+
+  const { error } = await supabase
+    .from("invoices")
+    .update({ type, doc_status: true })
+    .eq("invoice_number", invoice);
+
+  if (error) {
+    console.warn(`Failed syncing invoice ${invoice} from upload category: ${error.message}`);
+  }
+}
+
 async function uploadDocumentToSupabase({
   document,
   row,
@@ -476,11 +600,17 @@ async function uploadDocumentToSupabase({
 
   const arrayBuffer = await downloadResponse.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
+  const documentText = await extractDocumentTextForMapping({
+    buffer,
+    filename: document.DocumentDisplayName,
+    contentType,
+  });
 
   const category = resolveAutomatedDeductionType({
     document,
     row,
     deductionTypes,
+    documentText,
   });
 
   const uploaded = await uploadBufferToSupabase({
@@ -493,6 +623,8 @@ async function uploadDocumentToSupabase({
     invoice: row.InvoiceNumber || document.DocumentDisplayName,
     pdfDate: formatDisplayDate(row.CheckDate || row.InvoiceDate),
   });
+
+  await syncInvoiceTypeFromUpload(row.InvoiceNumber || "", category);
 
   return {
     ...document,

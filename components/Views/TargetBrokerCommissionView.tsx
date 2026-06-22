@@ -179,7 +179,15 @@ function getStatusRowClass(status: BrokerageStatus) {
   return "bg-white";
 }
 
-export default function TargetBrokerCommissionView() {
+type TargetBrokerCommissionViewProps = {
+  title?: string;
+  subtitle?: string;
+};
+
+export default function TargetBrokerCommissionView({
+  title = "Target Brokerage Commission",
+  subtitle = "Target brokerage summary by month and reason code description.",
+}: TargetBrokerCommissionViewProps) {
   const [rows, setRows] = useState<TargetInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingStatusKey, setSavingStatusKey] = useState<string | null>(null);
@@ -311,11 +319,11 @@ export default function TargetBrokerCommissionView() {
     <div className="space-y-4">
       <div className="rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
         <h1 className="text-xl font-bold tracking-tight text-slate-900">
-          Target Brokerage Commission
+          {title}
         </h1>
 
         <p className="mt-1 text-xs text-slate-500">
-          Target brokerage summary by month and reason code description.
+          {subtitle}
         </p>
       </div>
 

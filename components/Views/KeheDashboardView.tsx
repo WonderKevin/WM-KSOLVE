@@ -33,6 +33,18 @@ type VelocityRow = {
   source_file_name?: string;
 };
 
+type FillRatePeriodColumn = {
+  key: string;
+  label: string;
+  month?: string;
+  kind: "month" | "mtd" | "last-week";
+};
+
+type FillRatePeriodStats = {
+  sum: number;
+  count: number;
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function normalizeMonthLabel(value: string) {
   return String(value || "")
@@ -198,26 +210,94 @@ function averageFillRate(sum: number, count: number) {
   return count > 0 ? sum / count : null;
 }
 
+function buildFillRatePeriodColumns(today = new Date()): FillRatePeriodColumn[] {
+  const monthColumns = [3, 2, 1].map((monthsBack) => {
+    const date = new Date(today.getFullYear(), today.getMonth() - monthsBack, 1);
+    const month = monthLabelFromDate(date);
+    return {
+      key: month,
+      label: month.replace(/ '\d{2}$/, ""),
+      month,
+      kind: "month" as const,
+    };
+  });
+
+  return [
+    ...monthColumns,
+    {
+      key: "month-to-date",
+      label: "Month to Date",
+      month: monthLabelFromDate(new Date(today.getFullYear(), today.getMonth(), 1)),
+      kind: "mtd",
+    },
+    {
+      key: "last-week",
+      label: "Last Week",
+      kind: "last-week",
+    },
+  ];
+}
+
+function addFillRatePeriodStat(
+  periods: Map<string, FillRatePeriodStats>,
+  key: string,
+  fillRate: number,
+) {
+  if (!periods.has(key)) {
+    periods.set(key, { sum: 0, count: 0 });
+  }
+  const stats = periods.get(key)!;
+  stats.sum += fillRate;
+  stats.count += 1;
+}
+
+function getFillRatePeriodValue(
+  periods: Map<string, FillRatePeriodStats>,
+  key: string,
+) {
+  const stats = periods.get(key);
+  return stats ? averageFillRate(stats.sum, stats.count) ?? 0 : 0;
+}
+
 function buildFillRateSummaries(rows: VelocityRow[] | undefined, referenceMonth: string) {
-  const retailerMap = new Map<string, { retailer: string; sum: number; count: number }>();
+  const periodColumns = buildFillRatePeriodColumns();
+  const periodKeysByMonth = new Map<string, string[]>();
+
+  for (const column of periodColumns) {
+    if (!column.month) continue;
+    const month = normalizeMonthLabel(column.month);
+    periodKeysByMonth.set(month, [...(periodKeysByMonth.get(month) ?? []), column.key]);
+  }
+
+  const retailerMap = new Map<
+    string,
+    { retailer: string; periods: Map<string, FillRatePeriodStats> }
+  >();
   const areaMap = new Map<
     string,
     {
       retailer: string;
       area: string;
-      sum: number;
-      count: number;
-      stores: Map<string, { customer: string; sum: number; count: number }>;
+      periods: Map<string, FillRatePeriodStats>;
+      stores: Map<string, { customer: string; periods: Map<string, FillRatePeriodStats> }>;
     }
   >();
   let totalSum = 0;
   let totalCount = 0;
+  const referenceMonthNorm = normalizeMonthLabel(referenceMonth);
 
   for (const row of rows ?? []) {
-    if (normalizeMonthLabel(row.month) !== referenceMonth) continue;
-
+    const rowMonth = normalizeMonthLabel(row.month);
     const fillRate = parseFillRateValue(row.fill_rate);
     if (fillRate === null) continue;
+
+    if (referenceMonthNorm && rowMonth === referenceMonthNorm) {
+      totalSum += fillRate;
+      totalCount += 1;
+    }
+
+    const periodKeys = periodKeysByMonth.get(rowMonth) ?? [];
+    if (!periodKeys.length) continue;
 
     const retailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
     const area = String(row.retailer_area || "").replace(/\u00a0/g, " ").trim();
@@ -225,11 +305,12 @@ function buildFillRateSummaries(rows: VelocityRow[] | undefined, referenceMonth:
     if (!retailer) continue;
 
     if (!retailerMap.has(retailer)) {
-      retailerMap.set(retailer, { retailer, sum: 0, count: 0 });
+      retailerMap.set(retailer, { retailer, periods: new Map() });
     }
     const retailerEntry = retailerMap.get(retailer)!;
-    retailerEntry.sum += fillRate;
-    retailerEntry.count += 1;
+    for (const key of periodKeys) {
+      addFillRatePeriodStat(retailerEntry.periods, key, fillRate);
+    }
 
     if (area) {
       const areaKey = `${retailer}||${area}`;
@@ -237,46 +318,60 @@ function buildFillRateSummaries(rows: VelocityRow[] | undefined, referenceMonth:
         areaMap.set(areaKey, {
           retailer,
           area,
-          sum: 0,
-          count: 0,
+          periods: new Map(),
           stores: new Map(),
         });
       }
       const areaEntry = areaMap.get(areaKey)!;
-      areaEntry.sum += fillRate;
-      areaEntry.count += 1;
+      for (const key of periodKeys) {
+        addFillRatePeriodStat(areaEntry.periods, key, fillRate);
+      }
 
       if (customer) {
         if (!areaEntry.stores.has(customer)) {
-          areaEntry.stores.set(customer, { customer, sum: 0, count: 0 });
+          areaEntry.stores.set(customer, { customer, periods: new Map() });
         }
         const storeEntry = areaEntry.stores.get(customer)!;
-        storeEntry.sum += fillRate;
-        storeEntry.count += 1;
+        for (const key of periodKeys) {
+          addFillRatePeriodStat(storeEntry.periods, key, fillRate);
+        }
       }
     }
-
-    totalSum += fillRate;
-    totalCount += 1;
   }
 
   return {
+    periodColumns,
     overall: averageFillRate(totalSum, totalCount),
     retailerRows: Array.from(retailerMap.values())
       .map((row) => ({
         retailer: row.retailer,
-        fillRate: averageFillRate(row.sum, row.count),
+        fillRates: Object.fromEntries(
+          periodColumns.map((column) => [
+            column.key,
+            getFillRatePeriodValue(row.periods, column.key),
+          ]),
+        ) as Record<string, number>,
       }))
       .sort((a, b) => sortRetailersForChart(a.retailer, b.retailer)),
     areaRows: Array.from(areaMap.values())
       .map((row) => ({
         retailer: row.retailer,
         area: row.area,
-        fillRate: averageFillRate(row.sum, row.count),
+        fillRates: Object.fromEntries(
+          periodColumns.map((column) => [
+            column.key,
+            getFillRatePeriodValue(row.periods, column.key),
+          ]),
+        ) as Record<string, number>,
         stores: Array.from(row.stores.values())
           .map((store) => ({
             customer: store.customer,
-            fillRate: averageFillRate(store.sum, store.count),
+            fillRates: Object.fromEntries(
+              periodColumns.map((column) => [
+                column.key,
+                getFillRatePeriodValue(store.periods, column.key),
+              ]),
+            ) as Record<string, number>,
           }))
           .sort((a, b) => a.customer.localeCompare(b.customer)),
       }))
@@ -1304,10 +1399,10 @@ function AreaRow({
 // ── Analytics Header (frozen/sticky) ─────────────────────────────────────────
 function FillRateAreaRow({
   row,
-  referenceMonth,
+  periodColumns,
 }: {
   row: ReturnType<typeof buildFillRateSummaries>["areaRows"][0];
-  referenceMonth: string;
+  periodColumns: FillRatePeriodColumn[];
 }) {
   const [open, setOpen] = useState(false);
 
@@ -1339,17 +1434,23 @@ function FillRateAreaRow({
         <td className="px-4 py-3 text-right text-slate-700">
           {row.stores.length}
         </td>
-        <td
-          className={`px-4 py-3 text-right font-semibold ${getFillRateTone(row.fillRate)}`}
-        >
-          {formatFillRate(row.fillRate)}
-        </td>
+        {periodColumns.map((column) => {
+          const fillRate = row.fillRates[column.key] ?? 0;
+          return (
+            <td
+              key={column.key}
+              className={`px-4 py-3 text-right font-semibold ${getFillRateTone(fillRate)}`}
+            >
+              {formatFillRate(fillRate)}
+            </td>
+          );
+        })}
       </tr>
 
       {open && (
         <tr>
           <td
-            colSpan={4}
+            colSpan={3 + periodColumns.length}
             className="px-0 py-0 bg-slate-50 border-t border-slate-100"
           >
             <div className="px-6 py-4">
@@ -1359,9 +1460,14 @@ function FillRateAreaRow({
                     <th className="pb-2 text-left font-semibold text-slate-500 pr-4">
                       Store
                     </th>
-                    <th className="pb-2 text-right font-semibold text-slate-500 w-36">
-                      Fill Rate ({referenceMonth})
-                    </th>
+                    {periodColumns.map((column) => (
+                      <th
+                        key={column.key}
+                        className="pb-2 text-right font-semibold text-slate-500 w-28"
+                      >
+                        {column.label}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -1370,16 +1476,22 @@ function FillRateAreaRow({
                       key={store.customer}
                       className="border-b border-slate-100 last:border-0"
                     >
-                      <td className="py-2 pr-4 text-slate-700 font-medium">
-                        {store.customer}
-                      </td>
-                      <td
-                        className={`py-2 text-right font-semibold ${getFillRateTone(store.fillRate)}`}
-                      >
-                        {formatFillRate(store.fillRate)}
-                      </td>
-                    </tr>
-                  ))}
+                        <td className="py-2 pr-4 text-slate-700 font-medium">
+                          {store.customer}
+                        </td>
+                        {periodColumns.map((column) => {
+                          const fillRate = store.fillRates[column.key] ?? 0;
+                          return (
+                            <td
+                              key={column.key}
+                              className={`py-2 text-right font-semibold ${getFillRateTone(fillRate)}`}
+                            >
+                              {formatFillRate(fillRate)}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
                 </tbody>
               </table>
             </div>
@@ -2058,7 +2170,7 @@ function AnalyticsTab({
               Fill Rate Summary
             </h3>
             <p className="mt-1 text-sm text-slate-500">
-              {ctx.lastMonth} fill rate from KeHE Velocity.
+              Rolling fill rate from KeHE Velocity.
             </p>
           </div>
           <div className="inline-flex rounded-2xl bg-slate-100 p-1">
@@ -2089,7 +2201,7 @@ function AnalyticsTab({
 
         {!hasRows ? (
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            No fill rate data found for {ctx.lastMonth}.
+            No fill rate data found for the rolling fill-rate periods.
           </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-200">
@@ -2110,9 +2222,14 @@ function AnalyticsTab({
                         Total Stores
                       </th>
                     )}
-                    <th className="px-4 py-3 text-right font-semibold text-slate-700">
-                      Fill Rate ({ctx.lastMonth})
-                    </th>
+                    {fillRateSummary.periodColumns.map((column) => (
+                      <th
+                        key={column.key}
+                        className="px-4 py-3 text-right font-semibold text-slate-700"
+                      >
+                        {column.label}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -2125,18 +2242,24 @@ function AnalyticsTab({
                           <td className="px-4 py-3 text-slate-700">
                             {row.retailer}
                           </td>
-                          <td
-                            className={`px-4 py-3 text-right font-semibold ${getFillRateTone(row.fillRate)}`}
-                          >
-                            {formatFillRate(row.fillRate)}
-                          </td>
+                          {fillRateSummary.periodColumns.map((column) => {
+                            const fillRate = row.fillRates[column.key] ?? 0;
+                            return (
+                              <td
+                                key={column.key}
+                                className={`px-4 py-3 text-right font-semibold ${getFillRateTone(fillRate)}`}
+                              >
+                                {formatFillRate(fillRate)}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))
                     : fillRateSummary.areaRows.map((row) => (
                         <FillRateAreaRow
                           key={`${row.retailer}-${row.area}`}
                           row={row}
-                          referenceMonth={ctx.lastMonth}
+                          periodColumns={fillRateSummary.periodColumns}
                         />
                       ))}
                 </tbody>

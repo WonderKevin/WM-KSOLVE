@@ -94,7 +94,10 @@ function formatMonthFromDate(value: string): string {
 
 function formatCheckDate(value: string): string {
   if (!value) return "-";
-  const parsed = new Date(value);
+  const iso = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const parsed = iso
+    ? new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]))
+    : new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString("en-US", {
     month: "long",

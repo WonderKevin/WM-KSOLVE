@@ -138,6 +138,29 @@ function normalizeType(raw: string) {
   return raw.replace(/\s+/g, " ").trim() || "Unknown";
 }
 
+const KNOWN_DEDUCTION_TYPES = new Set([
+  "$1 Promotion",
+  "Customer Spoils Allowance",
+  "Pass Thru Deduction",
+  "New Item Setup Fee",
+  "New Item Setup",
+  "Intro Allowance Audit",
+  "Introductory Fee",
+  "WM Invoice",
+]);
+
+function normalizeForMapping(raw: string | null | undefined) {
+  return normalizeType(String(raw || ""))
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function getKnownDeductionType(raw: string | null | undefined) {
+  const normalized = normalizeType(String(raw || ""));
+  return KNOWN_DEDUCTION_TYPES.has(normalized) ? normalized : "";
+}
+
 function normalizeDocDate(raw: string) {
   const cleaned = raw.replace(/\s+/g, "").trim();
   const match = cleaned.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
@@ -688,16 +711,16 @@ async function extractDocumentMetadata(
   
 
   const findHeaderMatch = (headerText: string) => {
-    const normalizedHeader = cleanText(headerText).toLowerCase();
+    const normalizedHeader = normalizeForMapping(cleanText(headerText));
 
     const exactMatch = (deductionTypes || []).find((d) =>
-      cleanText(d.document_type).toLowerCase() === normalizedHeader
+      normalizeForMapping(cleanText(d.document_type)) === normalizedHeader
     );
     if (exactMatch) return exactMatch;
 
     const containsMatch = (deductionTypes || []).find((d) => {
-      const docType = cleanText(d.document_type).toLowerCase();
-      return docType && normalizedHeader.includes(docType);
+      const docType = normalizeForMapping(cleanText(d.document_type));
+      return docType && (normalizedHeader.includes(docType) || docType.includes(normalizedHeader));
     });
     if (containsMatch) return containsMatch;
 
@@ -786,10 +809,18 @@ async function extractDocumentMetadata(
 
   if (detected === "pdf") {
     const parsed = await extractPdfMetadata(file);
+    const mappedType =
+      parsed.category !== "Unknown" ? findHeaderMatch(parsed.category) : null;
+    const knownType = getKnownDeductionType(parsed.category);
+
     return {
       ...parsed,
+      category:
+        mappedType?.deduction_type ||
+        knownType ||
+        parsed.category,
       file_type: "pdf",
-      detected_name: parsed.category,
+      detected_name: mappedType?.document_type || parsed.category,
     };
   }
 
@@ -1955,7 +1986,7 @@ async function replaceDatasetRowsForInvoice(
     throw new Error(`No check date found in invoices for ${ni}. Upload the invoice Excel first.`);
   }
 
-  const finalType = normalizeType(categoryFallback || it || "WM Invoice");
+  const finalType = normalizeType(categoryFallback || it || "Unknown");
   console.log("[replaceDatasetRowsForInvoice] finalType normalized:", finalType);
 
   if (!detailRows.length) {
@@ -2047,6 +2078,7 @@ async function reprocessAllUploads(
       try {
         const meta = await extractDocumentMetadata(f, deductionTypes);
         if (meta.category && meta.category !== "Unknown") effectiveCategory = meta.category;
+        else if (isLegacyAutomationFallbackUpload(u)) effectiveCategory = "Unknown";
         if (meta.pdf_date && meta.pdf_date !== "Unknown") effectivePdfDate = meta.pdf_date;
       } catch (metaErr) {
         console.warn(`[reprocess] Metadata refresh failed for ${u.file_name}; using stored upload values.`, metaErr);
@@ -2452,7 +2484,10 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
           const matchedInvoice = invoiceLookup.get(ni);
           if (!matchedInvoice) { showToast(`${file.name}: invoice ${meta.invoice} not in invoices file.`, "error"); skip++; continue; }
 
-          const knownTypes = deductionTypes.map((t) => t.deduction_type.toLowerCase());
+          const knownTypes = [
+            ...deductionTypes.map((t) => t.deduction_type.toLowerCase()),
+            ...Array.from(KNOWN_DEDUCTION_TYPES).map((type) => type.toLowerCase()),
+          ];
           const isUnknownType = !meta.category || meta.category === "Unknown" || !knownTypes.includes(meta.category.toLowerCase());
 
           if (isUnknownType) {
@@ -2977,5 +3012,17 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function isLegacyAutomationFallbackUpload(upload: Pick<UploadRecord, "file_name" | "category" | "invoice">) {
+  const fileName = String(upload.file_name || "").trim().toLowerCase();
+  const category = normalizeType(String(upload.category || ""));
+  const invoice = normalizeInvoiceNumber(upload.invoice || "");
+
+  return (
+    category === "Customer Spoils Allowance" &&
+    /backup\s*document|imageit/i.test(fileName) &&
+    !/^C[NS]/i.test(invoice)
   );
 }

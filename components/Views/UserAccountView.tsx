@@ -24,6 +24,7 @@ type UserPermissionRow = {
 
   can_view_database_ksolve_invoices: boolean;
   can_view_database_target_invoices: boolean;
+  can_view_database_unfi_invoices: boolean;
   can_view_database_kehe_velocity: boolean;
   can_view_database_tony_velocity: boolean;
   can_view_database_product_list: boolean;
@@ -72,6 +73,7 @@ const PERMISSION_GROUPS: Array<{
     children: [
       "can_view_database_ksolve_invoices",
       "can_view_database_target_invoices",
+      "can_view_database_unfi_invoices",
       "can_view_database_kehe_velocity",
       "can_view_database_tony_velocity",
       "can_view_database_product_list",
@@ -104,6 +106,7 @@ const LABEL_MAP: Record<string, string> = {
 
   can_view_database_ksolve_invoices: "Ksolve Invoices",
   can_view_database_target_invoices: "Target Invoices",
+  can_view_database_unfi_invoices: "UNFI Invoices",
   can_view_database_kehe_velocity: "KeHe Velocity",
   can_view_database_tony_velocity: "Tony's Velocity",
   can_view_database_product_list: "Product List",
@@ -131,6 +134,7 @@ const DEFAULT_PERMISSION_VALUES = {
 
   can_view_database_ksolve_invoices: false,
   can_view_database_target_invoices: false,
+  can_view_database_unfi_invoices: false,
   can_view_database_kehe_velocity: false,
   can_view_database_tony_velocity: false,
   can_view_database_product_list: false,

@@ -82,6 +82,12 @@ function parseUsDate(value: string | null | undefined) {
     if (!Number.isNaN(date.getTime())) return date;
   }
 
+  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
   const fallback = new Date(trimmed);
   if (!Number.isNaN(fallback.getTime())) return fallback;
 

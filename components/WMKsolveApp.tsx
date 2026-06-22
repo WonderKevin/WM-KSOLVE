@@ -37,6 +37,7 @@ import TonyVelocityView from "@/components/Views/TonyVelocityView";
 import HomeView from "@/components/Views/HomeView";
 import TargetView from "@/components/Views/TargetView";
 import TargetBrokerCommissionView from "@/components/Views/TargetBrokerCommissionView";
+import UnfiInvoicesView from "@/components/Views/UnfiInvoicesView";
 
 type Permissions = {
   email: string;
@@ -55,6 +56,7 @@ type Permissions = {
 
   can_view_database_ksolve_invoices: boolean;
   can_view_database_target_invoices?: boolean;
+  can_view_database_unfi_invoices?: boolean;
   can_view_database_kehe_velocity: boolean;
   can_view_database_tony_velocity?: boolean;
   can_view_database_product_list: boolean;
@@ -212,6 +214,7 @@ export default function WMKsolveApp() {
 
           can_view_database_ksolve_invoices: isAdmin,
           can_view_database_target_invoices: isAdmin,
+          can_view_database_unfi_invoices: isAdmin,
           can_view_database_kehe_velocity: isAdmin,
           can_view_database_tony_velocity: isAdmin,
           can_view_database_product_list: isAdmin,
@@ -283,6 +286,12 @@ export default function WMKsolveApp() {
             key: "target-broker-commission",
           }
         : null,
+      permissions.can_view_target_broker_commission
+        ? {
+            label: "Heather Chadbourne Broker Commission",
+            key: "heather-chadbourne-broker-commission",
+          }
+        : null,
       permissions.can_view_broker_commission_summary
         ? {
             label: "KeHe Broker Commission",
@@ -337,6 +346,10 @@ export default function WMKsolveApp() {
       permissions.can_view_database_target_invoices
         ? { label: "Target Invoices", key: "database-target-invoices" }
         : null,
+      permissions.can_view_database_unfi_invoices ||
+      userEmail.toLowerCase() === "kevin@wondermonday.com"
+        ? { label: "UNFI Invoices", key: "database-unfi-invoices" }
+        : null,
       permissions.can_view_database_kehe_velocity
         ? { label: "KeHe Velocity", key: "database-kehe-velocity" }
         : null,
@@ -382,7 +395,7 @@ export default function WMKsolveApp() {
     }
 
     return items;
-  }, [permissions]);
+  }, [permissions, userEmail]);
 
   const renderContent = () => {
     switch (activeKey) {
@@ -392,6 +405,13 @@ export default function WMKsolveApp() {
         return <TonyDashboardView />;
       case "target-broker-commission":
         return <TargetBrokerCommissionView />;
+      case "heather-chadbourne-broker-commission":
+        return (
+          <TargetBrokerCommissionView
+            title="Heather Chadbourne Broker Commission"
+            subtitle="Target brokerage summary for Heather Chadbourne by month and reason code description."
+          />
+        );
       case "broker-commission-summary":
         return <BrokerCommissionSummaryView />;
       case "broker-commission-data-sets":
@@ -413,6 +433,8 @@ export default function WMKsolveApp() {
         );
       case "database-target-invoices":
         return <TargetView />;
+      case "database-unfi-invoices":
+        return <UnfiInvoicesView />;
       case "database-kehe-velocity":
         return <KeHeVelocityView />;
       case "database-tony-velocity":
