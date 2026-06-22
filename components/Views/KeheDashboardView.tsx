@@ -37,7 +37,7 @@ type FillRatePeriodColumn = {
   key: string;
   label: string;
   month?: string;
-  kind: "month" | "mtd" | "last-week";
+  kind: "month" | "current-month" | "last-week";
 };
 
 type FillRatePeriodStats = {
@@ -211,6 +211,7 @@ function averageFillRate(sum: number, count: number) {
 }
 
 function buildFillRatePeriodColumns(today = new Date()): FillRatePeriodColumn[] {
+  const currentMonth = monthLabelFromDate(new Date(today.getFullYear(), today.getMonth(), 1));
   const monthColumns = [3, 2, 1].map((monthsBack) => {
     const date = new Date(today.getFullYear(), today.getMonth() - monthsBack, 1);
     const month = monthLabelFromDate(date);
@@ -225,10 +226,10 @@ function buildFillRatePeriodColumns(today = new Date()): FillRatePeriodColumn[] 
   return [
     ...monthColumns,
     {
-      key: "month-to-date",
-      label: "Month to Date",
-      month: monthLabelFromDate(new Date(today.getFullYear(), today.getMonth(), 1)),
-      kind: "mtd",
+      key: "current-month",
+      label: currentMonth.replace(/ '\d{2}$/, ""),
+      month: currentMonth,
+      kind: "current-month",
     },
     {
       key: "last-week",
