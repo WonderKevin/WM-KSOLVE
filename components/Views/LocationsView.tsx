@@ -22,6 +22,7 @@ interface Location {
   customer: string;
   retailer_area: string;
   retailer: string;
+  dc?: string | null;
   created_at: string;
 }
 
@@ -29,6 +30,7 @@ type UploadRow = {
   customer: string;
   retailer_area: string;
   retailer: string;
+  dc: string;
 };
 
 export default function LocationsView() {
@@ -45,6 +47,7 @@ export default function LocationsView() {
     customer: "",
     retailer_area: "",
     retailer: "",
+    dc: "",
   });
 
   const [uploadPreview, setUploadPreview] = useState<UploadRow[]>([]);
@@ -93,7 +96,7 @@ export default function LocationsView() {
     if (!query) return locations;
 
     return locations.filter((loc) =>
-      [loc.customer, loc.retailer_area, loc.retailer]
+      [loc.customer, loc.retailer_area, loc.retailer, loc.dc || ""]
         .join(" ")
         .toLowerCase()
         .includes(query)
@@ -115,26 +118,29 @@ export default function LocationsView() {
       customer: "",
       retailer_area: "",
       retailer: "",
+      dc: "",
     });
   };
 
   const handleSave = async () => {
-    const { customer, retailer_area, retailer } = form;
+    const { customer, retailer_area, retailer, dc } = form;
 
     if (!customer.trim() || !retailer_area.trim() || !retailer.trim()) {
-      setError("All three fields are required.");
+      setError("Customer, Retailer Area, and Retailer are required.");
       return;
     }
 
     setSaving(true);
 
-    const { error } = await supabase.from("locations").insert([
-      {
-        customer: customer.trim(),
-        retailer_area: retailer_area.trim(),
-        retailer: retailer.trim(),
-      },
-    ]);
+    const payload: Record<string, string> = {
+      customer: customer.trim(),
+      retailer_area: retailer_area.trim(),
+      retailer: retailer.trim(),
+    };
+
+    if (dc.trim()) payload.dc = dc.trim();
+
+    const { error } = await supabase.from("locations").insert([payload]);
 
     if (error) {
       setError(error.message);
@@ -156,7 +162,7 @@ export default function LocationsView() {
       Customer: loc.customer,
       "Retailer Area": loc.retailer_area,
       Retailer: loc.retailer,
-      
+      DC: loc.dc || "",
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
@@ -177,7 +183,7 @@ export default function LocationsView() {
       .replace(/[_-]+/g, " ")
       .replace(/\s+/g, " ");
 
-  const getCellValue = (row: Record<string, any>, headerNames: string[]) => {
+  const getCellValue = (row: Record<string, unknown>, headerNames: string[]) => {
     const entries = Object.entries(row);
 
     for (const [key, value] of entries) {
@@ -190,23 +196,69 @@ export default function LocationsView() {
     return "";
   };
 
-  const parseUploadRows = (rawRows: Record<string, any>[]): UploadRow[] => {
-    return rawRows
-      .map((row) => {
-        const customer = getCellValue(row, ["customer"]);
-        const retailer_area = getCellValue(row, [
-          "retail area",
-          "retailer area",
-        ]);
-        const retailer = getCellValue(row, ["retailer"]);
+  const inferRetailerFromArea = (retailerArea: string, customer: string) => {
+    const source = `${retailerArea} ${customer}`.toLowerCase();
 
-        return {
+    if (
+      source.includes("kroger") ||
+      source.includes("dillon") ||
+      source.includes("ralphs") ||
+      source.includes("smith") ||
+      source.includes("fred meyer") ||
+      source.includes("qfc") ||
+      source.includes("harris teeter") ||
+      source.includes("king soopers") ||
+      source.includes("city market") ||
+      source.includes("frys") ||
+      source.includes("fry's") ||
+      source.includes("pick n save") ||
+      source.includes("metro market") ||
+      source.includes("mariano")
+    ) {
+      return "Kroger";
+    }
+
+    if (source.includes("fresh thyme")) return "Fresh Thyme";
+    if (source.includes("heb") || source.includes("h-e-b")) return "HEB";
+
+    return "INFRA & Others";
+  };
+
+  const parseUploadRows = (rawRows: Record<string, unknown>[]): UploadRow[] => {
+    const uniqueRows = new Map<string, UploadRow>();
+
+    for (const rawRow of rawRows) {
+      const customer = getCellValue(rawRow, ["customer"]);
+      const retailer_area = getCellValue(rawRow, [
+        "retail area",
+        "retailer area",
+      ]);
+      const retailer =
+        getCellValue(rawRow, ["retailer"]) ||
+        inferRetailerFromArea(retailer_area, customer);
+      const dc = getCellValue(rawRow, [
+        "dc",
+        "distribution center",
+        "distribution centre",
+      ]);
+
+      if (!customer || !retailer_area || !retailer) continue;
+
+      const key = `${customer.trim().toLowerCase()}__${retailer_area
+        .trim()
+        .toLowerCase()}__${dc.trim().toLowerCase()}`;
+
+      if (!uniqueRows.has(key)) {
+        uniqueRows.set(key, {
           customer,
           retailer_area,
           retailer,
-        };
-      })
-      .filter((row) => row.customer && row.retailer_area && row.retailer);
+          dc,
+        });
+      }
+    }
+
+    return Array.from(uniqueRows.values());
   };
 
   const handleFileUpload = async (
@@ -230,7 +282,7 @@ export default function LocationsView() {
       }
 
       const worksheet = workbook.Sheets[firstSheetName];
-      const rawRows = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, {
+      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
         defval: "",
       });
 
@@ -243,7 +295,7 @@ export default function LocationsView() {
 
       if (!parsedRows.length) {
         setUploadError(
-          "No valid rows found. Make sure the file has columns: Customer, Retail Area, Retailer."
+          "No valid rows found. Make sure the file has Customer and Retailer Area columns. Retailer and DC are optional."
         );
         return;
       }
@@ -272,6 +324,7 @@ export default function LocationsView() {
       customer: row.customer.trim(),
       retailer_area: row.retailer_area.trim(),
       retailer: row.retailer.trim(),
+      ...(row.dc.trim() ? { dc: row.dc.trim() } : {}),
     }));
 
     const { error } = await supabase.from("locations").insert(payload);
@@ -342,16 +395,17 @@ export default function LocationsView() {
                   <Input
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search customer, retailer area, or retailer..."
+                    placeholder="Search customer, retailer area, retailer, or DC..."
                     className="rounded-xl pl-10"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-4 bg-slate-50 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+              <div className="grid grid-cols-4 gap-4 bg-slate-50 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
                 <div>Customer</div>
                 <div>Retailer Area</div>
                 <div>Retailer</div>
+                <div>DC</div>
               </div>
             </div>
 
@@ -366,13 +420,14 @@ export default function LocationsView() {
                   {filteredLocations.map((loc) => (
                     <div
                       key={loc.id}
-                      className="grid grid-cols-3 gap-4 px-4 py-3 text-sm transition-colors hover:bg-slate-50"
+                      className="grid grid-cols-4 gap-4 px-4 py-3 text-sm transition-colors hover:bg-slate-50"
                     >
                       <div className="font-medium text-slate-800">
                         {loc.customer}
                       </div>
                       <div className="text-slate-600">{loc.retailer_area}</div>
                       <div className="text-slate-600">{loc.retailer}</div>
+                      <div className="text-slate-600">{loc.dc || "-"}</div>
                     </div>
                   ))}
                 </div>
@@ -458,6 +513,23 @@ export default function LocationsView() {
                   />
                 </div>
 
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="dc"
+                    className="text-sm font-medium text-slate-700"
+                  >
+                    DC
+                  </label>
+                  <Input
+                    id="dc"
+                    name="dc"
+                    placeholder="e.g. DC 18"
+                    value={form.dc}
+                    onChange={handleChange}
+                    className="rounded-2xl"
+                  />
+                </div>
+
                 {error && (
                   <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
                     {error}
@@ -495,7 +567,7 @@ export default function LocationsView() {
                     Upload File
                   </h3>
                   <p className="mt-1 text-xs text-slate-500">
-                    Upload a CSV or Excel file with columns: Customer, Retail Area, Retailer.
+                    Upload a CSV or Excel file with Customer and Retailer Area columns. Retailer and DC are optional.
                   </p>
                 </div>
 
@@ -524,16 +596,17 @@ export default function LocationsView() {
                       {uploadPreview.length !== 1 ? "s" : ""} ready to import
                     </div>
                     <div className="max-h-56 overflow-auto">
-                      <div className="grid grid-cols-3 gap-3 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      <div className="grid grid-cols-4 gap-3 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
                         <div>Customer</div>
                         <div>Retail Area</div>
                         <div>Retailer</div>
+                        <div>DC</div>
                       </div>
                       <div className="divide-y divide-slate-100">
                         {uploadPreview.slice(0, 10).map((row, index) => (
                           <div
-                            key={`${row.customer}-${index}`}
-                            className="grid grid-cols-3 gap-3 px-4 py-2 text-sm"
+                            key={`${row.customer}-${row.dc}-${index}`}
+                            className="grid grid-cols-4 gap-3 px-4 py-2 text-sm"
                           >
                             <div className="truncate text-slate-800">
                               {row.customer}
@@ -543,6 +616,9 @@ export default function LocationsView() {
                             </div>
                             <div className="truncate text-slate-600">
                               {row.retailer}
+                            </div>
+                            <div className="truncate text-slate-600">
+                              {row.dc || "-"}
                             </div>
                           </div>
                         ))}

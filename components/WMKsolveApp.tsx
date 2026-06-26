@@ -286,12 +286,6 @@ export default function WMKsolveApp() {
             key: "target-broker-commission",
           }
         : null,
-      permissions.can_view_target_broker_commission
-        ? {
-            label: "Heather Chadbourne Broker Commission",
-            key: "heather-chadbourne-broker-commission",
-          }
-        : null,
       permissions.can_view_broker_commission_summary
         ? {
             label: "KeHe Broker Commission",
@@ -405,13 +399,6 @@ export default function WMKsolveApp() {
         return <TonyDashboardView />;
       case "target-broker-commission":
         return <TargetBrokerCommissionView />;
-      case "heather-chadbourne-broker-commission":
-        return (
-          <TargetBrokerCommissionView
-            title="Heather Chadbourne Broker Commission"
-            subtitle="Target brokerage summary for Heather Chadbourne by month and reason code description."
-          />
-        );
       case "broker-commission-summary":
         return <BrokerCommissionSummaryView />;
       case "broker-commission-data-sets":

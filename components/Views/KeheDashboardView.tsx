@@ -9,7 +9,7 @@ type VelocitySubTabKey =
   | "best-selling-store"
   | "total-cases-per-month"
   | "overall-average-cakes-per-week";
-type PulloutSubTabKey = "by-retailer-area" | "by-retailer-store";
+type PulloutSubTabKey = "by-retailer-area" | "by-retailer-store" | "by-dc";
 type PeriodMode = "lastMonth" | "custom" | "past6Months" | "past12Months";
 type TopN = 5 | 10 | 15 | 20;
 type AnalyticsSection =
@@ -36,6 +36,17 @@ type VelocityRow = {
   period_end_date?: string | null;
 };
 
+type LocationRow = {
+  customer?: unknown;
+  retailer_name?: unknown;
+  location_name?: unknown;
+  retailer_area?: unknown;
+  area?: unknown;
+  region?: unknown;
+  dc?: unknown;
+  distribution_center?: unknown;
+};
+
 type FillRatePeriodColumn = {
   key: string;
   label: string;
@@ -55,6 +66,39 @@ function normalizeMonthLabel(value: string) {
     .replace(/['`]/g, "'")
     .replace(/\s+/g, " ")
     .trim();
+}
+function normalizeLocationMatch(value: unknown) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .toUpperCase()
+    .replace(/&/g, "AND")
+    .replace(/[#]/g, "")
+    .replace(/[-_/(),.]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function getLocationKey(customer: unknown, retailerArea: unknown) {
+  const normalizedCustomer = normalizeLocationMatch(customer);
+  const normalizedArea = normalizeLocationMatch(retailerArea);
+  return normalizedCustomer && normalizedArea
+    ? `${normalizedArea}__${normalizedCustomer}`
+    : "";
+}
+function getLocationCustomer(row: LocationRow) {
+  return row.customer || row.retailer_name || row.location_name || "";
+}
+function getLocationArea(row: LocationRow) {
+  return row.retailer_area || row.area || row.region || "";
+}
+function getLocationDc(row: LocationRow) {
+  return String(row.dc || row.distribution_center || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function getDcForVelocityRow(row: VelocityRow, locationDcByStore: Map<string, string>) {
+  const key = getLocationKey(row.customer, row.retailer_area);
+  return (key && locationDcByStore.get(key)) || "Unassigned DC";
 }
 function getCakeSeriesName(d: string) {
   return String(d || "")
@@ -2492,6 +2536,7 @@ export default function KeheDashboardView() {
   const [pulloutSearchQuery, setPulloutSearchQuery] = useState("");
 
   const [rows, setRows] = useState<VelocityRow[]>([]);
+  const [locations, setLocations] = useState<LocationRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
 
@@ -2531,14 +2576,52 @@ export default function KeheDashboardView() {
           from += pageSize;
         }
         setRows(all);
-      } catch (err: any) {
-        setLoadError(err?.message || "Failed to load KEHE velocity data.");
+
+        try {
+          let locationFrom = 0;
+          let allLocations: LocationRow[] = [];
+          while (true) {
+            const { data, error } = await supabase
+              .from("locations")
+              .select("*")
+              .range(locationFrom, locationFrom + pageSize - 1);
+            if (error) throw error;
+            const batch = (data ?? []) as LocationRow[];
+            allLocations = [...allLocations, ...batch];
+            if (batch.length < pageSize) break;
+            locationFrom += pageSize;
+          }
+          setLocations(allLocations);
+        } catch (locationError) {
+          console.error("Failed to load location DC mappings:", locationError);
+          setLocations([]);
+        }
+      } catch (err: unknown) {
+        setLoadError(
+          err instanceof Error ? err.message : "Failed to load KEHE velocity data.",
+        );
       } finally {
         setLoading(false);
       }
     };
     load();
   }, []);
+
+  const locationDcByStore = useMemo(() => {
+    const map = new Map<string, string>();
+
+    for (const location of locations) {
+      const dc = getLocationDc(location);
+      const key = getLocationKey(
+        getLocationCustomer(location),
+        getLocationArea(location),
+      );
+
+      if (key && dc) map.set(key, dc);
+    }
+
+    return map;
+  }, [locations]);
 
   const retailerOptions = useMemo(
     () => [
@@ -2931,6 +3014,36 @@ export default function KeheDashboardView() {
     };
   }, [pulloutRows, pulloutSelectedMonths, pulloutCustomerFilter]);
 
+  const pulloutByDcTable = useMemo(() => {
+    const mc = [...pulloutSelectedMonths].sort(compareMonthLabelsAsc);
+    const g = new Map<
+      string,
+      {
+        dc: string;
+        months: Record<string, number>;
+        total: number;
+      }
+    >();
+    for (const row of pulloutRows) {
+      const month = normalizeMonthLabel(row.month);
+      const dc = getDcForVelocityRow(row, locationDcByStore);
+      if (!g.has(dc)) {
+        g.set(dc, { dc, months: {}, total: 0 });
+      }
+      const item = g.get(dc)!;
+      item.months[month] = (item.months[month] || 0) + Number(row.cases || 0);
+      item.total += Number(row.cases || 0);
+    }
+    return {
+      monthColumns: mc,
+      rows: Array.from(g.values()).sort((a, b) => {
+        if (a.dc === "Unassigned DC") return 1;
+        if (b.dc === "Unassigned DC") return -1;
+        return b.total - a.total;
+      }),
+    };
+  }, [pulloutRows, pulloutSelectedMonths, locationDcByStore]);
+
   const filteredByAreaRows = useMemo(() => {
     const q = pulloutSearchQuery.trim().toLowerCase();
     if (!q) return pulloutByAreaTable.rows;
@@ -2950,6 +3063,11 @@ export default function KeheDashboardView() {
         r.customer.toLowerCase().includes(q),
     );
   }, [pulloutByStoreTable.rows, pulloutSearchQuery]);
+  const filteredByDcRows = useMemo(() => {
+    const q = pulloutSearchQuery.trim().toLowerCase();
+    if (!q) return pulloutByDcTable.rows;
+    return pulloutByDcTable.rows.filter((r) => r.dc.toLowerCase().includes(q));
+  }, [pulloutByDcTable.rows, pulloutSearchQuery]);
 
   const renderTabButtons = () => (
     <div className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -2997,6 +3115,7 @@ export default function KeheDashboardView() {
         [
           ["by-retailer-area", "Monthly Cases by Retailer Area"],
           ["by-retailer-store", "Monthly Cases by Retailer Store"],
+          ["by-dc", "Monthly Cases per DC"],
         ] as [PulloutSubTabKey, string][]
       ).map(([key, label]) => (
         <button
@@ -3195,7 +3314,9 @@ export default function KeheDashboardView() {
           placeholder={
             pulloutSubTab === "by-retailer-area"
               ? "Search retailer or area..."
-              : "Search retailer, area or customer..."
+              : pulloutSubTab === "by-dc"
+                ? "Search DC..."
+                : "Search retailer, area or customer..."
           }
         />
       </div>
@@ -3284,18 +3405,37 @@ export default function KeheDashboardView() {
         </div>
       );
     const isArea = pulloutSubTab === "by-retailer-area";
+    const isStore = pulloutSubTab === "by-retailer-store";
+    const isDc = pulloutSubTab === "by-dc";
     const monthColumns = isArea
       ? pulloutByAreaTable.monthColumns
-      : pulloutByStoreTable.monthColumns;
-    const tableRows = isArea ? filteredByAreaRows : filteredByStoreRows;
+      : isStore
+        ? pulloutByStoreTable.monthColumns
+        : pulloutByDcTable.monthColumns;
+    const tableRows: Array<{
+      retailer?: string;
+      retailer_area?: string;
+      customer?: string;
+      dc?: string;
+      months: Record<string, number>;
+      total: number;
+    }> = isArea
+      ? filteredByAreaRows
+      : isStore
+        ? filteredByStoreRows
+        : filteredByDcRows;
     const handleExport = () => {
-      const headers = isArea
-        ? ["Retailer", "Retailer Area", ...monthColumns, "Total"]
-        : ["Retailer", "Retailer Area", "Store", ...monthColumns, "Total"];
+      const headers = isDc
+        ? ["DC", ...monthColumns, "Total"]
+        : isArea
+          ? ["Retailer", "Retailer Area", ...monthColumns, "Total"]
+          : ["Retailer", "Retailer Area", "Store", ...monthColumns, "Total"];
       const exportRows = tableRows.map((row) => {
-        const base = isArea
-          ? [row.retailer, row.retailer_area]
-          : [row.retailer, row.retailer_area, (row as any).customer ?? ""];
+        const base = isDc
+          ? [row.dc ?? ""]
+          : isArea
+            ? [row.retailer ?? "", row.retailer_area ?? ""]
+            : [row.retailer ?? "", row.retailer_area ?? "", row.customer ?? ""];
         return [
           ...base,
           ...monthColumns.map((m) => row.months[m] || 0),
@@ -3303,7 +3443,9 @@ export default function KeheDashboardView() {
         ];
       });
       exportToExcel({
-        filename: isArea
+        filename: isDc
+          ? "monthly-cases-per-dc"
+          : isArea
           ? "monthly-cases-by-retailer-area"
           : "monthly-cases-by-retailer-store",
         headers,
@@ -3345,13 +3487,21 @@ export default function KeheDashboardView() {
               <table className="min-w-full text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
                   <tr>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
-                      Retailer
-                    </th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">
-                      Retailer Area
-                    </th>
-                    {!isArea && (
+                    {isDc ? (
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                        DC
+                      </th>
+                    ) : (
+                      <>
+                        <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                          Retailer
+                        </th>
+                        <th className="px-4 py-3 text-left font-semibold text-slate-700">
+                          Retailer Area
+                        </th>
+                      </>
+                    )}
+                    {isStore && (
                       <th className="px-4 py-3 text-left font-semibold text-slate-700">
                         Store
                       </th>
@@ -3375,15 +3525,23 @@ export default function KeheDashboardView() {
                       key={i}
                       className="border-t border-slate-200 hover:bg-slate-50 transition-colors"
                     >
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.retailer}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.retailer_area}
-                      </td>
-                      {!isArea && "customer" in row && (
+                      {isDc ? (
                         <td className="px-4 py-3 text-slate-700">
-                          {(row as any).customer}
+                          {row.dc}
+                        </td>
+                      ) : (
+                        <>
+                          <td className="px-4 py-3 text-slate-700">
+                            {row.retailer}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {row.retailer_area}
+                          </td>
+                        </>
+                      )}
+                      {isStore && (
+                        <td className="px-4 py-3 text-slate-700">
+                          {row.customer}
                         </td>
                       )}
                       {monthColumns.map((m) => (

@@ -12,6 +12,8 @@ type RetailerName =
   | "HEB"
   | "";
 
+type BrokerageStatus = "" | "Invoice Confirmed" | "Bill Paid";
+
 type DatasetRow = {
   id: string;
   month: string;
@@ -59,6 +61,11 @@ type RetailerOverrideRow = {
 type LocationRow = {
   customer: string;
   retailer: string;
+};
+
+type BrokerCommissionStatusRow = {
+  month: string | null;
+  status: BrokerageStatus | null;
 };
 
 type DetailLine = {
@@ -110,6 +117,11 @@ type MonthSummary = {
 const INFRA_HP_CASE_RATE = 35.68;
 const PAGE_SIZE = 1000;
 const TRANSFER_ALLOCATIONS_STORAGE_KEY = "broker-commission-transfer-allocations";
+const STATUS_OPTIONS: Array<{ value: BrokerageStatus; label: string }> = [
+  { value: "", label: "Select Status" },
+  { value: "Invoice Confirmed", label: "Invoice Confirmed" },
+  { value: "Bill Paid", label: "Bill Paid" },
+];
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -120,6 +132,12 @@ function formatMoney(value: number) {
     style: "currency",
     currency: "USD",
   });
+}
+
+function getStatusRowClass(status: BrokerageStatus) {
+  if (status === "Invoice Confirmed") return "bg-[#C1EBE9]";
+  if (status === "Bill Paid") return "bg-[#FFE0C5]";
+  return "bg-white";
 }
 
 function formatMonthShort(value: string): string {
@@ -490,9 +508,9 @@ async function fetchAllLocations(): Promise<LocationRow[]> {
 
     if (error) throw error;
 
-    const batch = ((data ?? []) as any[]).map((r) => ({
-      customer: r.customer ?? "",
-      retailer: r.retailer ?? "",
+    const batch = ((data ?? []) as { customer?: unknown; retailer?: unknown }[]).map((r) => ({
+      customer: String(r.customer ?? ""),
+      retailer: String(r.retailer ?? ""),
     }));
 
     allRows = allRows.concat(batch);
@@ -560,11 +578,23 @@ async function fetchAllVelocityRows(): Promise<VelocityRow[]> {
   return allRows;
 }
 
+async function fetchBrokerCommissionStatuses(): Promise<BrokerCommissionStatusRow[]> {
+  const { data, error } = await supabase
+    .from("broker_commission_statuses")
+    .select("month, status");
+
+  if (error) throw error;
+
+  return (data ?? []) as BrokerCommissionStatusRow[];
+}
+
 export default function BrokerCommissionSummaryView() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [rows, setRows] = useState<DatasetRow[]>([]);
   const [velocityRows, setVelocityRows] = useState<VelocityRow[]>([]);
+  const [monthStatuses, setMonthStatuses] = useState<Record<string, BrokerageStatus>>({});
+  const [savingStatusKey, setSavingStatusKey] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState("All Months");
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>(
     {}
@@ -609,19 +639,22 @@ export default function BrokerCommissionSummaryView() {
     }
 
     let datasetData: DatasetDbRow[] = [];
-    let datasetError: any = null;
+    let datasetError: unknown = null;
 
     let overrideData: RetailerOverrideRow[] = [];
-    let overrideError: any = null;
+    let overrideError: unknown = null;
 
     let locationData: LocationRow[] = [];
-    let locationError: any = null;
+    let locationError: unknown = null;
 
     let invoiceData: InvoiceRow[] = [];
-    let invoiceError: any = null;
+    let invoiceError: unknown = null;
 
     let velocityData: VelocityRow[] = [];
-    let velocityError: any = null;
+    let velocityError: unknown = null;
+
+    let statusData: BrokerCommissionStatusRow[] = [];
+    let statusError: unknown = null;
 
     try {
       [
@@ -637,7 +670,7 @@ export default function BrokerCommissionSummaryView() {
         fetchAllInvoiceRows(),
         fetchAllVelocityRows(),
       ]);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Load error:", error);
     }
 
@@ -681,11 +714,18 @@ export default function BrokerCommissionSummaryView() {
       velocityError = error;
     }
 
+    try {
+      statusData = await fetchBrokerCommissionStatuses();
+    } catch (error) {
+      statusError = error;
+    }
+
     if (datasetError) console.error("Failed to load datasets:", datasetError);
     if (overrideError) console.error("Failed to load overrides:", overrideError);
     if (locationError) console.error("Failed to load locations:", locationError);
     if (invoiceError) console.error("Failed to load invoices:", invoiceError);
     if (velocityError) console.error("Failed to load kehe velocity:", velocityError);
+    if (statusError) console.error("Failed to load broker commission statuses:", statusError);
 
     const overrides = new Map<string, string>(
       overrideData.map((r) => [r.dataset_id, r.retailer])
@@ -762,6 +802,13 @@ export default function BrokerCommissionSummaryView() {
 
     setRows(hydratedRows);
     setVelocityRows(normalizedVelocityRows);
+    setMonthStatuses(
+      Object.fromEntries(
+        statusData
+          .filter((row) => row.month && row.status)
+          .map((row) => [row.month as string, row.status as BrokerageStatus])
+      )
+    );
 
     const months = Array.from(
       new Set(hydratedRows.map((r) => r.month).filter(Boolean))
@@ -1178,15 +1225,47 @@ export default function BrokerCommissionSummaryView() {
     setDraftAllocationInvoices([]);
   };
 
+  const updateMonthStatus = async (month: string, status: BrokerageStatus) => {
+    const previousStatus = monthStatuses[month] ?? "";
+
+    setSavingStatusKey(month);
+    setMonthStatuses((prev) => ({
+      ...prev,
+      [month]: status,
+    }));
+
+    const { error } = status
+      ? await supabase.from("broker_commission_statuses").upsert(
+          {
+            month,
+            status,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "month" }
+        )
+      : await supabase.from("broker_commission_statuses").delete().eq("month", month);
+
+    if (error) {
+      console.error("Broker commission status update error:", error);
+      setMonthStatuses((prev) => ({
+        ...prev,
+        [month]: previousStatus,
+      }));
+      alert("Could not update status. Run supabase/kehe_dc_and_broker_statuses.sql if the status table is not created yet.");
+    }
+
+    setSavingStatusKey(null);
+  };
+
   return (
     <div className="space-y-6">
       <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white px-4 py-4 shadow-sm">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">
-            Broker Commission Summary
+            Kroger Broker Commission Summary
           </h2>
           <p className="text-sm text-slate-500">
-          Broker Commission provides a detailed summary of transactions used to calculate Kroger commission.
+            Broker Commission provides a detailed summary of transactions used to calculate Kroger commission.
           </p>
         </div>
 
@@ -1229,20 +1308,22 @@ export default function BrokerCommissionSummaryView() {
       ) : (
         summary.map((monthSummary) => {
           const isExpanded = expandedMonths[monthSummary.month] ?? true;
+          const monthStatus = monthStatuses[monthSummary.month] ?? "";
+          const statusClass = getStatusRowClass(monthStatus);
 
           return (
-            <div key={monthSummary.month} className="rounded-2xl border bg-white">
-              <button
-                type="button"
-                onClick={() =>
-                  setExpandedMonths((prev) => ({
-                    ...prev,
-                    [monthSummary.month]: !isExpanded,
-                  }))
-                }
-                className="flex w-full items-center justify-between px-5 py-4 text-left"
-              >
-                <div className="flex items-center gap-2">
+            <div key={monthSummary.month} className={`rounded-2xl border ${statusClass}`}>
+              <div className="flex w-full items-center justify-between gap-4 px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpandedMonths((prev) => ({
+                      ...prev,
+                      [monthSummary.month]: !isExpanded,
+                    }))
+                  }
+                  className="flex min-w-[220px] items-center gap-2 text-left"
+                >
                   {isExpanded ? (
                     <ChevronDown className="h-4 w-4 text-slate-500" />
                   ) : (
@@ -1257,9 +1338,9 @@ export default function BrokerCommissionSummaryView() {
                       {monthSummary.retailers.length !== 1 ? "s" : ""}
                     </div>
                   </div>
-                </div>
+                </button>
 
-                <div className="grid grid-cols-2 gap-4 text-right md:grid-cols-4">
+                <div className="grid flex-1 grid-cols-2 items-end gap-4 text-right md:grid-cols-[repeat(4,minmax(100px,1fr))_170px]">
                   <div>
                     <div className="text-xs text-slate-500">WM Invoice</div>
                     <div className="font-semibold text-slate-900">
@@ -1284,8 +1365,28 @@ export default function BrokerCommissionSummaryView() {
                       {formatMoney(monthSummary.grandBrokerFeeTotal)}
                     </div>
                   </div>
+                  <div className="text-left">
+                    <div className="text-xs text-slate-500">Status</div>
+                    <select
+                      value={monthStatus}
+                      disabled={savingStatusKey === monthSummary.month}
+                      onChange={(event) =>
+                        updateMonthStatus(
+                          monthSummary.month,
+                          event.target.value as BrokerageStatus
+                        )
+                      }
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 shadow-sm"
+                    >
+                      {STATUS_OPTIONS.map((option) => (
+                        <option key={option.value || "blank"} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-              </button>
+              </div>
 
               {isExpanded && (
                 <div className="space-y-4 border-t px-5 py-5">
