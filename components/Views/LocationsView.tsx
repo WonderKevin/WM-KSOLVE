@@ -183,6 +183,19 @@ export default function LocationsView() {
       .replace(/[_-]+/g, " ")
       .replace(/\s+/g, " ");
 
+  const normalizeLocationKeyPart = (value: string) =>
+    String(value || "")
+      .replace(/\u00a0/g, " ")
+      .toUpperCase()
+      .replace(/&/g, "AND")
+      .replace(/[#]/g, "")
+      .replace(/[-_/(),.]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const getLocationUploadKey = (customer: string, retailerArea: string) =>
+    `${normalizeLocationKeyPart(retailerArea)}__${normalizeLocationKeyPart(customer)}`;
+
   const getCellValue = (row: Record<string, unknown>, headerNames: string[]) => {
     const entries = Object.entries(row);
 
@@ -244,9 +257,7 @@ export default function LocationsView() {
 
       if (!customer || !retailer_area || !retailer) continue;
 
-      const key = `${customer.trim().toLowerCase()}__${retailer_area
-        .trim()
-        .toLowerCase()}__${dc.trim().toLowerCase()}`;
+      const key = getLocationUploadKey(customer, retailer_area);
 
       if (!uniqueRows.has(key)) {
         uniqueRows.set(key, {
@@ -320,24 +331,76 @@ export default function LocationsView() {
     setUploading(true);
     setUploadError(null);
 
-    const payload = uploadPreview.map((row) => ({
-      customer: row.customer.trim(),
-      retailer_area: row.retailer_area.trim(),
-      retailer: row.retailer.trim(),
-      ...(row.dc.trim() ? { dc: row.dc.trim() } : {}),
-    }));
+    const existingByKey = new Map(
+      locations.map((location) => [
+        getLocationUploadKey(location.customer, location.retailer_area),
+        location,
+      ])
+    );
+    const rowsToInsert: Array<{
+      customer: string;
+      retailer_area: string;
+      retailer: string;
+      dc?: string;
+    }> = [];
+    const rowsToUpdate: Array<{ id: string; dc: string }> = [];
 
-    const { error } = await supabase.from("locations").insert(payload);
+    for (const row of uploadPreview) {
+      const dc = row.dc.trim();
+      const existing = existingByKey.get(
+        getLocationUploadKey(row.customer, row.retailer_area)
+      );
 
-    if (error) {
-      setUploadError(error.message);
-      setUploading(false);
-      return;
+      if (existing) {
+        if (dc && String(existing.dc || "").trim() !== dc) {
+          rowsToUpdate.push({ id: existing.id, dc });
+        }
+        continue;
+      }
+
+      rowsToInsert.push({
+        customer: row.customer.trim(),
+        retailer_area: row.retailer_area.trim(),
+        retailer: row.retailer.trim(),
+        ...(dc ? { dc } : {}),
+      });
+    }
+
+    for (let index = 0; index < rowsToUpdate.length; index += 50) {
+      const batch = rowsToUpdate.slice(index, index + 50);
+      const results = await Promise.all(
+        batch.map((row) =>
+          supabase.from("locations").update({ dc: row.dc }).eq("id", row.id)
+        )
+      );
+      const updateError = results.find((result) => result.error)?.error;
+      if (updateError) {
+        setUploadError(updateError.message);
+        setUploading(false);
+        return;
+      }
+    }
+
+    if (rowsToInsert.length > 0) {
+      const { error } = await supabase.from("locations").insert(rowsToInsert);
+
+      if (error) {
+        setUploadError(error.message);
+        setUploading(false);
+        return;
+      }
     }
 
     handleClose();
     await fetchLocations();
     setUploading(false);
+    alert(
+      `${rowsToUpdate.length.toLocaleString()} location DC value${
+        rowsToUpdate.length !== 1 ? "s" : ""
+      } updated. ${rowsToInsert.length.toLocaleString()} new location${
+        rowsToInsert.length !== 1 ? "s" : ""
+      } imported.`
+    );
   };
 
   return (
