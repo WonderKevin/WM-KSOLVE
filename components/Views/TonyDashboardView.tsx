@@ -1041,6 +1041,7 @@ export default function TonyDashboardView() {
   }, [velocityRows, velocityMonths, selectedVelocityLocation, selectedVelocityLocationKey]);
 
   const pulloutTable = useMemo(() => buildLocationTable(pulloutRows, pulloutMonths), [pulloutRows, pulloutMonths]);
+  const priorityTable = useMemo(() => buildLocationTable(priorityRows, pulloutMonths), [priorityRows, pulloutMonths]);
 
   const analyticsFilteredRows = useMemo(() => {
     const q = normalize(analyticsSearch).toLowerCase();
@@ -1231,15 +1232,16 @@ export default function TonyDashboardView() {
         )}
 
         {!loading && activeTab === "priority-pullout" && (
-          <StoreCasesTable
-            title="Priority Pull Out: Monthly Cases per Store"
-            rows={priorityRows}
-            months={pulloutMonths}
+          <LocationCasesTable
+            title="Priority Pull Out: Monthly Cases per Location"
+            table={priorityTable}
             searchQuery={pulloutSearch}
             emptyText="No priority pull out rows found for the selected filters."
             showAverageColumns={showPulloutAverageColumns}
-            average3={priorityAverage3.stores}
-            average12={priorityAverage12.stores}
+            locationAverage3={priorityAverage3.locations}
+            storeAverage3={priorityAverage3.stores}
+            locationAverage12={priorityAverage12.locations}
+            storeAverage12={priorityAverage12.stores}
           />
         )}
       </div>
