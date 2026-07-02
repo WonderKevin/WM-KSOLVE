@@ -120,6 +120,7 @@ const DEFAULT_PRIORITY_STORES = [
   "MARKET OF CHOICE #7",
   "MARKET OF CHOICE #8",
   "MARKET OF CHOICE #9",
+  "NUGGET MARKET",
   "BRISTOL FARMS #21",
   "FOOD 4 LESS - #11-SLO",
   "FOOD 4 LESS -#1 MARCH LN",
@@ -140,10 +141,30 @@ const DEFAULT_PRIORITY_STORES = [
   "FOOD 4 LESS #17 FAIRFIELD",
 ];
 
+const PRIORITY_PULL_OUT_STORAGE_KEY = "tony-priority-pullout-stores";
+const PRIORITY_PULL_OUT_NUGGET_MIGRATION_KEY = "tony-priority-pullout-add-nugget-market-v1";
+const PRIORITY_PREFIX_STORES = ["NUGGET MARKET"];
+
 function normalize(value: unknown) {
   return String(value ?? "").replace(/\u00a0/g, " ").replace(/[‘’`]/g, "'").replace(/\s+/g, " ").trim();
 }
 function normalizeKey(value: unknown) { return normalize(value).toUpperCase(); }
+function isPriorityStore(store: unknown, prioritySet: Set<string>) {
+  const key = normalizeKey(store);
+  if (!key) return false;
+  if (prioritySet.has(key)) return true;
+
+  return PRIORITY_PREFIX_STORES.some((prefix) => {
+    const prefixKey = normalizeKey(prefix);
+    if (!prioritySet.has(prefixKey)) return false;
+    return key.startsWith(`${prefixKey} `) || key.startsWith(`${prefixKey}-`) || key.startsWith(`${prefixKey}#`);
+  });
+}
+function addRequiredPriorityStores(items: string[]) {
+  const currentKeys = new Set(items.map(normalizeKey));
+  const additions = PRIORITY_PREFIX_STORES.filter((item) => !currentKeys.has(normalizeKey(item)));
+  return additions.length ? [...items, ...additions] : items;
+}
 function normalizeMonthLabel(value: string) { return normalize(value); }
 function getCases(row: TonyVelocityRow) { return Number(row.quantity_shipped || 0); }
 function monthLabel(month: string, year: string) { return `${month} '${String(year).slice(-2)}`; }
@@ -306,7 +327,7 @@ function buildLocationTable(rows: TonyVelocityRow[], months: string[], priorityS
   const locationMap = new Map<string, LocationMonthRow>();
   for (const row of rows) {
     const store = normalize(row.customer) || "Unknown Store";
-    if (prioritySet && !prioritySet.has(normalizeKey(store))) continue;
+    if (prioritySet && !isPriorityStore(store, prioritySet)) continue;
     const location = normalize(row.location) || "Unmapped Location";
     const month = normalizeMonthLabel(row.month);
     const cases = getCases(row);
@@ -340,7 +361,7 @@ function buildRunningAverageMaps(rows: TonyVelocityRow[], months: string[], prio
 
   for (const row of rows) {
     const store = normalize(row.customer) || "Unknown Store";
-    if (prioritySet && !prioritySet.has(normalizeKey(store))) continue;
+    if (prioritySet && !isPriorityStore(store, prioritySet)) continue;
 
     const month = normalizeMonthLabel(row.month);
     if (!selected.has(month)) continue;
@@ -840,12 +861,20 @@ export default function TonyDashboardView() {
   const setPriorityList = (items: string[]) => setPriorityListRaw(Array.from(new Map(items.map((x) => [normalizeKey(x), normalize(x)])).values()).filter(Boolean));
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("tony-priority-pullout-stores");
+    const saved = window.localStorage.getItem(PRIORITY_PULL_OUT_STORAGE_KEY);
     if (saved) {
-      try { setPriorityList(JSON.parse(saved)); } catch { /* ignore */ }
+      try {
+        const parsed = JSON.parse(saved);
+        if (!Array.isArray(parsed)) return;
+        const shouldAddNugget = window.localStorage.getItem(PRIORITY_PULL_OUT_NUGGET_MIGRATION_KEY) !== "1";
+        setPriorityList(shouldAddNugget ? addRequiredPriorityStores(parsed) : parsed);
+        if (shouldAddNugget) window.localStorage.setItem(PRIORITY_PULL_OUT_NUGGET_MIGRATION_KEY, "1");
+      } catch { /* ignore */ }
+    } else {
+      window.localStorage.setItem(PRIORITY_PULL_OUT_NUGGET_MIGRATION_KEY, "1");
     }
   }, []);
-  useEffect(() => { window.localStorage.setItem("tony-priority-pullout-stores", JSON.stringify(priorityList)); }, [priorityList]);
+  useEffect(() => { window.localStorage.setItem(PRIORITY_PULL_OUT_STORAGE_KEY, JSON.stringify(priorityList)); }, [priorityList]);
 
   const loadData = async () => {
     setLoading(true); setError("");
@@ -973,7 +1002,7 @@ export default function TonyDashboardView() {
 
   const velocityRows = useMemo(() => rows.filter((r) => velocityMonths.includes(normalizeMonthLabel(r.month))), [rows, velocityMonths]);
   const pulloutRows = useMemo(() => rows.filter((r) => pulloutMonths.includes(normalizeMonthLabel(r.month))), [rows, pulloutMonths]);
-  const priorityRows = useMemo(() => pulloutRows.filter((r) => prioritySet.has(normalizeKey(r.customer))), [pulloutRows, prioritySet]);
+  const priorityRows = useMemo(() => pulloutRows.filter((r) => isPriorityStore(r.customer, prioritySet)), [pulloutRows, prioritySet]);
 
   const velocityLocationOptions = useMemo(() => {
     const unique = new Map<string, string>();
