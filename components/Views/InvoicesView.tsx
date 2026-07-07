@@ -893,11 +893,25 @@ async function saveProductListEntry(upc: string, description: string): Promise<v
 
 async function fetchInvoiceType(invoiceNumber: string): Promise<string> {
   const norm = normalizeInvoiceNumber(invoiceNumber);
+  const { data: exactInvData, error: exactInvErr } = await supabase
+    .from("invoices")
+    .select("type, invoice_number")
+    .ilike("invoice_number", norm)
+    .limit(1);
+  if (!exactInvErr && exactInvData?.[0]?.type) return exactInvData[0].type;
+
   const { data: invData, error: invErr } = await supabase.from("invoices").select("type, invoice_number").limit(5000);
   if (!invErr) {
     const matched = (invData || []).find((r) => normalizeInvoiceNumber(r.invoice_number || "") === norm);
     if (matched?.type) return matched.type;
   }
+  const { data: exactUpData, error: exactUpErr } = await supabase
+    .from("uploads")
+    .select("category, invoice")
+    .ilike("invoice", norm)
+    .limit(1);
+  if (!exactUpErr && exactUpData?.[0]?.category) return exactUpData[0].category;
+
   const { data: upData, error: upErr } = await supabase.from("uploads").select("category, invoice").limit(5000);
   if (!upErr) {
     const matched = (upData || []).find((r) => normalizeInvoiceNumber(r.invoice || "") === norm);
@@ -909,6 +923,13 @@ async function fetchInvoiceType(invoiceNumber: string): Promise<string> {
 async function fetchInvoiceAmount(invoice: string): Promise<number> {
   const ni = normalizeInvoiceNumber(invoice);
   if (!ni) return 0;
+  const { data: exactData, error: exactError } = await supabase
+    .from("invoices")
+    .select("invoice_number, invoice_amt")
+    .ilike("invoice_number", ni)
+    .limit(1);
+  if (!exactError && exactData?.[0]) return Number(exactData[0].invoice_amt || 0);
+
   const { data, error } = await supabase.from("invoices").select("invoice_number, invoice_amt").limit(5000);
   if (error) return 0;
   const matched = (data || []).find((r) => normalizeInvoiceNumber(r.invoice_number || "") === ni);
@@ -918,6 +939,13 @@ async function fetchInvoiceAmount(invoice: string): Promise<number> {
 async function fetchInvoiceCheckDate(invoice: string): Promise<string> {
   const ni = normalizeInvoiceNumber(invoice);
   if (!ni) return "";
+  const { data: exactData, error: exactError } = await supabase
+    .from("invoices")
+    .select("invoice_number, check_date")
+    .ilike("invoice_number", ni)
+    .limit(1);
+  if (!exactError && exactData?.[0]) return isoDateToMmDdYyyy(exactData[0].check_date || "");
+
   const { data, error } = await supabase.from("invoices").select("invoice_number, check_date").limit(5000);
   if (error) return "";
   const matched = (data || []).find((r) => normalizeInvoiceNumber(r.invoice_number || "") === ni);
@@ -1647,7 +1675,8 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
 
   let epFee = 0;
 
-  // ✅ EP only: read from the SAME ROW only
+  // Read fee rows from the SAME ROW only. MCBP workbooks use "Processing Fee"
+  // while other KeHE workbooks use "EP Fee".
   for (const sheetName of wb.SheetNames) {
     if (epFee) break;
 
@@ -1663,9 +1692,9 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
       for (let ci = 0; ci < row.length; ci++) {
         const cellText = String(row[ci] || "").trim();
 
-        if (/^ep\s*fee:?$/i.test(cellText) || /^ep\s*fee\b/i.test(cellText)) {
-          // Try inline format like "EP Fee: 25.26"
-          const inlineMatch = cellText.match(/ep\s*fee[^0-9]*([\d,]+\.\d{2})/i);
+        if (/^(?:ep|processing)\s*fee:?$/i.test(cellText) || /^(?:ep|processing)\s*fee\b/i.test(cellText)) {
+          // Try inline formats like "EP Fee: 25.26" or "Processing Fee: 65.00"
+          const inlineMatch = cellText.match(/(?:ep|processing)\s*fee[^0-9]*([\d,]+\.\d{2})/i);
           if (inlineMatch) {
             epFee = parseFloat(inlineMatch[1].replace(/,/g, ""));
             break;
@@ -1688,7 +1717,7 @@ function parseExcelProductDetailsRows(buffer: ArrayBuffer): DatasetRow[] {
     }
   }
 
-  console.log("[parseExcelProductDetailsRows] detected EP Fee:", epFee);
+  console.log("[parseExcelProductDetailsRows] detected extra fee:", epFee);
 
   const rawData: Array<{ upc: string; cust: string; amt: number; qty: number | null }> = [];
 
@@ -2121,6 +2150,16 @@ async function reprocessAllUploads(
 async function syncInvoiceFromUpload(invoice: string, type: string) {
   if (!invoice || invoice === "Unknown") return;
   const ni = normalizeInvoiceNumber(invoice);
+  const { data: exactData, error: exactError } = await supabase
+    .from("invoices")
+    .select("id,invoice_number")
+    .ilike("invoice_number", ni)
+    .limit(1);
+  if (!exactError && exactData?.[0]) {
+    await supabase.from("invoices").update({ type: type === "Unknown" ? "" : type, doc_status: true }).eq("id", exactData[0].id);
+    return;
+  }
+
   const { data, error } = await supabase.from("invoices").select("id,invoice_number").limit(5000);
   if (error) return;
   const matched = (data || []).find((r) => normalizeInvoiceNumber(r.invoice_number || "") === ni);

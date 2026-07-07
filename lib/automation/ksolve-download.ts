@@ -53,6 +53,24 @@ type DeductionTypeRecord = {
   deduction_type: string;
 };
 
+type DatasetRow = {
+  upc: string;
+  cust_name: string;
+  amt: number;
+};
+
+type BrokerDatasetInsert = {
+  month: string;
+  check_date: string | null;
+  invoice_date: string | null;
+  invoice: string;
+  type: string;
+  upc: string;
+  item: string;
+  cust_name: string;
+  amt: number;
+};
+
 function parseIsoDate(date: string) {
   return new Date(`${date}T00:00:00`);
 }
@@ -185,6 +203,167 @@ function normalizeType(raw: string) {
   if (/wm\s+invoice/i.test(c) || /wonder\s+monday/i.test(c)) return "WM Invoice";
 
   return String(raw || "").replace(/\s+/g, " ").trim() || "Unknown";
+}
+
+function normalizeInvoiceNumber(raw: string | null | undefined) {
+  return String(raw || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, "")
+    .toUpperCase()
+    .trim();
+}
+
+function normalizeSku(raw: string | null | undefined) {
+  return String(raw || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[\u2212\u2013\u2014]/g, "-")
+    .replace(/\s+/g, "")
+    .replace(/[^A-Za-z0-9-]/g, "")
+    .toUpperCase()
+    .trim();
+}
+
+function isWmInvoiceType(type: string) {
+  return normalizeType(type) === "WM Invoice";
+}
+
+function parseAmount(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return value;
+  const num = Number(String(value).replace(/[$,]/g, "").trim());
+  return Number.isNaN(num) ? null : num;
+}
+
+function round2(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function formatDatasetDate(date: string | null | undefined) {
+  if (!date) return null;
+  const parsedDate = new Date(date);
+  if (Number.isNaN(parsedDate.getTime())) return null;
+
+  return `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, "0")}-${String(
+    parsedDate.getDate()
+  ).padStart(2, "0")}`;
+}
+
+function parseExcelProductDetailsRows(buffer: Buffer): DatasetRow[] {
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: false });
+  const productSheetName = workbook.SheetNames.find((name) => /product\s*details/i.test(name));
+  if (!productSheetName) return [];
+
+  const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[productSheetName], {
+    defval: "",
+  });
+  if (!json.length) return [];
+
+  const keys = Object.keys(json[0]);
+  const customerKey = keys.find((key) => /customer\s*name/i.test(key)) ?? "";
+  const divisionKey = keys.find((key) => /^division$/i.test(key)) ?? "";
+  const dcKey = keys.find((key) => /kehe\s*dc/i.test(key)) ?? "";
+  const amountKey =
+    keys.find((key) => /bill\s*amount/i.test(key)) ??
+    keys.find((key) => /scanned\s*sales/i.test(key)) ??
+    "";
+  const upcKey =
+    keys.find((key) => /^upc$/i.test(key)) ??
+    keys.find((key) => /upc/i.test(key)) ??
+    "";
+  const quantityKey =
+    keys.find((key) => /qty\s*ship/i.test(key)) ??
+    keys.find((key) => /^qty$/i.test(key)) ??
+    keys.find((key) => /quantity/i.test(key)) ??
+    keys.find((key) => /qty/i.test(key)) ??
+    "";
+
+  let extraFee = 0;
+
+  for (const sheetName of workbook.SheetNames) {
+    if (extraFee) break;
+
+    const allRows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
+      header: 1,
+      raw: false,
+      defval: "",
+    });
+
+    for (const row of allRows) {
+      for (let cellIndex = 0; cellIndex < row.length; cellIndex++) {
+        const cellText = String(row[cellIndex] || "").trim();
+        if (!/^(?:ep|processing)\s*fee\b/i.test(cellText)) continue;
+
+        const inlineMatch = cellText.match(/(?:ep|processing)\s*fee[^0-9]*([\d,]+\.\d{2})/i);
+        if (inlineMatch) {
+          extraFee = Number(inlineMatch[1].replace(/,/g, ""));
+          break;
+        }
+
+        for (let valueIndex = cellIndex + 1; valueIndex < row.length; valueIndex++) {
+          const value = parseAmount(row[valueIndex]);
+          if (value !== null) {
+            extraFee = value;
+            break;
+          }
+        }
+
+        if (extraFee) break;
+      }
+
+      if (extraFee) break;
+    }
+  }
+
+  const rawRows: Array<{ upc: string; cust_name: string; amt: number; qty: number | null }> = [];
+
+  for (const row of json) {
+    const upc = normalizeSku(String(row[upcKey] || "").trim());
+    if (!upc || !/^\d{10,14}$/.test(upc)) continue;
+
+    let custName = "";
+    if (customerKey && row[customerKey]) custName = String(row[customerKey]).trim();
+    else if (divisionKey && row[divisionKey]) custName = String(row[divisionKey]).trim();
+    else if (dcKey && row[dcKey]) custName = `DC ${String(row[dcKey]).trim()}`;
+
+    const amount = parseAmount(row[amountKey]);
+    if (amount === null || amount === 0) continue;
+
+    const quantityRaw = quantityKey ? parseAmount(row[quantityKey]) : null;
+    rawRows.push({
+      upc,
+      cust_name: custName,
+      amt: amount,
+      qty: quantityRaw !== null && quantityRaw > 0 ? quantityRaw : null,
+    });
+  }
+
+  if (!rawRows.length) return [];
+
+  const hasAnyQuantity = rawRows.some((row) => row.qty !== null);
+  const totalQuantity = rawRows.reduce((sum, row) => sum + (row.qty ?? 0), 0);
+  const rows = rawRows.map((row) => {
+    let feeShare = 0;
+    if (extraFee > 0) {
+      feeShare = hasAnyQuantity && totalQuantity > 0
+        ? ((row.qty ?? 0) / totalQuantity) * extraFee
+        : extraFee / rawRows.length;
+    }
+
+    return {
+      upc: row.upc,
+      cust_name: row.cust_name,
+      amt: round2(row.amt + feeShare),
+    };
+  });
+
+  if (extraFee > 0 && rows.length) {
+    const expectedTotal = round2(rawRows.reduce((sum, row) => sum + row.amt, 0) + extraFee);
+    const currentTotal = round2(rows.reduce((sum, row) => sum + row.amt, 0));
+    const drift = round2(expectedTotal - currentTotal);
+    if (drift !== 0) rows[rows.length - 1].amt = round2(rows[rows.length - 1].amt + drift);
+  }
+
+  return rows;
 }
 
 function normalizeForMatch(raw: string | null | undefined) {
@@ -323,6 +502,91 @@ async function fetchDeductionTypes(): Promise<DeductionTypeRecord[]> {
   }
 
   return data ?? [];
+}
+
+async function fetchProductLookupForDatasets() {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase.from("product_list").select("upc, item_description");
+
+  if (error) {
+    console.warn(`Failed fetching product lookup for dataset rows: ${error.message}`);
+    return new Map<string, string>();
+  }
+
+  const map = new Map<string, string>();
+  for (const row of data ?? []) {
+    const key = normalizeSku(String(row.upc || ""));
+    if (key) map.set(key, row.item_description ?? "");
+  }
+
+  return map;
+}
+
+async function replaceAutomationExcelDatasetRows({
+  buffer,
+  row,
+  invoice,
+  category,
+}: {
+  buffer: Buffer;
+  row: KsolveSearchRow;
+  invoice: string;
+  category: string;
+}) {
+  const invoiceNorm = normalizeInvoiceNumber(invoice);
+  if (!invoiceNorm) return 0;
+
+  const detailRows = parseExcelProductDetailsRows(buffer);
+  if (!detailRows.length) {
+    console.warn(`No Product Details dataset rows parsed for ${invoiceNorm}.`);
+    return 0;
+  }
+
+  const datasetMonth = getMonthLabel(row.CheckDate);
+  const datasetCheckDate = formatDatasetDate(row.CheckDate);
+  if (!datasetMonth || !datasetCheckDate) {
+    console.warn(`No check date available for ${invoiceNorm}; skipping dataset rows.`);
+    return 0;
+  }
+
+  const finalType = normalizeType(category || getInvoiceType(row) || "Unknown");
+  const productLookup = await fetchProductLookupForDatasets();
+  const inserts: BrokerDatasetInsert[] = detailRows.map((detailRow) => {
+    const upc = normalizeSku(detailRow.upc);
+    const amount = Number(detailRow.amt || 0);
+
+    return {
+      month: datasetMonth,
+      check_date: datasetCheckDate,
+      invoice_date: isWmInvoiceType(finalType) ? formatDatasetDate(row.InvoiceDate) : null,
+      invoice: invoiceNorm,
+      type: finalType,
+      upc,
+      item: productLookup.get(upc) || "",
+      cust_name: String(detailRow.cust_name || "").trim(),
+      amt: isWmInvoiceType(finalType) ? round2(Math.abs(amount)) : round2(-Math.abs(amount)),
+    };
+  });
+
+  const supabase = getSupabaseClient();
+  const { error: deleteError } = await supabase
+    .from("broker_commission_datasets")
+    .delete()
+    .eq("invoice", invoiceNorm);
+
+  if (deleteError) {
+    throw new Error(`Failed clearing old dataset rows for ${invoiceNorm}: ${deleteError.message}`);
+  }
+
+  const { error: insertError } = await supabase
+    .from("broker_commission_datasets")
+    .insert(inserts);
+
+  if (insertError) {
+    throw new Error(`Failed saving dataset rows for ${invoiceNorm}: ${insertError.message}`);
+  }
+
+  return inserts.length;
 }
 
 function resolveAutomatedDeductionType({
@@ -625,6 +889,18 @@ async function uploadDocumentToSupabase({
   });
 
   await syncInvoiceTypeFromUpload(row.InvoiceNumber || "", category);
+
+  if (getFileType(document.DocumentDisplayName) === "excel") {
+    const savedRows = await replaceAutomationExcelDatasetRows({
+      buffer,
+      row,
+      invoice: row.InvoiceNumber || document.DocumentDisplayName,
+      category,
+    });
+    console.log(
+      `Saved ${savedRows} broker commission dataset row(s) for ${row.InvoiceNumber || document.DocumentDisplayName}.`
+    );
+  }
 
   return {
     ...document,
