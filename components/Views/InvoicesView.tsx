@@ -1981,6 +1981,7 @@ async function replaceDatasetRowsForInvoice(
 ) {
   const ni = normalizeInvoiceNumber(invoice);
   if (!ni) return 0;
+  if (isInvoiceSummaryInvoice(ni)) return 0;
 
   let detailRows: DatasetRow[] = [];
   let categoryFallback = options?.categoryFallback || "";
@@ -2080,6 +2081,7 @@ async function reprocessAllUploads(
 
   const uploads = (all ?? []).filter((u) => {
     if (!u.file_path || !u.invoice) return false;
+    if (isInvoiceSummaryUpload(u)) return false;
     if (!fromDate && !toDate) return true;
     const effectiveDate = u.uploaded_at || u.created_at || "";
     const effectiveIso = effectiveDate ? String(effectiveDate).slice(0, 10) : "";
@@ -3063,5 +3065,20 @@ function isLegacyAutomationFallbackUpload(upload: Pick<UploadRecord, "file_name"
     category === "Customer Spoils Allowance" &&
     /backup\s*document|imageit/i.test(fileName) &&
     !/^C[NS]/i.test(invoice)
+  );
+}
+
+function isInvoiceSummaryInvoice(invoice: string | null | undefined) {
+  return normalizeInvoiceNumber(invoice || "").startsWith("INVOICE-SUMMARY-");
+}
+
+function isInvoiceSummaryUpload(upload: Pick<UploadRecord, "file_name" | "category" | "invoice">) {
+  const fileName = String(upload.file_name || "").trim().toLowerCase();
+  const category = String(upload.category || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+  return (
+    category === "invoice summary" ||
+    fileName.startsWith("invoice-summary-") ||
+    isInvoiceSummaryInvoice(upload.invoice)
   );
 }
