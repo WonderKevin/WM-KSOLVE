@@ -1,0 +1,109 @@
+[browser] Uncaught TypeError: rows is not iterable
+    at buildFillRateSummaries (components/Views/KeheDashboardView.tsx:210:21)
+    at AnalyticsHeader.useMemo[fillRateSummary] (components/Views/KeheDashboardView.tsx:1354:11)
+    at AnalyticsHeader (components/Views/KeheDashboardView.tsx:1353:34)
+    at Set.forEach (<anonymous>)
+    at KeheDashboardView (components/Views/KeheDashboardView.tsx:2933:86)
+    at renderContent (components/WMKsolveApp.tsx:390:16)
+    at WMKsolveApp (components/WMKsolveApp.tsx:540:37)
+    at Page (app\page.tsx:4:10)
+  208 |   let totalCount = 0;
+  209 |
+> 210 |   for (const row of rows) {
+      |                     ^
+  211 |     if (normalizeMonthLabel(row.month) !== referenceMonth) continue;
+  212 |
+  213 |     const fillRate = parseFillRateValue(row.fill_rate);
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+[browser] Failed to load unfi_invoices: {
+  code: [32m'PGRST205'[39m,
+  details: [1mnull[22m,
+  hint: [32m"Perhaps you meant the table 'public.invoices'"[39m,
+  message: [32m"Could not find the table 'public.unfi_invoices' in the schema cache"[39m
+} 
+    at loadRows (components/Views/UnfiInvoicesView.tsx:306:15)
+  304 |       setRows(data);
+  305 |     } catch (error: unknown) {
+> 306 |       console.error("Failed to load unfi_invoices:", error);
+      |               ^
+  307 |       alert(getErrorMessage(error, "Failed to load UNFI invoices."));
+  308 |       setRows([]);
+  309 |     } finally { (components/Views/UnfiInvoicesView.tsx:306:15)
+[browser] Failed to load unfi_invoices: {
+  code: [32m'PGRST205'[39m,
+  details: [1mnull[22m,
+  hint: [32m"Perhaps you meant the table 'public.invoices'"[39m,
+  message: [32m"Could not find the table 'public.unfi_invoices' in the schema cache"[39m
+} 
+    at loadRows (components/Views/UnfiInvoicesView.tsx:306:15)
+  304 |       setRows(data);
+  305 |     } catch (error: unknown) {
+> 306 |       console.error("Failed to load unfi_invoices:", error);
+      |               ^
+  307 |       alert(getErrorMessage(error, "Failed to load UNFI invoices."));
+  308 |       setRows([]);
+  309 |     } finally { (components/Views/UnfiInvoicesView.tsx:306:15)
+[browser] Failed to load unfi_invoices: {
+  code: [32m'PGRST205'[39m,
+  details: [1mnull[22m,
+  hint: [32m"Perhaps you meant the table 'public.invoices'"[39m,
+  message: [32m"Could not find the table 'public.unfi_invoices' in the schema cache"[39m
+} 
+    at loadRows (components/Views/UnfiInvoicesView.tsx:308:15)
+  306 |       setRows(data);
+  307 |     } catch (error: unknown) {
+> 308 |       console.error("Failed to load unfi_invoices:", error);
+      |               ^
+  309 |       const message = getErrorMessage(error, "Failed to load UNFI invoices.");
+  310 |       setLoadError(
+  311 |         message.includes("Could not find the table") (components/Views/UnfiInvoicesView.tsx:308:15)
+[browser] Failed to load unfi_invoices: {
+  code: [32m'PGRST205'[39m,
+  details: [1mnull[22m,
+  hint: [32m"Perhaps you meant the table 'public.invoices'"[39m,
+  message: [32m"Could not find the table 'public.unfi_invoices' in the schema cache"[39m
+} 
+    at loadRows (components/Views/UnfiInvoicesView.tsx:308:15)
+  306 |       setRows(data);
+  307 |     } catch (error: unknown) {
+> 308 |       console.error("Failed to load unfi_invoices:", error);
+      |               ^
+  309 |       const message = getErrorMessage(error, "Failed to load UNFI invoices.");
+  310 |       setLoadError(
+  311 |         message.includes("Could not find the table") (components/Views/UnfiInvoicesView.tsx:308:15)
+[browser] Failed to load unfi_invoices: {
+  code: [32m'PGRST205'[39m,
+  details: [1mnull[22m,
+  hint: [32m"Perhaps you meant the table 'public.invoices'"[39m,
+  message: [32m"Could not find the table 'public.unfi_invoices' in the schema cache"[39m
+} 
+    at loadRows (components/Views/UnfiInvoicesView.tsx:308:15)
+  306 |       setRows(data);
+  307 |     } catch (error: unknown) {
+> 308 |       console.error("Failed to load unfi_invoices:", error);
+      |               ^
+  309 |       const message = getErrorMessage(error, "Failed to load UNFI invoices.");
+  310 |       setLoadError(
+  311 |         message.includes("Could not find the table") (components/Views/UnfiInvoicesView.tsx:308:15)
+⚠ Blocked cross-origin request to Next.js dev resource /_next/webpack-hmr from "127.0.0.1".
+Cross-origin access to Next.js dev resources is blocked by default for safety.
+
+To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+
+// next.config.js
+module.exports = {
+  allowedDevOrigins: ['127.0.0.1'],
+}
+
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+⚠ Blocked cross-origin request to Next.js dev resource /__nextjs_font/geist-latin.woff2 from "127.0.0.1".
+Cross-origin access to Next.js dev resources is blocked by default for safety.
+
+To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+
+// next.config.js
+module.exports = {
+  allowedDevOrigins: ['127.0.0.1'],
+}
+
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins

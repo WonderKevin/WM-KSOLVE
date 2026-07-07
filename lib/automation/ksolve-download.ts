@@ -192,6 +192,7 @@ function normalizeType(raw: string) {
     return "Pass Thru Deduction";
   }
   if (/fresh\s+thyme\s+ppf/i.test(c)) return "Pass Thru Deduction";
+  if (/kroger\s+disc/i.test(c) || /kroger\s+discount/i.test(c)) return "Pass Thru Deduction";
   if (/new\s+item\s+setup\s+fee/i.test(c) || /new\s+item\s+set\s*up\s+fee/i.test(c)) {
     return "New Item Setup Fee";
   }
@@ -471,18 +472,25 @@ async function extractDocumentTextForMapping({
 }
 
 function getInvoiceType(row: KsolveSearchRow) {
+  const invoiceNumber = String(row.InvoiceNumber || "").toUpperCase();
+
   if (row.ChargeTypeCode === "PV") return "WM Invoice";
   if (row.DocumentUrl) return "WM Invoice";
 
-  if (row.InvoiceNumber?.toUpperCase().startsWith("CN")) {
+  if (invoiceNumber.startsWith("CN")) {
     return "Customer Spoils Allowance";
   }
 
-  if (row.InvoiceNumber?.toUpperCase().startsWith("CS")) {
+  if (invoiceNumber.startsWith("CS")) {
     return "Customer Spoils Allowance";
   }
 
-  if (row.InvoiceNumber?.toUpperCase().startsWith("IAA")) {
+  if (
+    invoiceNumber.startsWith("IAA") ||
+    invoiceNumber.startsWith("PPF") ||
+    invoiceNumber.startsWith("KD") ||
+    invoiceNumber.startsWith("MCBP")
+  ) {
     return "Pass Thru Deduction";
   }
 

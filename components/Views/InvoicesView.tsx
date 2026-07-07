@@ -130,6 +130,7 @@ function normalizeType(raw: string) {
   if (/customer\s+spoilage/i.test(c)) return "Customer Spoils Allowance";
   if (/pass\s+thru\s+deduction/i.test(c) || /pass\s+through\s+deduction/i.test(c)) return "Pass Thru Deduction";
   if (/fresh\s+thyme\s+ppf/i.test(c)) return "Pass Thru Deduction";
+  if (/kroger\s+disc/i.test(c) || /kroger\s+discount/i.test(c)) return "Pass Thru Deduction";
   if (/new\s+item\s+setup\s+fee/i.test(c) || /new\s+item\s+set\s*up\s+fee/i.test(c)) return "New Item Setup Fee";
   if (/new\s+item\s+setup/i.test(c) || /new\s+item\s+set\s*up/i.test(c)) return "New Item Setup";
   if (/intro\s+allowance\s+audit/i.test(c)) return "Intro Allowance Audit";
@@ -411,12 +412,13 @@ function parseMetadataFromText(text: string) {
   const isFreshThymeSas =
     /fresh\s+thyme\s+sas/i.test(lower) &&
     /chargeback/i.test(lower);
+  const isKrogerDisc = /kroger\s+disc/i.test(lower) || /kroger\s+discount/i.test(lower);
 
   // ── Category detection ──────────────────────────────────────────────────────
   if (isCustomerSpoilageNatural) category = "Customer Spoils Allowance";
   else if (isDollarPromotion) category = "$1 Promotion";
   else if (isStrictWMInvoice || isWMInvoicePdf) category = "WM Invoice";
-  else if (isFreshThymePpf || isFreshThymeSas) category = "Pass Thru Deduction";
+  else if (isFreshThymePpf || isFreshThymeSas || isKrogerDisc) category = "Pass Thru Deduction";
   else {
     const matchers = [
       { p: /\$\s*1\s*promotion/i, v: "$1 Promotion" },
@@ -426,6 +428,8 @@ function parseMetadataFromText(text: string) {
       { p: /customer\s+spoilage/i, v: "Customer Spoils Allowance" },
       { p: /pass\s+thru\s+deduction/i, v: "Pass Thru Deduction" },
       { p: /fresh\s+thyme\s+ppf/i, v: "Pass Thru Deduction" },
+      { p: /kroger\s+disc/i, v: "Pass Thru Deduction" },
+      { p: /kroger\s+discount/i, v: "Pass Thru Deduction" },
       { p: /new\s+item\s+setup\s+fee/i, v: "New Item Setup Fee" },
       { p: /new\s+item\s+setup/i, v: "New Item Setup" },
       { p: /intro\s+allowance\s+audit/i, v: "Intro Allowance Audit" },
@@ -783,6 +787,23 @@ async function extractDocumentMetadata(
         pdf_date: parsed.pdf_date,
         file_type: "excel",
         detected_name: headerMatch.document_type,
+      };
+    }
+
+    const knownHeaderType = getKnownDeductionType(headerCandidate);
+    const knownParsedType = getKnownDeductionType(parsed.category);
+    const fallbackCategory =
+      knownHeaderType ||
+      knownParsedType ||
+      (parsed.category && parsed.category !== "Unknown" ? parsed.category : "");
+
+    if (fallbackCategory) {
+      return {
+        category: fallbackCategory,
+        invoice: parsed.invoice,
+        pdf_date: parsed.pdf_date,
+        file_type: "excel",
+        detected_name: headerCandidate || parsed.category,
       };
     }
 

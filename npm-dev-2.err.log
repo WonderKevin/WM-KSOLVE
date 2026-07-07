@@ -1,0 +1,73 @@
+⨯ Error: @supabase/ssr: Your project's URL and API key are required to create a Supabase client!
+
+Check your Supabase project's API settings to find these values
+
+https://supabase.com/dashboard/project/_/settings/api
+    at <unknown> (https://supabase.com/dashboard/project/_/settings/api)
+    at module evaluation (lib\supabase\client.ts:3:44)
+    at module evaluation (components\WMKsolveApp.tsx:20:1)
+  1 | import { createBrowserClient } from "@supabase/ssr";
+  2 |
+> 3 | export const supabase = createBrowserClient(
+    |                                            ^
+  4 |   process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  5 |   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  6 | ); {
+  digest: '3194335292'
+}
+⨯ Error: @supabase/ssr: Your project's URL and API key are required to create a Supabase client!
+
+Check your Supabase project's API settings to find these values
+
+https://supabase.com/dashboard/project/_/settings/api
+    at <unknown> (https://supabase.com/dashboard/project/_/settings/api)
+    at module evaluation (lib\supabase\client.ts:3:44)
+    at module evaluation (components\WMKsolveApp.tsx:20:1)
+  1 | import { createBrowserClient } from "@supabase/ssr";
+  2 |
+> 3 | export const supabase = createBrowserClient(
+    |                                            ^
+  4 |   process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  5 |   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  6 | ); {
+  digest: '3194335292'
+}
+[browser] Uncaught Error: @supabase/ssr: Your project's URL and API key are required to create a Supabase client!
+
+Check your Supabase project's API settings to find these values
+
+https://supabase.com/dashboard/project/_/settings/api
+    at <unknown> (https://supabase.com/dashboard/project/_/settings/api)
+    at module evaluation (lib/supabase/client.ts:3:44)
+    at module evaluation (components/WMKsolveApp.tsx:20:1)
+    at Page (app\page.tsx:4:10)
+  1 | import { createBrowserClient } from "@supabase/ssr";
+  2 |
+> 3 | export const supabase = createBrowserClient(
+    |                                            ^
+  4 |   process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  5 |   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  6 | );
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+⚠ Fast Refresh had to perform a full reload when ./lib/supabase/client.ts changed. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+K-Solve schedule load failed: Error: Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.
+    at getSupabaseClient (app\api\automation\ksolve\schedule\route.ts:19:11)
+    at GET (app\api\automation\ksolve\schedule\route.ts:227:22)
+  17 |
+  18 |   if (!supabaseUrl || !serviceRoleKey) {
+> 19 |     throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+     |           ^
+  20 |   }
+  21 |
+  22 |   return createClient(supabaseUrl, serviceRoleKey);
+K-Solve schedule load failed: Error: Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.
+    at getSupabaseClient (app\api\automation\ksolve\schedule\route.ts:19:11)
+    at GET (app\api\automation\ksolve\schedule\route.ts:227:22)
+  17 |
+  18 |   if (!supabaseUrl || !serviceRoleKey) {
+> 19 |     throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+     |           ^
+  20 |   }
+  21 |
+  22 |   return createClient(supabaseUrl, serviceRoleKey);

@@ -1,0 +1,45 @@
+
+> wm-ksolve-app@0.1.0 dev
+> next dev
+
+▲ Next.js 16.2.1 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.15:3000
+- Environments: .env.local
+✓ Ready in 602ms
+
+ GET / 200 in 316ms (next.js: 117ms, application-code: 199ms)
+ GET / 200 in 19ms (next.js: 2ms, application-code: 17ms)
+ GET / 200 in 26ms (next.js: 3ms, application-code: 23ms)
+ GET / 200 in 35ms (next.js: 3ms, application-code: 32ms)
+ GET / 200 in 24ms (next.js: 3ms, application-code: 22ms)
+ GET / 200 in 26ms (next.js: 4ms, application-code: 22ms)
+ GET / 200 in 25ms (next.js: 1797µs, application-code: 23ms)
+ GET / 200 in 23ms (next.js: 1853µs, application-code: 21ms)
+✓ Compiled in 613ms
+✓ Compiled in 47ms
+✓ Compiled in 51ms
+✓ Compiled in 161ms
+✓ Compiled in 69ms
+ GET / 200 in 198ms (next.js: 62ms, application-code: 136ms)
+✓ Compiled in 37ms
+✓ Compiled in 36ms
+ GET / 200 in 122ms (next.js: 38ms, application-code: 85ms)
+✓ Compiled in 56ms
+ GET / 200 in 137ms (next.js: 43ms, application-code: 94ms)
+ GET / 200 in 27ms (next.js: 3ms, application-code: 24ms)
+✓ Compiled in 44ms
+✓ Compiled in 83ms
+✓ Compiled in 61ms
+ GET / 200 in 139ms (next.js: 43ms, application-code: 97ms)
+✓ Compiled in 102ms
+✓ Compiled in 159ms
+ GET / 200 in 131ms (next.js: 74ms, application-code: 58ms)
+ GET / 200 in 31ms (next.js: 1550µs, application-code: 29ms)
+ GET / 200 in 16ms (next.js: 2ms, application-code: 14ms)
+✓ Compiled in 27ms
+✓ Compiled in 27ms
+ GET / 200 in 181ms (next.js: 47ms, application-code: 134ms)
+✓ Compiled in 29ms
+ GET / 200 in 135ms (next.js: 41ms, application-code: 94ms)
+ GET / 200 in 25ms (next.js: 2ms, application-code: 23ms)

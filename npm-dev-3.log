@@ -1,0 +1,27 @@
+
+> wm-ksolve-app@0.1.0 dev
+> next dev
+
+▲ Next.js 16.2.1 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.15:3000
+- Environments: .env.local
+✓ Ready in 291ms
+
+ GET / 200 in 275ms (next.js: 87ms, application-code: 187ms)
+ GET / 200 in 25ms (next.js: 3ms, application-code: 23ms)
+✓ Compiled in 386ms
+✓ Compiled in 45ms
+✓ Compiled in 30ms
+✓ Compiled in 29ms
+✓ Compiled in 27ms
+✓ Compiled in 26ms
+✓ Compiled in 33ms
+ GET / 200 in 143ms (next.js: 38ms, application-code: 105ms)
+✓ Compiled in 31ms
+ GET / 200 in 104ms (next.js: 31ms, application-code: 73ms)
+✓ Compiled in 30ms
+✓ Compiled in 27ms
+✓ Compiled in 34ms
+ GET / 200 in 128ms (next.js: 32ms, application-code: 95ms)
+✓ Compiled in 33ms

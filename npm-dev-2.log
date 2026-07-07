@@ -1,0 +1,20 @@
+
+> wm-ksolve-app@0.1.0 dev
+> next dev
+
+▲ Next.js 16.2.1 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.15:3000
+✓ Ready in 342ms
+
+ GET / 500 in 2.8s (next.js: 2.1s, application-code: 695ms)
+  Reload env: .env.local
+✓ Compiled in 40ms
+ GET / 200 in 199ms (next.js: 64ms, application-code: 135ms)
+ GET / 200 in 23ms (next.js: 2ms, application-code: 20ms)
+ GET /login 200 in 324ms (next.js: 296ms, application-code: 28ms)
+ GET /login 200 in 14ms (next.js: 1742µs, application-code: 13ms)
+ GET / 200 in 11ms (next.js: 1982µs, application-code: 9ms)
+ GET / 200 in 12ms (next.js: 1786µs, application-code: 10ms)
+ GET /api/automation/ksolve/schedule 500 in 246ms (next.js: 193ms, application-code: 53ms)
+ GET /api/automation/ksolve/schedule 500 in 40ms (next.js: 1477µs, application-code: 39ms)
