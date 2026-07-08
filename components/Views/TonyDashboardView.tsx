@@ -445,23 +445,34 @@ function LocationCasesTable({ title, table, searchQuery, emptyText, showAverageC
   );
 }
 
-function StoreCasesTable({ title, rows, months, searchQuery, emptyText, showAverageColumns = false, average3, average12 }: { title: string; rows: TonyVelocityRow[]; months: string[]; searchQuery: string; emptyText: string; showAverageColumns?: boolean; average3?: Map<string, number>; average12?: Map<string, number> }) {
+function StoreCasesTable({ title, rows, months, searchQuery, emptyText, showAverageColumns = false, average3, average12, knownStores = [] }: { title: string; rows: TonyVelocityRow[]; months: string[]; searchQuery: string; emptyText: string; showAverageColumns?: boolean; average3?: Map<string, number>; average12?: Map<string, number>; knownStores?: TonyLocation[] }) {
   const monthColumns = [...months].sort(compareMonthLabelsAsc);
   const q = normalize(searchQuery).toLowerCase();
 
   const storeRows = useMemo(() => {
     const map = new Map<string, StoreMonthRow>();
+    for (const loc of knownStores) {
+      const store = normalize(loc.customer);
+      if (!store) continue;
+      const location = normalize(loc.location);
+      const searchable = `${store} ${location}`.toLowerCase();
+      if (q && !searchable.includes(q)) continue;
+      if (!map.has(store)) map.set(store, { location, store, months: {}, total: 0 });
+    }
+
     for (const row of rows) {
       const store = normalize(row.customer) || "Unknown Store";
-      if (q && !store.toLowerCase().includes(q)) continue;
+      const location = normalize(row.location) || map.get(store)?.location || "";
+      const searchable = `${store} ${location}`.toLowerCase();
+      if (q && !searchable.includes(q)) continue;
       const month = normalizeMonthLabel(row.month);
-      if (!map.has(store)) map.set(store, { location: "", store, months: {}, total: 0 });
+      if (!map.has(store)) map.set(store, { location, store, months: {}, total: 0 });
       const item = map.get(store)!;
       item.months[month] = (item.months[month] || 0) + getCases(row);
       item.total += getCases(row);
     }
     return Array.from(map.values()).sort((a, b) => a.store.localeCompare(b.store));
-  }, [rows, q]);
+  }, [rows, q, knownStores]);
 
   const exportRows = () => downloadCsv(
     title.toLowerCase().replace(/\s+/g, "-"),
@@ -888,10 +899,21 @@ export default function TonyDashboardView() {
         if (batch.length < pageSize) break;
         from += pageSize;
       }
-      const { data: locationData, error: locationError } = await supabase.from("tony_locations").select("*").order("customer", { ascending: true });
-      if (locationError) throw locationError;
+      let locationFrom = 0; let allLocations: TonyLocation[] = [];
+      while (true) {
+        const { data: locationData, error: locationError } = await supabase
+          .from("tony_locations")
+          .select("*")
+          .order("customer", { ascending: true })
+          .range(locationFrom, locationFrom + pageSize - 1);
+        if (locationError) throw locationError;
+        const locationBatch = (locationData ?? []) as TonyLocation[];
+        allLocations = [...allLocations, ...locationBatch];
+        if (locationBatch.length < pageSize) break;
+        locationFrom += pageSize;
+      }
       setRows(all);
-      setLocations((locationData ?? []) as TonyLocation[]);
+      setLocations(allLocations);
     } catch (err: any) { setError(err?.message || "Failed to load Tony dashboard data."); }
     finally { setLoading(false); }
   };
@@ -1226,6 +1248,7 @@ export default function TonyDashboardView() {
                 showAverageColumns={showPulloutAverageColumns}
                 average3={pulloutAverage3.stores}
                 average12={pulloutAverage12.stores}
+                knownStores={locations}
               />
             )}
           </>
