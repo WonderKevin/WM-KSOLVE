@@ -7,7 +7,7 @@ export default function HomeView() {
     <div className="flex min-h-[70vh] items-center justify-center rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
       <div className="text-center space-y-4 max-w-md">
         <h1 className="text-3xl font-bold text-slate-900">
-          WM-KSOLVE Dashboard
+          WM Retail & Deductions Dashboard
         </h1>
         <p className="text-sm text-slate-500">
           Use the sidebar to navigate between dashboards, reports, and tools.
