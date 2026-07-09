@@ -39,6 +39,8 @@ import TargetView from "@/components/Views/TargetView";
 import TargetBrokerCommissionView from "@/components/Views/TargetBrokerCommissionView";
 import UnfiInvoicesView from "@/components/Views/UnfiInvoicesView";
 
+const APP_NAME = "WM Retail & Deductions";
+
 type Permissions = {
   email: string;
 
@@ -456,8 +458,8 @@ export default function WMKsolveApp() {
       {sidebarOpen && (
         <aside className="w-72 border-r border-slate-200 bg-white px-4 py-6">
           <div className="mb-8 px-3">
-            <div className="text-2xl font-extrabold tracking-tight text-slate-900">
-              WM-KSOLVE
+            <div className="text-xl font-extrabold leading-tight tracking-tight text-slate-900">
+              {APP_NAME}
             </div>
           </div>
 
@@ -499,8 +501,8 @@ export default function WMKsolveApp() {
                 </Button>
 
                 <div>
-                  <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
-                    WM-KSOLVE
+                  <h1 className="text-3xl font-extrabold leading-tight tracking-tight text-slate-900 md:text-4xl">
+                    {APP_NAME}
                   </h1>
                 </div>
               </div>

@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "WM-KSOLVE",
-  description: "WM-KSOLVE Invoices and Accounting",
+  title: "WM Retail & Deductions",
+  description: "WM Retail & Deductions invoices and accounting",
 };
 
 export default function RootLayout({
