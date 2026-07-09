@@ -39,7 +39,7 @@ import TargetView from "@/components/Views/TargetView";
 import TargetBrokerCommissionView from "@/components/Views/TargetBrokerCommissionView";
 import UnfiInvoicesView from "@/components/Views/UnfiInvoicesView";
 
-const APP_NAME = "WM Retail & Deductions";
+const APP_NAME = "WM Brokers & Deductions";
 
 type Permissions = {
   email: string;

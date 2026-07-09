@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "WM Retail & Deductions",
-  description: "WM Retail & Deductions invoices and accounting",
+  title: "WM Brokers & Deductions",
+  description: "WM Brokers & Deductions invoices and accounting",
 };
 
 export default function RootLayout({
