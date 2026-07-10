@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
 
-type Retailer = "all" | "kehe" | "target" | "unfi";
+type Retailer = "all" | "kehe" | "target" | "unfi" | "wegmans";
 
 type InvoiceRecord = {
   id: string;
@@ -38,6 +38,17 @@ type TargetInvoiceRow = {
   net_amount: number | null;
 };
 
+type WegmansInvoiceRow = {
+  id: number;
+  month: string | null;
+  run_date: string | null;
+  invoice: string | null;
+  description: string | null;
+  inv_number: string | null;
+  chargeback: number | null;
+  type: string | null;
+};
+
 type CheckGroup = {
   retailer: Retailer;
   month: string;
@@ -52,6 +63,7 @@ const retailerOptions: Array<{ value: Retailer; label: string }> = [
   { value: "kehe", label: "KeHE" },
   { value: "target", label: "Target" },
   { value: "unfi", label: "UNFI" },
+  { value: "wegmans", label: "Wegmans" },
 ];
 
 function formatCurrency(value: number | null | undefined) {
@@ -67,6 +79,7 @@ function retailerLabel(value: Retailer) {
   if (value === "kehe") return "KeHE";
   if (value === "target") return "Target";
   if (value === "unfi") return "UNFI";
+  if (value === "wegmans") return "Wegmans";
   return "All";
 }
 
@@ -108,6 +121,17 @@ function getTargetCheckAmounts(rows: TargetInvoiceRow[]) {
   return map;
 }
 
+function getWegmansCheckAmounts(rows: WegmansInvoiceRow[]) {
+  const map = new Map<string, number>();
+
+  for (const row of rows) {
+    const key = `${row.run_date || ""}__${row.invoice || ""}`;
+    map.set(key, (map.get(key) || 0) - Math.abs(Number(row.chargeback || 0)));
+  }
+
+  return map;
+}
+
 export default function CheckDetailsView() {
   const [rows, setRows] = useState<InvoiceRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,7 +147,7 @@ export default function CheckDetailsView() {
       try {
         setLoading(true);
 
-        const [keheRes, targetRes] = await Promise.all([
+        const [keheRes, targetRes, wegmansRes] = await Promise.all([
           supabase
             .from("invoices")
             .select(
@@ -139,10 +163,21 @@ export default function CheckDetailsView() {
             )
             .order("check_date", { ascending: false })
             .order("check_number", { ascending: false }),
+
+          supabase
+            .from("wegmans_invoices")
+            .select(
+              "id, month, run_date, invoice, description, inv_number, chargeback, type"
+            )
+            .order("run_date", { ascending: false })
+            .order("invoice", { ascending: false }),
         ]);
 
         if (keheRes.error) throw keheRes.error;
         if (targetRes.error) throw targetRes.error;
+        if (wegmansRes.error) {
+          console.error("Wegmans check details query error:", wegmansRes.error);
+        }
 
         const keheRows: InvoiceRecord[] = ((keheRes.data || []) as any[]).map(
           (row) => ({
@@ -181,7 +216,30 @@ export default function CheckDetailsView() {
           };
         });
 
-        setRows([...keheRows, ...targetRows]);
+        const rawWegmansRows = (wegmansRes.data || []) as WegmansInvoiceRow[];
+        const wegmansCheckAmounts = getWegmansCheckAmounts(rawWegmansRows);
+
+        const wegmansRows: InvoiceRecord[] = wegmansRes.error
+          ? []
+          : rawWegmansRows.map((row) => {
+              const checkKey = `${row.run_date || ""}__${row.invoice || ""}`;
+
+              return {
+                id: `wegmans-${row.id}`,
+                month: row.month,
+                check_date: row.run_date,
+                check_number: row.invoice,
+                check_amt: wegmansCheckAmounts.get(checkKey) || 0,
+                invoice_number: row.inv_number,
+                invoice_amt: -Math.abs(Number(row.chargeback || 0)),
+                dc_name: row.description,
+                status: "Wegman",
+                type: row.type || "Wegman's Chargeback",
+                retailer: "wegmans",
+              };
+            });
+
+        setRows([...keheRows, ...targetRows, ...wegmansRows]);
       } catch (error) {
         console.error("Check details load error:", error);
       } finally {

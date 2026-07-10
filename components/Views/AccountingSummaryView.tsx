@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
 
-type Retailer = "all" | "kehe" | "target" | "unfi";
+type Retailer = "all" | "kehe" | "target" | "unfi" | "wegmans";
 type ViewMode = "accounting" | "discrepancy";
 
 type InvoiceSummaryRow = {
@@ -31,6 +31,18 @@ type TargetInvoiceRow = {
   cash_discount: number | null;
   withholding_tax_amount: number | null;
   net_amount: number | null;
+  retailer?: Retailer;
+};
+
+type WegmansInvoiceRow = {
+  id: number;
+  month: string | null;
+  run_date: string | null;
+  invoice: string | null;
+  description: string | null;
+  inv_number: string | null;
+  chargeback: number | null;
+  type: string | null;
   retailer?: Retailer;
 };
 
@@ -280,6 +292,7 @@ function getRetailerMonthlyTotalLabel(retailer: Retailer) {
   if (retailer === "kehe") return "KeHE Monthly Summary Total";
   if (retailer === "target") return "Target Monthly Summary Total";
   if (retailer === "unfi") return "UNFI Monthly Summary Total";
+  if (retailer === "wegmans") return "Wegmans Monthly Summary Total";
 
   return "Monthly Summary Total";
 }
@@ -413,6 +426,7 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveInvoiceRow[]> {
 export default function AccountingSummaryView() {
   const [invoiceRows, setInvoiceRows] = useState<InvoiceSummaryRow[]>([]);
   const [targetRows, setTargetRows] = useState<TargetInvoiceRow[]>([]);
+  const [wegmansRows, setWegmansRows] = useState<WegmansInvoiceRow[]>([]);
   const [brokerRows, setBrokerRows] = useState<BrokerCommissionRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -432,6 +446,7 @@ export default function AccountingSummaryView() {
     { value: "kehe", label: "KeHE" },
     { value: "target", label: "Target" },
     { value: "unfi", label: "UNFI" },
+    { value: "wegmans", label: "Wegmans" },
   ];
 
   useEffect(() => {
@@ -439,7 +454,13 @@ export default function AccountingSummaryView() {
       setLoading(true);
 
       try {
-        const [rawInvoiceRes, rawBrokerRows, ksolveWmRows, rawTargetRes] =
+        const [
+          rawInvoiceRes,
+          rawBrokerRows,
+          ksolveWmRows,
+          rawTargetRes,
+          rawWegmansRes,
+        ] =
           await Promise.all([
             supabase
               .from("invoices")
@@ -456,6 +477,13 @@ export default function AccountingSummaryView() {
                 "id, month, check_date, check_number, doc_header_text, reason_code_description, sap_doc_number, doc_date, gross_amount, cash_discount, withholding_tax_amount, net_amount"
               )
               .order("check_date", { ascending: false }),
+
+            supabase
+              .from("wegmans_invoices")
+              .select(
+                "id, month, run_date, invoice, description, inv_number, chargeback, type"
+              )
+              .order("run_date", { ascending: false }),
           ]);
 
         if (rawInvoiceRes.error) {
@@ -478,6 +506,18 @@ export default function AccountingSummaryView() {
             ((rawTargetRes.data || []) as TargetInvoiceRow[]).map((row) => ({
               ...row,
               retailer: "target",
+            }))
+          );
+        }
+
+        if (rawWegmansRes.error) {
+          console.error("Wegmans invoice query error:", rawWegmansRes.error);
+          setWegmansRows([]);
+        } else {
+          setWegmansRows(
+            ((rawWegmansRes.data || []) as WegmansInvoiceRow[]).map((row) => ({
+              ...row,
+              retailer: "wegmans",
             }))
           );
         }
@@ -556,6 +596,12 @@ export default function AccountingSummaryView() {
     return targetRows.filter((row) => row.retailer === retailer);
   }, [targetRows, retailer]);
 
+  const filteredWegmansRows = useMemo(() => {
+    if (retailer === "all") return wegmansRows;
+
+    return wegmansRows.filter((row) => row.retailer === retailer);
+  }, [wegmansRows, retailer]);
+
   const filteredBrokerRows = useMemo(() => {
     if (retailer === "all") return brokerRows;
 
@@ -597,8 +643,24 @@ export default function AccountingSummaryView() {
       }
     }
 
+    for (const row of filteredWegmansRows) {
+      const date = parseUsDate(row.run_date);
+
+      if (!date) continue;
+
+      const key = monthKeyFromDate(date);
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          label: monthLabelFromDate(date),
+          sortValue: date.getFullYear() * 100 + date.getMonth() + 1,
+        });
+      }
+    }
+
     return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
-  }, [filteredInvoiceRows, filteredTargetRows]);
+  }, [filteredInvoiceRows, filteredTargetRows, filteredWegmansRows]);
 
   const discrepancyMonthOptions = useMemo<MonthOption[]>(() => {
     const map = new Map<string, MonthOption>();
@@ -743,6 +805,26 @@ export default function AccountingSummaryView() {
       }
     }
 
+    if (retailer === "all" || retailer === "wegmans") {
+      for (const row of filteredWegmansRows) {
+        const date = parseUsDate(row.run_date);
+
+        if (!date) continue;
+
+        const monthKey = monthKeyFromDate(date);
+
+        if (!monthKeySet.has(monthKey)) continue;
+
+        const typeName = row.type?.trim() || "Wegman's Chargeback";
+        const amount = -Math.abs(Number(row.chargeback || 0));
+
+        if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
+
+        const current = typeMonthTotals.get(typeName)!;
+        current[monthKey] = (current[monthKey] || 0) + amount;
+      }
+    }
+
     const orderedTypes =
       retailer === "target"
         ? Array.from(typeMonthTotals.keys()).sort((a, b) => a.localeCompare(b))
@@ -781,7 +863,13 @@ export default function AccountingSummaryView() {
         0
       ),
     };
-  }, [filteredInvoiceRows, filteredTargetRows, filteredMonthOptions, retailer]);
+  }, [
+    filteredInvoiceRows,
+    filteredTargetRows,
+    filteredWegmansRows,
+    filteredMonthOptions,
+    retailer,
+  ]);
 
   const discrepancySummary = useMemo(() => {
     if (!appliedDiscrepancyMonth) {
@@ -1108,7 +1196,7 @@ export default function AccountingSummaryView() {
               </table>
             </div>
           )
-        ) : retailer === "target" || retailer === "unfi" ? (
+        ) : retailer === "target" || retailer === "unfi" || retailer === "wegmans" ? (
           <p className="text-sm text-slate-500">
             Summary Discrepancy is currently available for KeHE only.
           </p>

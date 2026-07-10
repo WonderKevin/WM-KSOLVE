@@ -38,6 +38,7 @@ import HomeView from "@/components/Views/HomeView";
 import TargetView from "@/components/Views/TargetView";
 import TargetBrokerCommissionView from "@/components/Views/TargetBrokerCommissionView";
 import UnfiInvoicesView from "@/components/Views/UnfiInvoicesView";
+import WegmansView from "@/components/Views/WegmansView";
 
 const APP_NAME = "WM Brokers & Deductions";
 
@@ -59,6 +60,7 @@ type Permissions = {
   can_view_database_ksolve_invoices: boolean;
   can_view_database_target_invoices?: boolean;
   can_view_database_unfi_invoices?: boolean;
+  can_view_database_wegmans?: boolean;
   can_view_database_kehe_velocity: boolean;
   can_view_database_tony_velocity?: boolean;
   can_view_database_product_list: boolean;
@@ -217,6 +219,7 @@ export default function WMKsolveApp() {
           can_view_database_ksolve_invoices: isAdmin,
           can_view_database_target_invoices: isAdmin,
           can_view_database_unfi_invoices: isAdmin,
+          can_view_database_wegmans: isAdmin,
           can_view_database_kehe_velocity: isAdmin,
           can_view_database_tony_velocity: isAdmin,
           can_view_database_product_list: isAdmin,
@@ -346,6 +349,10 @@ export default function WMKsolveApp() {
       userEmail.toLowerCase() === "kevin@wondermonday.com"
         ? { label: "UNFI Invoices", key: "database-unfi-invoices" }
         : null,
+      permissions.can_view_database_wegmans ||
+      userEmail.toLowerCase() === "kevin@wondermonday.com"
+        ? { label: "Wegmans", key: "database-wegmans" }
+        : null,
       permissions.can_view_database_kehe_velocity
         ? { label: "KeHe Velocity", key: "database-kehe-velocity" }
         : null,
@@ -424,6 +431,8 @@ export default function WMKsolveApp() {
         return <TargetView />;
       case "database-unfi-invoices":
         return <UnfiInvoicesView />;
+      case "database-wegmans":
+        return <WegmansView />;
       case "database-kehe-velocity":
         return <KeHeVelocityView />;
       case "database-tony-velocity":
