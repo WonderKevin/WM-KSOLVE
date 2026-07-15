@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
 
-type Retailer = "all" | "kehe" | "target" | "unfi" | "wegmans";
+type Retailer = "all" | "kehe" | "target" | "unfi" | "wegmans" | "tony";
 
 type InvoiceRecord = {
   id: string;
@@ -49,6 +49,35 @@ type WegmansInvoiceRow = {
   type: string | null;
 };
 
+type TonyInvoiceDetailRow = {
+  id: number;
+  wire_id: number;
+  invoice_number: string | null;
+  po_number: string | null;
+  invoice_amount: number | null;
+  discount_amount: number | null;
+  amount_paid: number | null;
+  type: string | null;
+  line_number: number | null;
+  type_splits?: TonyInvoiceTypeSplitRow[];
+};
+
+type TonyInvoiceTypeSplitRow = {
+  id: number;
+  detail_id: number;
+  type: string | null;
+  amount: number | null;
+};
+
+type TonyInvoiceWireRow = {
+  id: number;
+  month: string | null;
+  wired_on: string | null;
+  ach_number: string | null;
+  total_wire: number | null;
+  details?: TonyInvoiceDetailRow[];
+};
+
 type CheckGroup = {
   retailer: Retailer;
   month: string;
@@ -64,6 +93,7 @@ const retailerOptions: Array<{ value: Retailer; label: string }> = [
   { value: "target", label: "Target" },
   { value: "unfi", label: "UNFI" },
   { value: "wegmans", label: "Wegmans" },
+  { value: "tony", label: "Tony's" },
 ];
 
 function formatCurrency(value: number | null | undefined) {
@@ -80,6 +110,7 @@ function retailerLabel(value: Retailer) {
   if (value === "target") return "Target";
   if (value === "unfi") return "UNFI";
   if (value === "wegmans") return "Wegmans";
+  if (value === "tony") return "Tony's";
   return "All";
 }
 
@@ -147,7 +178,7 @@ export default function CheckDetailsView() {
       try {
         setLoading(true);
 
-        const [keheRes, targetRes, wegmansRes] = await Promise.all([
+        const [keheRes, targetRes, wegmansRes, tonyRes] = await Promise.all([
           supabase
             .from("invoices")
             .select(
@@ -171,12 +202,23 @@ export default function CheckDetailsView() {
             )
             .order("run_date", { ascending: false })
             .order("invoice", { ascending: false }),
+
+          supabase
+            .from("tony_invoice_wires")
+            .select(
+              "id, month, wired_on, ach_number, total_wire, details:tony_invoice_details(id, wire_id, invoice_number, po_number, invoice_amount, discount_amount, amount_paid, type, line_number, type_splits:tony_invoice_detail_type_splits(id, detail_id, type, amount))"
+            )
+            .order("wired_on", { ascending: false })
+            .order("ach_number", { ascending: false }),
         ]);
 
         if (keheRes.error) throw keheRes.error;
         if (targetRes.error) throw targetRes.error;
         if (wegmansRes.error) {
           console.error("Wegmans check details query error:", wegmansRes.error);
+        }
+        if (tonyRes.error) {
+          console.error("Tony check details query error:", tonyRes.error);
         }
 
         const keheRows: InvoiceRecord[] = ((keheRes.data || []) as any[]).map(
@@ -239,7 +281,49 @@ export default function CheckDetailsView() {
               };
             });
 
-        setRows([...keheRows, ...targetRows, ...wegmansRows]);
+        const rawTonyRows = (tonyRes.data || []) as TonyInvoiceWireRow[];
+        const tonyRows: InvoiceRecord[] = tonyRes.error
+          ? []
+          : rawTonyRows.flatMap((wire) =>
+              [...(wire.details || [])]
+                .sort(
+                  (a, b) =>
+                    Number(a.line_number || 0) - Number(b.line_number || 0)
+                )
+                .flatMap((detail) => {
+                  const allocations = (detail.type_splits || []).length
+                    ? [...(detail.type_splits || [])]
+                        .sort((a, b) => Number(a.id || 0) - Number(b.id || 0))
+                        .map((split) => ({
+                          id: `tony-${wire.id}-${detail.id}-${split.id}`,
+                          amount: split.amount,
+                          type: split.type || "Unassigned",
+                        }))
+                    : [
+                        {
+                          id: `tony-${wire.id}-${detail.id}`,
+                          amount: detail.amount_paid,
+                          type: detail.type || "Unassigned",
+                        },
+                      ];
+
+                  return allocations.map((allocation) => ({
+                    id: allocation.id,
+                    month: wire.month,
+                    check_date: wire.wired_on,
+                    check_number: wire.ach_number,
+                    check_amt: wire.total_wire,
+                    invoice_number: detail.invoice_number,
+                    invoice_amt: allocation.amount,
+                    dc_name: detail.po_number,
+                    status: "Tony's",
+                    type: allocation.type,
+                    retailer: "tony" as Retailer,
+                  }));
+                })
+            );
+
+        setRows([...keheRows, ...targetRows, ...wegmansRows, ...tonyRows]);
       } catch (error) {
         console.error("Check details load error:", error);
       } finally {

@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
 
-type Retailer = "all" | "kehe" | "target" | "unfi" | "wegmans";
+type Retailer = "all" | "kehe" | "target" | "unfi" | "wegmans" | "tony";
 type ViewMode = "accounting" | "discrepancy";
 
 type InvoiceSummaryRow = {
@@ -43,6 +43,36 @@ type WegmansInvoiceRow = {
   inv_number: string | null;
   chargeback: number | null;
   type: string | null;
+  retailer?: Retailer;
+};
+
+type TonyInvoiceDetailRow = {
+  id: number;
+  wire_id: number;
+  invoice_number: string | null;
+  po_number: string | null;
+  invoice_amount: number | null;
+  discount_amount: number | null;
+  amount_paid: number | null;
+  type: string | null;
+  line_number: number | null;
+  type_splits?: TonyInvoiceTypeSplitRow[];
+};
+
+type TonyInvoiceTypeSplitRow = {
+  id: number;
+  detail_id: number;
+  type: string | null;
+  amount: number | null;
+};
+
+type TonyInvoiceWireRow = {
+  id: number;
+  month: string | null;
+  wired_on: string | null;
+  ach_number: string | null;
+  total_wire: number | null;
+  details?: TonyInvoiceDetailRow[];
   retailer?: Retailer;
 };
 
@@ -293,6 +323,7 @@ function getRetailerMonthlyTotalLabel(retailer: Retailer) {
   if (retailer === "target") return "Target Monthly Summary Total";
   if (retailer === "unfi") return "UNFI Monthly Summary Total";
   if (retailer === "wegmans") return "Wegmans Monthly Summary Total";
+  if (retailer === "tony") return "Tony's Monthly Summary Total";
 
   return "Monthly Summary Total";
 }
@@ -427,6 +458,7 @@ export default function AccountingSummaryView() {
   const [invoiceRows, setInvoiceRows] = useState<InvoiceSummaryRow[]>([]);
   const [targetRows, setTargetRows] = useState<TargetInvoiceRow[]>([]);
   const [wegmansRows, setWegmansRows] = useState<WegmansInvoiceRow[]>([]);
+  const [tonyRows, setTonyRows] = useState<TonyInvoiceWireRow[]>([]);
   const [brokerRows, setBrokerRows] = useState<BrokerCommissionRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -447,6 +479,7 @@ export default function AccountingSummaryView() {
     { value: "target", label: "Target" },
     { value: "unfi", label: "UNFI" },
     { value: "wegmans", label: "Wegmans" },
+    { value: "tony", label: "Tony's" },
   ];
 
   useEffect(() => {
@@ -460,6 +493,7 @@ export default function AccountingSummaryView() {
           ksolveWmRows,
           rawTargetRes,
           rawWegmansRes,
+          rawTonyRes,
         ] =
           await Promise.all([
             supabase
@@ -484,6 +518,13 @@ export default function AccountingSummaryView() {
                 "id, month, run_date, invoice, description, inv_number, chargeback, type"
               )
               .order("run_date", { ascending: false }),
+
+            supabase
+              .from("tony_invoice_wires")
+              .select(
+                "id, month, wired_on, ach_number, total_wire, details:tony_invoice_details(id, wire_id, invoice_number, po_number, invoice_amount, discount_amount, amount_paid, type, line_number, type_splits:tony_invoice_detail_type_splits(id, detail_id, type, amount))"
+              )
+              .order("wired_on", { ascending: false }),
           ]);
 
         if (rawInvoiceRes.error) {
@@ -518,6 +559,26 @@ export default function AccountingSummaryView() {
             ((rawWegmansRes.data || []) as WegmansInvoiceRow[]).map((row) => ({
               ...row,
               retailer: "wegmans",
+            }))
+          );
+        }
+
+        if (rawTonyRes.error) {
+          console.error("Tony invoice query error:", rawTonyRes.error);
+          setTonyRows([]);
+        } else {
+          setTonyRows(
+            ((rawTonyRes.data || []) as TonyInvoiceWireRow[]).map((row) => ({
+              ...row,
+              details: [...(row.details || [])].sort(
+                (a, b) => Number(a.line_number || 0) - Number(b.line_number || 0)
+              ).map((detail) => ({
+                ...detail,
+                type_splits: [...(detail.type_splits || [])].sort(
+                  (a, b) => Number(a.id || 0) - Number(b.id || 0)
+                ),
+              })),
+              retailer: "tony",
             }))
           );
         }
@@ -602,6 +663,12 @@ export default function AccountingSummaryView() {
     return wegmansRows.filter((row) => row.retailer === retailer);
   }, [wegmansRows, retailer]);
 
+  const filteredTonyRows = useMemo(() => {
+    if (retailer === "all") return tonyRows;
+
+    return tonyRows.filter((row) => row.retailer === retailer);
+  }, [tonyRows, retailer]);
+
   const filteredBrokerRows = useMemo(() => {
     if (retailer === "all") return brokerRows;
 
@@ -659,8 +726,29 @@ export default function AccountingSummaryView() {
       }
     }
 
+    for (const row of filteredTonyRows) {
+      const date = parseUsDate(row.wired_on);
+
+      if (!date) continue;
+
+      const key = monthKeyFromDate(date);
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          label: monthLabelFromDate(date),
+          sortValue: date.getFullYear() * 100 + date.getMonth() + 1,
+        });
+      }
+    }
+
     return Array.from(map.values()).sort((a, b) => b.sortValue - a.sortValue);
-  }, [filteredInvoiceRows, filteredTargetRows, filteredWegmansRows]);
+  }, [
+    filteredInvoiceRows,
+    filteredTargetRows,
+    filteredWegmansRows,
+    filteredTonyRows,
+  ]);
 
   const discrepancyMonthOptions = useMemo<MonthOption[]>(() => {
     const map = new Map<string, MonthOption>();
@@ -825,6 +913,42 @@ export default function AccountingSummaryView() {
       }
     }
 
+    if (retailer === "all" || retailer === "tony") {
+      for (const row of filteredTonyRows) {
+        const date = parseUsDate(row.wired_on);
+
+        if (!date) continue;
+
+        const monthKey = monthKeyFromDate(date);
+
+        if (!monthKeySet.has(monthKey)) continue;
+
+        for (const detail of row.details || []) {
+          const allocations = (detail.type_splits || []).length
+            ? (detail.type_splits || []).map((split) => ({
+                typeName: split.type?.trim() || "Unassigned",
+                amount: Number(split.amount || 0),
+              }))
+            : [
+                {
+                  typeName: detail.type?.trim() || "Unassigned",
+                  amount: Number(detail.amount_paid || 0),
+                },
+              ];
+
+          for (const allocation of allocations) {
+            const typeName = allocation.typeName;
+            const amount = allocation.amount;
+
+            if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
+
+            const current = typeMonthTotals.get(typeName)!;
+            current[monthKey] = (current[monthKey] || 0) + amount;
+          }
+        }
+      }
+    }
+
     const orderedTypes =
       retailer === "target"
         ? Array.from(typeMonthTotals.keys()).sort((a, b) => a.localeCompare(b))
@@ -867,6 +991,7 @@ export default function AccountingSummaryView() {
     filteredInvoiceRows,
     filteredTargetRows,
     filteredWegmansRows,
+    filteredTonyRows,
     filteredMonthOptions,
     retailer,
   ]);
@@ -1196,7 +1321,7 @@ export default function AccountingSummaryView() {
               </table>
             </div>
           )
-        ) : retailer === "target" || retailer === "unfi" || retailer === "wegmans" ? (
+        ) : retailer === "target" || retailer === "unfi" || retailer === "wegmans" || retailer === "tony" ? (
           <p className="text-sm text-slate-500">
             Summary Discrepancy is currently available for KeHE only.
           </p>

@@ -2,13 +2,30 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { ChevronDown, ChevronRight, Download, Search, Upload, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Plus,
+  Search,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
 
 type WorksheetRow = unknown[];
+
+type TonyInvoiceTypeSplit = {
+  id?: number;
+  detail_id?: number;
+  type: string;
+  amount: number | null;
+  created_at?: string;
+};
 
 type TonyInvoiceDetail = {
   id?: number;
@@ -18,8 +35,9 @@ type TonyInvoiceDetail = {
   invoice_amount: number | null;
   discount_amount: number | null;
   amount_paid: number | null;
-  comment: string;
+  type: string;
   line_number: number;
+  type_splits?: TonyInvoiceTypeSplit[];
 };
 
 type TonyInvoiceWire = {
@@ -146,6 +164,31 @@ function formatCurrency(value: number | null | undefined) {
   }).format(Number(value));
 }
 
+function getDetailAllocations(detail: TonyInvoiceDetail) {
+  const splits = detail.type_splits || [];
+
+  if (splits.length) {
+    return splits.map((split) => ({
+      type: clean(split.type) || "Unassigned",
+      amount: Number(split.amount || 0),
+    }));
+  }
+
+  return [
+    {
+      type: clean(detail.type) || "Unassigned",
+      amount: Number(detail.amount_paid || 0),
+    },
+  ];
+}
+
+function getSplitTotal(detail: TonyInvoiceDetail) {
+  return (detail.type_splits || []).reduce(
+    (sum, split) => sum + Number(split.amount || 0),
+    0
+  );
+}
+
 function getErrorMessage(error: unknown, fallback: string) {
   if (error && typeof error === "object" && "message" in error) {
     const message = (error as { message?: unknown }).message;
@@ -198,7 +241,7 @@ function parseTonyInvoiceWorkbook(rawRows: WorksheetRow[], fileName: string): Pa
   const invoiceAmountIndex = getHeaderIndex(headers, ["Invoice Amount"]);
   const discountAmountIndex = getHeaderIndex(headers, ["Discount Amount"]);
   const amountPaidIndex = getHeaderIndex(headers, ["Amount Paid"]);
-  const commentIndex = getHeaderIndex(headers, ["Comment"]);
+  const typeIndex = getHeaderIndex(headers, ["Type", "Comment"]);
 
   const requiredIndexes = [
     ["Invoice#", invoiceIndex],
@@ -225,9 +268,9 @@ function parseTonyInvoiceWorkbook(rawRows: WorksheetRow[], fileName: string): Pa
     const invoiceAmount = parseNumber(getValue(row, invoiceAmountIndex));
     const discountAmount = parseNumber(getValue(row, discountAmountIndex));
     const amountPaid = parseNumber(getValue(row, amountPaidIndex));
-    const comment = clean(getValue(row, commentIndex));
+    const type = clean(getValue(row, typeIndex));
 
-    if (!invoiceNumber && !poNumber && invoiceAmount == null && discountAmount == null && amountPaid == null && !comment) {
+    if (!invoiceNumber && !poNumber && invoiceAmount == null && discountAmount == null && amountPaid == null && !type) {
       return;
     }
 
@@ -237,7 +280,7 @@ function parseTonyInvoiceWorkbook(rawRows: WorksheetRow[], fileName: string): Pa
       invoice_amount: invoiceAmount,
       discount_amount: discountAmount,
       amount_paid: amountPaid,
-      comment,
+      type,
       line_number: index + 1,
     });
   });
@@ -270,7 +313,7 @@ async function fetchAllTonyWires() {
     const { data, error } = await supabase
       .from("tony_invoice_wires")
       .select(
-        "id, month, wired_on, ach_number, total_wire, source_file_name, created_at, details:tony_invoice_details(id, wire_id, invoice_number, po_number, invoice_amount, discount_amount, amount_paid, comment, line_number)"
+        "id, month, wired_on, ach_number, total_wire, source_file_name, created_at, details:tony_invoice_details(id, wire_id, invoice_number, po_number, invoice_amount, discount_amount, amount_paid, type, line_number, type_splits:tony_invoice_detail_type_splits(id, detail_id, type, amount, created_at))"
       )
       .order("wired_on", { ascending: false })
       .range(from, from + PAGE_SIZE - 1);
@@ -281,7 +324,12 @@ async function fetchAllTonyWires() {
       ...row,
       details: [...(row.details || [])].sort(
         (a, b) => Number(a.line_number || 0) - Number(b.line_number || 0)
-      ),
+      ).map((detail) => ({
+        ...detail,
+        type_splits: [...(detail.type_splits || [])].sort(
+          (a, b) => Number(a.id || 0) - Number(b.id || 0)
+        ),
+      })),
     }));
     allRows = [...allRows, ...batch];
 
@@ -299,8 +347,15 @@ export default function TonyInvoicesView() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [savingTypeId, setSavingTypeId] = useState<number | null>(null);
+  const [savingSplitDetailId, setSavingSplitDetailId] = useState<number | null>(null);
+  const [deletingSplitId, setDeletingSplitId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
+  const [openDetailRows, setOpenDetailRows] = useState<Record<string, boolean>>({});
+  const [splitDrafts, setSplitDrafts] = useState<
+    Record<string, { type: string; amount: string }>
+  >({});
 
   const loadRows = async () => {
     try {
@@ -348,7 +403,7 @@ export default function TonyInvoicesView() {
             detail.invoice_amount,
             detail.discount_amount,
             detail.amount_paid,
-            detail.comment,
+            detail.type,
           ].join(" ")
         )
         .join(" ");
@@ -394,6 +449,126 @@ export default function TonyInvoicesView() {
       ...prev,
       [key]: !prev[key],
     }));
+  };
+
+  const toggleDetailOpen = (key: string) => {
+    setOpenDetailRows((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  const updateSplitDraft = (
+    key: string,
+    field: "type" | "amount",
+    value: string
+  ) => {
+    setSplitDrafts((prev) => ({
+      ...prev,
+      [key]: {
+        type: prev[key]?.type || "",
+        amount: prev[key]?.amount || "",
+        [field]: value,
+      },
+    }));
+  };
+
+  const updateDetailTypeLocally = (detailId: number, type: string) => {
+    setRows((prev) =>
+      prev.map((wire) => ({
+        ...wire,
+        details: (wire.details || []).map((detail) =>
+          detail.id === detailId ? { ...detail, type } : detail
+        ),
+      }))
+    );
+  };
+
+  const saveDetailType = async (detail: TonyInvoiceDetail, nextType: string) => {
+    if (!detail.id) return;
+
+    const currentType = clean(detail.type);
+    const normalizedNextType = clean(nextType);
+    if (currentType === normalizedNextType) return;
+
+    setSavingTypeId(detail.id);
+    updateDetailTypeLocally(detail.id, normalizedNextType);
+
+    const { error } = await supabase
+      .from("tony_invoice_details")
+      .update({ type: normalizedNextType })
+      .eq("id", detail.id);
+
+    setSavingTypeId(null);
+
+    if (error) {
+      updateDetailTypeLocally(detail.id, currentType);
+      alert(getErrorMessage(error, "Failed to save type."));
+    }
+  };
+
+  const addTypeSplit = async (detail: TonyInvoiceDetail, draftKey: string) => {
+    if (!detail.id) return;
+
+    const draft = splitDrafts[draftKey] || { type: "", amount: "" };
+    const splitType = clean(draft.type);
+    const splitAmount = parseNumber(draft.amount);
+
+    if (!splitType) {
+      alert("Enter a type.");
+      return;
+    }
+
+    if (splitAmount == null) {
+      alert("Enter an amount.");
+      return;
+    }
+
+    const signedAmount =
+      Number(detail.amount_paid || 0) < 0 && splitAmount > 0
+        ? -Math.abs(splitAmount)
+        : splitAmount;
+
+    setSavingSplitDetailId(detail.id);
+
+    const { error } = await supabase.from("tony_invoice_detail_type_splits").insert({
+      detail_id: detail.id,
+      type: splitType,
+      amount: signedAmount,
+    });
+
+    setSavingSplitDetailId(null);
+
+    if (error) {
+      alert(getErrorMessage(error, "Failed to add type split."));
+      return;
+    }
+
+    setSplitDrafts((prev) => ({
+      ...prev,
+      [draftKey]: { type: "", amount: "" },
+    }));
+    await loadRows();
+  };
+
+  const deleteTypeSplit = async (split: TonyInvoiceTypeSplit) => {
+    if (!split.id) return;
+
+    setDeletingSplitId(split.id);
+
+    const { error } = await supabase
+      .from("tony_invoice_detail_type_splits")
+      .delete()
+      .eq("id", split.id);
+
+    setDeletingSplitId(null);
+
+    if (error) {
+      alert(getErrorMessage(error, "Failed to delete type split."));
+      return;
+    }
+
+    await loadRows();
   };
 
   const handleUpload = async (files: FileList) => {
@@ -493,19 +668,23 @@ export default function TonyInvoicesView() {
     }
 
     const exportRows = filteredRows.flatMap((wire) =>
-      (wire.details || []).map((detail) => ({
-        Month: wire.month,
-        Date: formatDisplayDate(wire.wired_on),
-        "ACH#": wire.ach_number,
-        "Total Wire": wire.total_wire,
-        "Invoice#": detail.invoice_number,
-        "PO#": detail.po_number,
-        "Invoice Amount": detail.invoice_amount,
-        "Discount Amount": detail.discount_amount,
-        "Amount Paid": detail.amount_paid,
-        Comment: detail.comment,
-        "Source File Name": wire.source_file_name,
-      }))
+      (wire.details || []).flatMap((detail) =>
+        getDetailAllocations(detail).map((allocation) => ({
+          Retailer: "Tony's",
+          Month: wire.month,
+          Date: formatDisplayDate(wire.wired_on),
+          "ACH#": wire.ach_number,
+          "Total Wire": wire.total_wire,
+          "Invoice#": detail.invoice_number,
+          "PO#": detail.po_number,
+          "Invoice Amount": detail.invoice_amount,
+          "Discount Amount": detail.discount_amount,
+          "Original Amount Paid": detail.amount_paid,
+          Type: allocation.type,
+          "Type Amount": allocation.amount,
+          "Source File Name": wire.source_file_name,
+        }))
+      )
     );
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
@@ -532,7 +711,7 @@ export default function TonyInvoicesView() {
                 <Input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search ACH, invoice, PO, comment"
+                  placeholder="Search ACH, invoice, PO, type"
                   className="rounded-2xl pl-10 pr-10"
                 />
                 {search && (
@@ -615,7 +794,7 @@ export default function TonyInvoicesView() {
               <table className="min-w-full border-separate border-spacing-0 text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
                   <tr>
-                    <th className="w-12 whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700" />
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Retailer</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Month</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Date</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">ACH#</th>
@@ -630,19 +809,27 @@ export default function TonyInvoicesView() {
 
                     return (
                       <React.Fragment key={rowKey}>
-                        <tr className="border-t border-slate-200 bg-white">
+                        <tr
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => toggleOpen(rowKey)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              toggleOpen(rowKey);
+                            }
+                          }}
+                          className="cursor-pointer border-t border-slate-200 bg-white transition hover:bg-slate-50"
+                        >
                           <td className="whitespace-nowrap px-4 py-3 text-slate-700">
-                            <button
-                              type="button"
-                              onClick={() => toggleOpen(rowKey)}
-                              className="rounded-full p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-                            >
+                            <span className="inline-flex items-center gap-2">
                               {isOpen ? (
                                 <ChevronDown className="h-4 w-4" />
                               ) : (
                                 <ChevronRight className="h-4 w-4" />
                               )}
-                            </button>
+                              <span className="font-medium text-slate-900">Tony&apos;s</span>
+                            </span>
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.month}</td>
                           <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDisplayDate(row.wired_on)}</td>
@@ -664,29 +851,174 @@ export default function TonyInvoicesView() {
                                       <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Invoice Amount</th>
                                       <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Discount Amount</th>
                                       <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Amount Paid</th>
-                                      <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Comment</th>
+                                      <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Type</th>
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {(row.details || []).map((detail, detailIndex) => (
-                                      <tr
-                                        key={detail.id || `${rowKey}-${detail.line_number}-${detailIndex}`}
-                                        className="border-t border-slate-200"
-                                      >
-                                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{detail.invoice_number}</td>
-                                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{detail.po_number}</td>
-                                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">
-                                          {formatCurrency(detail.invoice_amount)}
-                                        </td>
-                                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">
-                                          {formatCurrency(detail.discount_amount)}
-                                        </td>
-                                        <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-slate-900">
-                                          {formatCurrency(detail.amount_paid)}
-                                        </td>
-                                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{detail.comment}</td>
-                                      </tr>
-                                    ))}
+                                    {(row.details || []).map((detail, detailIndex) => {
+                                      const detailKey = String(
+                                        detail.id || `${rowKey}-${detail.line_number}-${detailIndex}`
+                                      );
+                                      const isDetailOpen = !!openDetailRows[detailKey];
+                                      const splitTotal = getSplitTotal(detail);
+                                      const hasSplits = (detail.type_splits || []).length > 0;
+                                      const remaining = Number(detail.amount_paid || 0) - splitTotal;
+                                      const draft = splitDrafts[detailKey] || { type: "", amount: "" };
+
+                                      return (
+                                        <React.Fragment key={detailKey}>
+                                          <tr
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={() => toggleDetailOpen(detailKey)}
+                                            onKeyDown={(event) => {
+                                              if (event.key === "Enter" || event.key === " ") {
+                                                event.preventDefault();
+                                                toggleDetailOpen(detailKey);
+                                              }
+                                            }}
+                                            className="cursor-pointer border-t border-slate-200 transition hover:bg-slate-50"
+                                          >
+                                            <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                                              <span className="inline-flex items-center gap-2">
+                                                {isDetailOpen ? (
+                                                  <ChevronDown className="h-4 w-4 text-slate-500" />
+                                                ) : (
+                                                  <ChevronRight className="h-4 w-4 text-slate-500" />
+                                                )}
+                                                {detail.invoice_number}
+                                              </span>
+                                            </td>
+                                            <td className="whitespace-nowrap px-4 py-3 text-slate-700">{detail.po_number}</td>
+                                            <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">
+                                              {formatCurrency(detail.invoice_amount)}
+                                            </td>
+                                            <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">
+                                              {formatCurrency(detail.discount_amount)}
+                                            </td>
+                                            <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-slate-900">
+                                              {formatCurrency(detail.amount_paid)}
+                                            </td>
+                                            <td className="min-w-[260px] whitespace-nowrap px-4 py-3 text-slate-700">
+                                              {hasSplits ? (
+                                                <div className="text-sm">
+                                                  <div className="font-medium text-slate-900">
+                                                    {(detail.type_splits || []).length} split types
+                                                  </div>
+                                                  <div
+                                                    className={`text-xs ${
+                                                      Math.abs(remaining) < 0.01
+                                                        ? "text-emerald-600"
+                                                        : "text-amber-600"
+                                                    }`}
+                                                  >
+                                                    Allocated {formatCurrency(splitTotal)} / Remaining {formatCurrency(remaining)}
+                                                  </div>
+                                                </div>
+                                              ) : (
+                                                <Input
+                                                  defaultValue={detail.type}
+                                                  placeholder="Add type"
+                                                  onClick={(event) => event.stopPropagation()}
+                                                  onKeyDown={(event) => {
+                                                    event.stopPropagation();
+                                                    if (event.key === "Enter") {
+                                                      event.currentTarget.blur();
+                                                    }
+                                                  }}
+                                                  onBlur={(event) =>
+                                                    saveDetailType(detail, event.currentTarget.value)
+                                                  }
+                                                  disabled={savingTypeId === detail.id}
+                                                  className="h-9 min-w-[180px] rounded-xl"
+                                                />
+                                              )}
+                                            </td>
+                                          </tr>
+
+                                          {isDetailOpen && (
+                                            <tr className="border-t border-slate-200 bg-slate-50">
+                                              <td colSpan={6} className="px-6 py-4">
+                                                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                                  <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                    <div>
+                                                      <div className="text-sm font-semibold text-slate-900">
+                                                        Type allocations
+                                                      </div>
+                                                      <div className="text-xs text-slate-500">
+                                                        Summary uses these split amounts when any allocation exists.
+                                                      </div>
+                                                    </div>
+                                                    <div
+                                                      className={`text-sm font-medium ${
+                                                        Math.abs(remaining) < 0.01
+                                                          ? "text-emerald-600"
+                                                          : "text-amber-600"
+                                                      }`}
+                                                    >
+                                                      Remaining {formatCurrency(remaining)}
+                                                    </div>
+                                                  </div>
+
+                                                  <div className="space-y-2">
+                                                    {(detail.type_splits || []).map((split) => (
+                                                      <div
+                                                        key={split.id || `${detailKey}-${split.type}-${split.amount}`}
+                                                        className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm sm:grid-cols-[1fr_160px_44px] sm:items-center"
+                                                      >
+                                                        <div className="font-medium text-slate-900">{split.type || "Unassigned"}</div>
+                                                        <div className="text-right font-semibold text-slate-900">
+                                                          {formatCurrency(split.amount)}
+                                                        </div>
+                                                        <button
+                                                          type="button"
+                                                          onClick={(event) => {
+                                                            event.stopPropagation();
+                                                            deleteTypeSplit(split);
+                                                          }}
+                                                          disabled={deletingSplitId === split.id}
+                                                          className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 hover:bg-white hover:text-red-600 disabled:opacity-50"
+                                                        >
+                                                          <Trash2 className="h-4 w-4" />
+                                                        </button>
+                                                      </div>
+                                                    ))}
+
+                                                    <div className="grid gap-2 pt-2 sm:grid-cols-[1fr_180px_auto] sm:items-center">
+                                                      <Input
+                                                        value={draft.type}
+                                                        onChange={(event) =>
+                                                          updateSplitDraft(detailKey, "type", event.target.value)
+                                                        }
+                                                        placeholder="Type, e.g. EDLC"
+                                                        className="h-10 rounded-xl"
+                                                      />
+                                                      <Input
+                                                        value={draft.amount}
+                                                        onChange={(event) =>
+                                                          updateSplitDraft(detailKey, "amount", event.target.value)
+                                                        }
+                                                        placeholder="Amount"
+                                                        className="h-10 rounded-xl"
+                                                      />
+                                                      <Button
+                                                        type="button"
+                                                        onClick={() => addTypeSplit(detail, detailKey)}
+                                                        disabled={savingSplitDetailId === detail.id || !detail.id}
+                                                        className="rounded-xl"
+                                                      >
+                                                        <Plus className="mr-2 h-4 w-4" />
+                                                        Add Type
+                                                      </Button>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              </td>
+                                            </tr>
+                                          )}
+                                        </React.Fragment>
+                                      );
+                                    })}
                                   </tbody>
                                 </table>
                               </div>
