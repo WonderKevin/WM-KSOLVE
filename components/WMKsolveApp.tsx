@@ -34,6 +34,7 @@ import KeHeVelocityView from "@/components/Views/KeHeVelocityView";
 import KeheDashboardView from "@/components/Views/KeheDashboardView";
 import TonyDashboardView from "@/components/Views/TonyDashboardView";
 import TonyVelocityView from "@/components/Views/TonyVelocityView";
+import TonyInvoicesView from "@/components/Views/TonyInvoicesView";
 import HomeView from "@/components/Views/HomeView";
 import TargetView from "@/components/Views/TargetView";
 import TargetBrokerCommissionView from "@/components/Views/TargetBrokerCommissionView";
@@ -63,6 +64,7 @@ type Permissions = {
   can_view_database_wegmans?: boolean;
   can_view_database_kehe_velocity: boolean;
   can_view_database_tony_velocity?: boolean;
+  can_view_database_tony_invoices?: boolean;
   can_view_database_product_list: boolean;
   can_view_database_locations: boolean;
   can_view_database_deduction_type: boolean;
@@ -222,6 +224,7 @@ export default function WMKsolveApp() {
           can_view_database_wegmans: isAdmin,
           can_view_database_kehe_velocity: isAdmin,
           can_view_database_tony_velocity: isAdmin,
+          can_view_database_tony_invoices: isAdmin,
           can_view_database_product_list: isAdmin,
           can_view_database_locations: isAdmin,
           can_view_database_deduction_type: isAdmin,
@@ -359,6 +362,10 @@ export default function WMKsolveApp() {
       permissions.can_view_database_tony_velocity
         ? { label: "Tony's Velocity", key: "database-tony-velocity" }
         : null,
+      permissions.can_view_database_tony_invoices ||
+      userEmail.toLowerCase() === "kevin@wondermonday.com"
+        ? { label: "Tony's Invoices", key: "database-tony-invoices" }
+        : null,
       permissions.can_view_database_product_list
         ? { label: "Product List", key: "database-product-list" }
         : null,
@@ -437,6 +444,8 @@ export default function WMKsolveApp() {
         return <KeHeVelocityView />;
       case "database-tony-velocity":
         return <TonyVelocityView />;
+      case "database-tony-invoices":
+        return <TonyInvoicesView />;
       case "database-product-list":
         return <ProductListView />;
       case "database-locations":

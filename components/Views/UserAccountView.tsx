@@ -28,6 +28,7 @@ type UserPermissionRow = {
   can_view_database_wegmans: boolean;
   can_view_database_kehe_velocity: boolean;
   can_view_database_tony_velocity: boolean;
+  can_view_database_tony_invoices: boolean;
   can_view_database_product_list: boolean;
   can_view_database_locations: boolean;
   can_view_database_deduction_type: boolean;
@@ -78,6 +79,7 @@ const PERMISSION_GROUPS: Array<{
       "can_view_database_wegmans",
       "can_view_database_kehe_velocity",
       "can_view_database_tony_velocity",
+      "can_view_database_tony_invoices",
       "can_view_database_product_list",
       "can_view_database_locations",
       "can_view_database_deduction_type",
@@ -112,6 +114,7 @@ const LABEL_MAP: Record<string, string> = {
   can_view_database_wegmans: "Wegmans",
   can_view_database_kehe_velocity: "KeHe Velocity",
   can_view_database_tony_velocity: "Tony's Velocity",
+  can_view_database_tony_invoices: "Tony's Invoices",
   can_view_database_product_list: "Product List",
   can_view_database_locations: "Locations",
   can_view_database_deduction_type: "Deduction Type",
@@ -141,6 +144,7 @@ const DEFAULT_PERMISSION_VALUES = {
   can_view_database_wegmans: false,
   can_view_database_kehe_velocity: false,
   can_view_database_tony_velocity: false,
+  can_view_database_tony_invoices: false,
   can_view_database_product_list: false,
   can_view_database_locations: false,
   can_view_database_deduction_type: false,
