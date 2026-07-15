@@ -350,6 +350,7 @@ export default function TonyInvoicesView() {
   const [savingTypeId, setSavingTypeId] = useState<number | null>(null);
   const [savingSplitDetailId, setSavingSplitDetailId] = useState<number | null>(null);
   const [deletingSplitId, setDeletingSplitId] = useState<number | null>(null);
+  const [deletingWireId, setDeletingWireId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
   const [openDetailRows, setOpenDetailRows] = useState<Record<string, boolean>>({});
@@ -565,6 +566,34 @@ export default function TonyInvoicesView() {
 
     if (error) {
       alert(getErrorMessage(error, "Failed to delete type split."));
+      return;
+    }
+
+    await loadRows();
+  };
+
+  const deleteWire = async (wire: TonyInvoiceWire) => {
+    if (!wire.id) return;
+
+    const shouldDelete = window.confirm(
+      `Delete Tony's invoice ACH # ${wire.ach_number} dated ${formatDisplayDate(
+        wire.wired_on
+      )}?\n\nThis will also delete its invoice details and type allocations.`
+    );
+
+    if (!shouldDelete) return;
+
+    setDeletingWireId(wire.id);
+
+    const { error } = await supabase
+      .from("tony_invoice_wires")
+      .delete()
+      .eq("id", wire.id);
+
+    setDeletingWireId(null);
+
+    if (error) {
+      alert(getErrorMessage(error, "Failed to delete Tony's invoice."));
       return;
     }
 
@@ -799,6 +828,7 @@ export default function TonyInvoicesView() {
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Date</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">ACH#</th>
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Total Wire</th>
+                    <th className="w-12 whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700" />
                   </tr>
                 </thead>
 
@@ -837,11 +867,26 @@ export default function TonyInvoicesView() {
                           <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">
                             {formatCurrency(row.total_wire)}
                           </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right">
+                            <button
+                              type="button"
+                              title="Delete invoice"
+                              aria-label={`Delete Tony's invoice ACH # ${row.ach_number}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                deleteWire(row);
+                              }}
+                              disabled={!row.id || deletingWireId === row.id}
+                              className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
                         </tr>
 
                         {isOpen && (
                           <tr className="border-t border-slate-200 bg-slate-50">
-                            <td colSpan={5} className="px-6 py-4">
+                            <td colSpan={6} className="px-6 py-4">
                               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                                 <table className="min-w-full text-sm">
                                   <thead className="bg-slate-100">
