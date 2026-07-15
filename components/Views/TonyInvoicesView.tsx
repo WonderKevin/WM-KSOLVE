@@ -349,6 +349,7 @@ export default function TonyInvoicesView() {
   const [uploading, setUploading] = useState(false);
   const [savingTypeId, setSavingTypeId] = useState<number | null>(null);
   const [savingSplitDetailId, setSavingSplitDetailId] = useState<number | null>(null);
+  const [savingSplitId, setSavingSplitId] = useState<number | null>(null);
   const [deletingSplitId, setDeletingSplitId] = useState<number | null>(null);
   const [deletingWireId, setDeletingWireId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
@@ -405,6 +406,9 @@ export default function TonyInvoicesView() {
             detail.discount_amount,
             detail.amount_paid,
             detail.type,
+            ...(detail.type_splits || []).map((split) =>
+              [split.type, split.amount].join(" ")
+            ),
           ].join(" ")
         )
         .join(" ");
@@ -443,6 +447,24 @@ export default function TonyInvoicesView() {
       map.set(`${row.wired_on || ""}__${row.ach_number || ""}`, row);
     }
     return map;
+  }, [rows]);
+
+  const typeOptions = useMemo(() => {
+    const options = new Set<string>();
+
+    for (const row of rows) {
+      for (const detail of row.details || []) {
+        const detailType = clean(detail.type);
+        if (detailType) options.add(detailType);
+
+        for (const split of detail.type_splits || []) {
+          const splitType = clean(split.type);
+          if (splitType) options.add(splitType);
+        }
+      }
+    }
+
+    return Array.from(options).sort((a, b) => a.localeCompare(b));
   }, [rows]);
 
   const toggleOpen = (key: string) => {
@@ -549,6 +571,61 @@ export default function TonyInvoicesView() {
       ...prev,
       [draftKey]: { type: "", amount: "" },
     }));
+    await loadRows();
+  };
+
+  const saveTypeSplit = async (
+    detail: TonyInvoiceDetail,
+    split: TonyInvoiceTypeSplit,
+    nextType: string,
+    nextAmount: string
+  ) => {
+    if (!split.id) return;
+
+    const normalizedType = clean(nextType);
+    const parsedAmount = parseNumber(nextAmount);
+
+    if (!normalizedType) {
+      alert("Enter a type.");
+      return;
+    }
+
+    if (parsedAmount == null) {
+      alert("Enter an amount.");
+      return;
+    }
+
+    const signedAmount =
+      Number(detail.amount_paid || 0) < 0 && parsedAmount > 0
+        ? -Math.abs(parsedAmount)
+        : parsedAmount;
+    const currentType = clean(split.type);
+    const currentAmount = Number(split.amount || 0);
+
+    if (
+      currentType === normalizedType &&
+      Math.abs(currentAmount - signedAmount) < 0.005
+    ) {
+      return;
+    }
+
+    setSavingSplitId(split.id);
+
+    const { error } = await supabase
+      .from("tony_invoice_detail_type_splits")
+      .update({
+        type: normalizedType,
+        amount: signedAmount,
+      })
+      .eq("id", split.id);
+
+    setSavingSplitId(null);
+
+    if (error) {
+      alert(getErrorMessage(error, "Failed to save type split."));
+      return;
+    }
+
     await loadRows();
   };
 
@@ -724,6 +801,12 @@ export default function TonyInvoicesView() {
 
   return (
     <div className="space-y-6">
+      <datalist id="tony-invoice-type-options">
+        {typeOptions.map((option) => (
+          <option key={option} value={option} />
+        ))}
+      </datalist>
+
       <div className="sticky top-0 z-30 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -963,6 +1046,7 @@ export default function TonyInvoicesView() {
                                               ) : (
                                                 <Input
                                                   defaultValue={detail.type}
+                                                  list="tony-invoice-type-options"
                                                   placeholder="Add type"
                                                   onClick={(event) => event.stopPropagation()}
                                                   onKeyDown={(event) => {
@@ -1011,10 +1095,35 @@ export default function TonyInvoicesView() {
                                                         key={split.id || `${detailKey}-${split.type}-${split.amount}`}
                                                         className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm sm:grid-cols-[1fr_160px_44px] sm:items-center"
                                                       >
-                                                        <div className="font-medium text-slate-900">{split.type || "Unassigned"}</div>
-                                                        <div className="text-right font-semibold text-slate-900">
-                                                          {formatCurrency(split.amount)}
-                                                        </div>
+                                                        <Input
+                                                          defaultValue={split.type}
+                                                          list="tony-invoice-type-options"
+                                                          placeholder="Type"
+                                                          onBlur={(event) =>
+                                                            saveTypeSplit(
+                                                              detail,
+                                                              split,
+                                                              event.currentTarget.value,
+                                                              String(split.amount ?? "")
+                                                            )
+                                                          }
+                                                          disabled={savingSplitId === split.id}
+                                                          className="h-9 rounded-xl bg-white font-medium"
+                                                        />
+                                                        <Input
+                                                          defaultValue={String(split.amount ?? "")}
+                                                          placeholder="Amount"
+                                                          onBlur={(event) =>
+                                                            saveTypeSplit(
+                                                              detail,
+                                                              split,
+                                                              split.type,
+                                                              event.currentTarget.value
+                                                            )
+                                                          }
+                                                          disabled={savingSplitId === split.id}
+                                                          className="h-9 rounded-xl bg-white text-right font-semibold"
+                                                        />
                                                         <button
                                                           type="button"
                                                           onClick={(event) => {
@@ -1032,6 +1141,7 @@ export default function TonyInvoicesView() {
                                                     <div className="grid gap-2 pt-2 sm:grid-cols-[1fr_180px_auto] sm:items-center">
                                                       <Input
                                                         value={draft.type}
+                                                        list="tony-invoice-type-options"
                                                         onChange={(event) =>
                                                           updateSplitDraft(detailKey, "type", event.target.value)
                                                         }
