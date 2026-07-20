@@ -11,6 +11,7 @@ type VelocitySubTabKey =
   | "overall-average-cakes-per-week";
 type PulloutSubTabKey = "by-retailer-area" | "by-retailer-store" | "by-dc";
 type PeriodMode = "lastMonth" | "custom" | "past6Months" | "past12Months";
+type AnalyticsDateMode = "thisMonth" | "lastMonth" | "past6Months" | "custom";
 type TopN = 5 | 10 | 15 | 20;
 type AnalyticsSection =
   | "summary"
@@ -47,11 +48,23 @@ type LocationRow = {
   distribution_center?: unknown;
 };
 
+type LocationDcEntry = {
+  customer: string;
+  retailerArea: string;
+  dc: string;
+  storeCode: string;
+};
+
+type LocationDcLookup = {
+  exact: Map<string, string>;
+  entries: LocationDcEntry[];
+};
+
 type FillRatePeriodColumn = {
   key: string;
   label: string;
   month?: string;
-  kind: "month" | "mtd" | "last-week";
+  kind: "month" | "past-weeks" | "last-week" | "mtd";
 };
 
 type FillRatePeriodStats = {
@@ -77,6 +90,30 @@ function normalizeLocationMatch(value: unknown) {
     .replace(/\s+/g, " ")
     .trim();
 }
+function compactLocationMatch(value: unknown) {
+  return normalizeLocationMatch(value).replace(/\s+/g, "");
+}
+function locationTextLooksLikeMatch(a: unknown, b: unknown) {
+  const normalizedA = normalizeLocationMatch(a);
+  const normalizedB = normalizeLocationMatch(b);
+  const compactA = compactLocationMatch(a);
+  const compactB = compactLocationMatch(b);
+
+  if (!normalizedA || !normalizedB) return false;
+
+  return (
+    normalizedA === normalizedB ||
+    compactA === compactB ||
+    normalizedA.includes(normalizedB) ||
+    normalizedB.includes(normalizedA) ||
+    compactA.includes(compactB) ||
+    compactB.includes(compactA)
+  );
+}
+function getLocationStoreCode(value: unknown) {
+  const match = normalizeLocationMatch(value).match(/\b0*(\d{2,5})\b/);
+  return match?.[1] || "";
+}
 function getLocationKey(customer: unknown, retailerArea: unknown) {
   const normalizedCustomer = normalizeLocationMatch(customer);
   const normalizedArea = normalizeLocationMatch(retailerArea);
@@ -96,9 +133,28 @@ function getLocationDc(row: LocationRow) {
     .replace(/\s+/g, " ")
     .trim();
 }
-function getDcForVelocityRow(row: VelocityRow, locationDcByStore: Map<string, string>) {
+function getDcForVelocityRow(row: VelocityRow, locationDcLookup: LocationDcLookup) {
   const key = getLocationKey(row.customer, row.retailer_area);
-  return (key && locationDcByStore.get(key)) || "Unassigned DC";
+  const exactDc = key ? locationDcLookup.exact.get(key) : "";
+  if (exactDc) return exactDc;
+
+  const fuzzyMatch = locationDcLookup.entries.find(
+    (entry) =>
+      locationTextLooksLikeMatch(row.customer, entry.customer) &&
+      locationTextLooksLikeMatch(row.retailer_area, entry.retailerArea),
+  );
+  if (fuzzyMatch) return fuzzyMatch.dc;
+
+  const storeCode = getLocationStoreCode(row.customer);
+  const storeCodeMatch = storeCode
+    ? locationDcLookup.entries.find(
+        (entry) =>
+          entry.storeCode === storeCode &&
+          locationTextLooksLikeMatch(row.retailer_area, entry.retailerArea),
+      )
+    : null;
+
+  return storeCodeMatch?.dc || "Unassigned DC";
 }
 function getCakeSeriesName(d: string) {
   return String(d || "")
@@ -127,6 +183,10 @@ function monthLabelFromDate(date: Date) {
 function getCurrentMonthInputValue() {
   const n = new Date();
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+}
+function getCurrentMonthLabel() {
+  const n = new Date();
+  return monthLabelFromDate(new Date(n.getFullYear(), n.getMonth(), 1));
 }
 function getLastMonthInputValue() {
   const n = new Date();
@@ -270,27 +330,96 @@ function parseIsoDateOnly(value: string | null | undefined) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function getLastCompletedWeekRange(today = new Date()) {
-  const startOfThisWeek = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const day = startOfThisWeek.getDay();
-  const daysFromMonday = day === 0 ? 6 : day - 1;
-  startOfThisWeek.setDate(startOfThisWeek.getDate() - daysFromMonday);
-
-  const start = new Date(startOfThisWeek);
-  start.setDate(startOfThisWeek.getDate() - 7);
-
-  const end = new Date(startOfThisWeek);
-  end.setDate(startOfThisWeek.getDate() - 1);
-
-  return {
-    start: formatDateInputValue(start),
-    end: formatDateInputValue(end),
-  };
+function getDateFromMonthLabel(value: string) {
+  const match = normalizeMonthLabel(value).match(/^([A-Za-z]+)\s+'(\d{2})$/);
+  if (!match) return null;
+  const monthIndex = new Date(`${match[1]} 1, 2000`).getMonth();
+  if (Number.isNaN(monthIndex)) return null;
+  return new Date(2000 + Number(match[2]), monthIndex, 1);
 }
 
-function buildFillRatePeriodColumns(today = new Date()): FillRatePeriodColumn[] {
-  const monthColumns = [3, 2, 1].map((monthsBack) => {
-    const date = new Date(today.getFullYear(), today.getMonth() - monthsBack, 1);
+function getWeeklyRangeKey(row: VelocityRow) {
+  const start = parseIsoDateOnly(row.period_start_date);
+  const end = parseIsoDateOnly(row.period_end_date);
+  if (!start || !end) return "";
+  return `${formatDateInputValue(start)}|${formatDateInputValue(end)}`;
+}
+
+function getFillRateWeeklyRanges(rows: VelocityRow[] | undefined, referenceMonth: string) {
+  const ranges = new Map<string, { key: string; start: string; end: string }>();
+
+  for (const row of rows ?? []) {
+    if (String(row.period_type || "").toLowerCase() !== "weekly") continue;
+    if (normalizeMonthLabel(row.month) !== referenceMonth) continue;
+
+    const key = getWeeklyRangeKey(row);
+    if (!key || ranges.has(key)) continue;
+
+    const [start, end] = key.split("|");
+    ranges.set(key, { key, start, end });
+  }
+
+  return Array.from(ranges.values()).sort((a, b) => {
+    const endCompare = a.end.localeCompare(b.end);
+    if (endCompare !== 0) return endCompare;
+    return a.start.localeCompare(b.start);
+  });
+}
+
+function buildFillRatePeriodConfig(
+  rows: VelocityRow[] | undefined,
+  referenceMonth: string,
+  analyticsDateMode: AnalyticsDateMode,
+) {
+  const referenceMonthNorm = normalizeMonthLabel(referenceMonth);
+  const isCurrentMonth =
+    analyticsDateMode === "thisMonth" &&
+    referenceMonthNorm === normalizeMonthLabel(getCurrentMonthLabel());
+
+  if (isCurrentMonth) {
+    const weeklyRanges = getFillRateWeeklyRanges(rows, referenceMonthNorm);
+    const columns: FillRatePeriodColumn[] = [];
+
+    if (weeklyRanges.length >= 2) {
+      columns.push({
+        key: "past-weeks",
+        label: `Past ${weeklyRanges.length} Weeks`,
+        kind: "past-weeks",
+      });
+    }
+
+    columns.push(
+      {
+        key: "last-week",
+        label: "Last Week",
+        kind: "last-week",
+      },
+      {
+        key: "mtd",
+        label: "MTD",
+        kind: "mtd",
+      },
+    );
+
+    return {
+      periodColumns: columns,
+      isCurrentMonth,
+      includePastWeeks: weeklyRanges.length >= 2,
+      latestWeeklyRangeKey: weeklyRanges[weeklyRanges.length - 1]?.key ?? "",
+      referenceMonth: referenceMonthNorm,
+    };
+  }
+
+  const referenceDate =
+    getDateFromMonthLabel(referenceMonthNorm) ??
+    getDateFromMonthLabel(getLastMonthLabel()) ??
+    new Date();
+  const periodColumns = [2, 1, 0].map((monthsBack) => {
+    const date = new Date(
+      referenceDate.getFullYear(),
+      referenceDate.getMonth() - monthsBack,
+      1,
+    );
     const month = monthLabelFromDate(date);
     return {
       key: month,
@@ -300,19 +429,13 @@ function buildFillRatePeriodColumns(today = new Date()): FillRatePeriodColumn[] 
     };
   });
 
-  return [
-    ...monthColumns,
-    {
-      key: "mtd",
-      label: "MTD",
-      kind: "mtd",
-    },
-    {
-      key: "last-week",
-      label: "Last Week",
-      kind: "last-week",
-    },
-  ];
+  return {
+    periodColumns,
+    isCurrentMonth,
+    includePastWeeks: false,
+    latestWeeklyRangeKey: "",
+    referenceMonth: referenceMonthNorm,
+  };
 }
 
 function addFillRatePeriodStat(
@@ -336,36 +459,49 @@ function getFillRatePeriodValue(
   return stats ? averageFillRate(stats.sum, stats.count) ?? 0 : 0;
 }
 
-function getFillRatePeriodKeys(row: VelocityRow, monthKeys: Map<string, string[]>, today = new Date()) {
-  const periodType = String(row.period_type || "monthly").toLowerCase();
+function getFillRatePeriodKeys(row: VelocityRow, monthKeys: Map<string, string[]>) {
+  return monthKeys.get(normalizeMonthLabel(row.month)) ?? [];
+}
 
-  if (periodType !== "weekly") {
-    return monthKeys.get(normalizeMonthLabel(row.month)) ?? [];
-  }
-
-  const periodEndDate = parseIsoDateOnly(row.period_end_date);
-  if (!periodEndDate) return [];
-
-  const periodEnd = formatDateInputValue(periodEndDate);
-  const currentMonthStart = formatDateInputValue(new Date(today.getFullYear(), today.getMonth(), 1));
-  const todayValue = formatDateInputValue(today);
-  const lastWeek = getLastCompletedWeekRange(today);
+function getCurrentMonthFillRatePeriodKeys(
+  row: VelocityRow,
+  config: ReturnType<typeof buildFillRatePeriodConfig>,
+) {
+  if (normalizeMonthLabel(row.month) !== config.referenceMonth) return [];
 
   const keys: string[] = [];
+  const isWeekly = String(row.period_type || "").toLowerCase() === "weekly";
 
-  if (periodEnd >= currentMonthStart && periodEnd <= todayValue) {
-    keys.push("mtd");
+  if (isWeekly) {
+    const rangeKey = getWeeklyRangeKey(row);
+    if (
+      config.includePastWeeks &&
+      rangeKey &&
+      rangeKey !== config.latestWeeklyRangeKey
+    ) {
+      keys.push("past-weeks");
+    }
+
+    if (rangeKey && rangeKey === config.latestWeeklyRangeKey) {
+      keys.push("last-week");
+    }
   }
 
-  if (periodEnd >= lastWeek.start && periodEnd <= lastWeek.end) {
-    keys.push("last-week");
-  }
-
+  keys.push("mtd");
   return keys;
 }
 
-function buildFillRateSummaries(rows: VelocityRow[] | undefined, referenceMonth: string) {
-  const periodColumns = buildFillRatePeriodColumns();
+function buildFillRateSummaries(
+  rows: VelocityRow[] | undefined,
+  referenceMonth: string,
+  analyticsDateMode: AnalyticsDateMode,
+) {
+  const periodConfig = buildFillRatePeriodConfig(
+    rows,
+    referenceMonth,
+    analyticsDateMode,
+  );
+  const { periodColumns } = periodConfig;
   const periodKeysByMonth = new Map<string, string[]>();
 
   for (const column of periodColumns) {
@@ -401,7 +537,9 @@ function buildFillRateSummaries(rows: VelocityRow[] | undefined, referenceMonth:
       totalCount += 1;
     }
 
-    const periodKeys = getFillRatePeriodKeys(row, periodKeysByMonth);
+    const periodKeys = periodConfig.isCurrentMonth
+      ? getCurrentMonthFillRatePeriodKeys(row, periodConfig)
+      : getFillRatePeriodKeys(row, periodKeysByMonth);
     if (!periodKeys.length) continue;
 
     const retailer = String(row.retailer || "").replace(/\u00a0/g, " ").trim();
@@ -1635,8 +1773,8 @@ function AnalyticsHeader({
   setAnalyticsSection: (section: AnalyticsSection) => void;
   retailerFilter: string;
   setRetailerFilter: (value: string) => void;
-  analyticsDateMode: "lastMonth" | "past6Months" | "custom";
-  setAnalyticsDateMode: (value: "lastMonth" | "past6Months" | "custom") => void;
+  analyticsDateMode: AnalyticsDateMode;
+  setAnalyticsDateMode: (value: AnalyticsDateMode) => void;
   analyticsFromMonth: string;
   setAnalyticsFromMonth: (value: string) => void;
   analyticsToMonth: string;
@@ -1644,15 +1782,8 @@ function AnalyticsHeader({
   analyticsSearchQuery: string;
   setAnalyticsSearchQuery: (value: string) => void;
 }) {
-  const allAvailableMonths = useMemo(
-    () =>
-      Array.from(
-        new Set(allRows.map((r) => normalizeMonthLabel(r.month))),
-      ).sort(compareMonthLabelsAsc),
-    [allRows],
-  );
-  const defaultLastMonth =
-    allAvailableMonths[allAvailableMonths.length - 1] ?? "";
+  const defaultThisMonth = normalizeMonthLabel(getCurrentMonthLabel());
+  const defaultLastMonth = normalizeMonthLabel(getLastMonthLabel());
   const retailerOptions = useMemo(
     () => [
       "All Retailers",
@@ -1684,8 +1815,26 @@ function AnalyticsHeader({
   const winBackCount = ctx?.winBackCandidates.length ?? 0;
   const decliningCount = ctx?.decliningStores.length ?? 0;
   const fillRateSummary = useMemo(
-    () => buildFillRateSummaries(fillRateRows, ctx?.lastMonth ?? ""),
-    [fillRateRows, ctx?.lastMonth],
+    () => {
+      const fillRateReferenceMonth =
+        analyticsDateMode === "thisMonth"
+          ? defaultThisMonth
+          : analyticsDateMode === "lastMonth"
+            ? defaultLastMonth
+            : ctx?.lastMonth ?? "";
+      return buildFillRateSummaries(
+        fillRateRows,
+        fillRateReferenceMonth,
+        analyticsDateMode,
+      );
+    },
+    [
+      analyticsDateMode,
+      defaultLastMonth,
+      defaultThisMonth,
+      fillRateRows,
+      ctx?.lastMonth,
+    ],
   );
 
   const cardBase =
@@ -1727,10 +1876,13 @@ function AnalyticsHeader({
               <select
                 value={analyticsDateMode}
                 onChange={(e) =>
-                  setAnalyticsDateMode(e.target.value as "lastMonth" | "past6Months" | "custom")
+                  setAnalyticsDateMode(e.target.value as AnalyticsDateMode)
                 }
                 className="h-9 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400"
               >
+                <option value="thisMonth">
+                  This Month ({defaultThisMonth})
+                </option>
                 <option value="lastMonth">
                   Last Month ({defaultLastMonth})
                 </option>
@@ -1987,12 +2139,14 @@ function AnalyticsTab({
   loading,
   loadError,
   analyticsSection,
+  analyticsDateMode,
 }: {
   rows: VelocityRow[];
   ctx: ReturnType<typeof buildAnalyticsContext>;
   loading: boolean;
   loadError: string;
   analyticsSection: AnalyticsSection;
+  analyticsDateMode: AnalyticsDateMode;
 }) {
   const [fillRateSubTab, setFillRateSubTab] =
     useState<FillRateSubTabKey>("retailer");
@@ -2066,8 +2220,17 @@ function AnalyticsTab({
   }, [ctx]);
 
   const fillRateSummary = useMemo(
-    () => buildFillRateSummaries(rows, ctx?.lastMonth ?? ""),
-    [rows, ctx?.lastMonth],
+    () =>
+      buildFillRateSummaries(
+        rows,
+        analyticsDateMode === "thisMonth"
+          ? normalizeMonthLabel(getCurrentMonthLabel())
+          : analyticsDateMode === "lastMonth"
+            ? normalizeMonthLabel(getLastMonthLabel())
+            : ctx?.lastMonth ?? "",
+        analyticsDateMode,
+      ),
+    [analyticsDateMode, rows, ctx?.lastMonth],
   );
 
   if (loading) return null;
@@ -2546,9 +2709,8 @@ export default function KeheDashboardView() {
   const [analyticsRetailerFilter, setAnalyticsRetailerFilter] =
     useState("All Retailers");
   const [analyticsSearchQuery, setAnalyticsSearchQuery] = useState("");
-  const [analyticsDateMode, setAnalyticsDateMode] = useState<
-    "lastMonth" | "past6Months" | "custom"
-  >("lastMonth");
+  const [analyticsDateMode, setAnalyticsDateMode] =
+    useState<AnalyticsDateMode>("thisMonth");
   const [analyticsFromMonth, setAnalyticsFromMonth] = useState(
     getPastMonthsInputValue(2),
   );
@@ -2607,20 +2769,29 @@ export default function KeheDashboardView() {
     load();
   }, []);
 
-  const locationDcByStore = useMemo(() => {
-    const map = new Map<string, string>();
+  const locationDcLookup = useMemo<LocationDcLookup>(() => {
+    const exact = new Map<string, string>();
+    const entries: LocationDcEntry[] = [];
 
     for (const location of locations) {
       const dc = getLocationDc(location);
-      const key = getLocationKey(
-        getLocationCustomer(location),
-        getLocationArea(location),
-      );
+      const customer = String(getLocationCustomer(location) || "").trim();
+      const retailerArea = String(getLocationArea(location) || "").trim();
+      const key = getLocationKey(customer, retailerArea);
 
-      if (key && dc) map.set(key, dc);
+      if (!dc) continue;
+      if (key) exact.set(key, dc);
+      if (customer && retailerArea) {
+        entries.push({
+          customer,
+          retailerArea,
+          dc,
+          storeCode: getLocationStoreCode(customer),
+        });
+      }
     }
 
-    return map;
+    return { exact, entries };
   }, [locations]);
 
   const retailerOptions = useMemo(
@@ -2684,11 +2855,15 @@ export default function KeheDashboardView() {
     [analyticsFilteredRows],
   );
 
-  const analyticsDefaultLastMonth =
-    analyticsAvailableMonths[analyticsAvailableMonths.length - 1] ?? "";
+  const analyticsThisMonth = normalizeMonthLabel(getCurrentMonthLabel());
+  const analyticsCalendarLastMonth = normalizeMonthLabel(getLastMonthLabel());
+  const analyticsDefaultReferenceMonth =
+    analyticsAvailableMonths[analyticsAvailableMonths.length - 1] ??
+    analyticsThisMonth;
 
   const analyticsSelectedMonths = useMemo(() => {
-    if (analyticsDateMode === "lastMonth") return analyticsAvailableMonths;
+    if (analyticsDateMode === "thisMonth") return [analyticsThisMonth];
+    if (analyticsDateMode === "lastMonth") return [analyticsCalendarLastMonth];
     if (analyticsDateMode === "past6Months") return analyticsAvailableMonths.slice(-6);
     return buildMonthRange(analyticsFromMonth, analyticsToMonth).map(
       normalizeMonthLabel,
@@ -2696,42 +2871,43 @@ export default function KeheDashboardView() {
   }, [
     analyticsDateMode,
     analyticsAvailableMonths,
+    analyticsCalendarLastMonth,
     analyticsFromMonth,
+    analyticsThisMonth,
     analyticsToMonth,
   ]);
 
-  const analyticsRowsByDate = useMemo(() => {
-    if (analyticsDateMode === "lastMonth") return analyticsFilteredRows;
-
-    const referenceMonth =
+  const analyticsReferenceMonth = useMemo(() => {
+    if (analyticsDateMode === "thisMonth") return analyticsThisMonth;
+    if (analyticsDateMode === "lastMonth") return analyticsCalendarLastMonth;
+    return (
       analyticsSelectedMonths[analyticsSelectedMonths.length - 1] ??
-      analyticsDefaultLastMonth;
+      analyticsDefaultReferenceMonth
+    );
+  }, [
+    analyticsCalendarLastMonth,
+    analyticsDateMode,
+    analyticsDefaultReferenceMonth,
+    analyticsSelectedMonths,
+    analyticsThisMonth,
+  ]);
 
-    if (!referenceMonth) return analyticsFilteredRows;
+  const analyticsRowsByDate = useMemo(() => {
+    if (!analyticsReferenceMonth) return analyticsFilteredRows;
 
     return analyticsFilteredRows.filter(
       (row) =>
         getMonthSortValue(normalizeMonthLabel(row.month)) <=
-        getMonthSortValue(referenceMonth),
+        getMonthSortValue(analyticsReferenceMonth),
     );
   }, [
-    analyticsDateMode,
     analyticsFilteredRows,
-    analyticsSelectedMonths,
-    analyticsDefaultLastMonth,
+    analyticsReferenceMonth,
   ]);
 
-  const analyticsLastMonth = useMemo(() => {
-    if (analyticsDateMode === "lastMonth") return analyticsDefaultLastMonth;
-    return (
-      analyticsSelectedMonths[analyticsSelectedMonths.length - 1] ??
-      analyticsDefaultLastMonth
-    );
-  }, [analyticsDateMode, analyticsDefaultLastMonth, analyticsSelectedMonths]);
-
   const analyticsCtx = useMemo(
-    () => buildAnalyticsContext(analyticsRowsByDate, analyticsLastMonth),
-    [analyticsRowsByDate, analyticsLastMonth],
+    () => buildAnalyticsContext(analyticsRowsByDate, analyticsReferenceMonth),
+    [analyticsRowsByDate, analyticsReferenceMonth],
   );
   const bestStoreSelectedMonths = useMemo(() => {
     if (bestStorePeriodMode === "lastMonth")
@@ -3026,7 +3202,7 @@ export default function KeheDashboardView() {
     >();
     for (const row of pulloutRows) {
       const month = normalizeMonthLabel(row.month);
-      const dc = getDcForVelocityRow(row, locationDcByStore);
+      const dc = getDcForVelocityRow(row, locationDcLookup);
       if (!g.has(dc)) {
         g.set(dc, { dc, months: {}, total: 0 });
       }
@@ -3042,7 +3218,7 @@ export default function KeheDashboardView() {
         return b.total - a.total;
       }),
     };
-  }, [pulloutRows, pulloutSelectedMonths, locationDcByStore]);
+  }, [pulloutRows, pulloutSelectedMonths, locationDcLookup]);
 
   const filteredByAreaRows = useMemo(() => {
     const q = pulloutSearchQuery.trim().toLowerCase();
@@ -3634,6 +3810,7 @@ export default function KeheDashboardView() {
             loading={loading}
             loadError={loadError}
             analyticsSection={analyticsSection}
+            analyticsDateMode={analyticsDateMode}
           />
         )}
 

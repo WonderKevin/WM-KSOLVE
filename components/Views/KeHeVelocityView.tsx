@@ -82,6 +82,17 @@ function getMostRecentSundayInputValue() {
   return formatDateInputValue(sunday);
 }
 
+function getDefaultWeeklyRangeInputValue() {
+  const end = parseDateInputValue(getMostRecentSundayInputValue()) ?? new Date();
+  const start = new Date(end);
+  start.setDate(end.getDate() - 6);
+
+  return {
+    start: formatDateInputValue(start),
+    end: formatDateInputValue(end),
+  };
+}
+
 function formatDisplayDate(value: string | null | undefined) {
   const parsed = parseDateInputValue(String(value || ""));
   if (!parsed) return "";
@@ -95,20 +106,24 @@ function buildUploadPeriodMetadata({
   periodType,
   monthInput,
   yearInput,
-  weekEndingDate,
+  weekStartDate,
+  weekEndDate,
 }: {
   periodType: "monthly" | "weekly";
   monthInput: string;
   yearInput: string;
-  weekEndingDate: string;
+  weekStartDate: string;
+  weekEndDate: string;
 }) {
   if (periodType === "weekly") {
-    const endDate = parseDateInputValue(weekEndingDate);
-    if (!endDate) {
-      throw new Error("Please choose a valid week ending date.");
+    const startDate = parseDateInputValue(weekStartDate);
+    const endDate = parseDateInputValue(weekEndDate);
+    if (!startDate || !endDate) {
+      throw new Error("Please choose a valid weekly date range.");
     }
-    const startDate = new Date(endDate);
-    startDate.setDate(endDate.getDate() - 6);
+    if (startDate > endDate) {
+      throw new Error("Weekly From date must be on or before the To date.");
+    }
 
     return {
       monthLabel: formatMonthLabel(endDate.getMonth() + 1, endDate.getFullYear()),
@@ -593,7 +608,9 @@ export default function KeHeVelocityView() {
   const [monthInput, setMonthInput] = useState("2");
   const [yearInput, setYearInput] = useState("2026");
   const [periodType, setPeriodType] = useState<"monthly" | "weekly">("monthly");
-  const [weekEndingDate, setWeekEndingDate] = useState(getMostRecentSundayInputValue());
+  const defaultWeeklyRange = useMemo(() => getDefaultWeeklyRangeInputValue(), []);
+  const [weekStartDate, setWeekStartDate] = useState(defaultWeeklyRange.start);
+  const [weekEndDate, setWeekEndDate] = useState(defaultWeeklyRange.end);
   const [showUploadBox, setShowUploadBox] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -813,7 +830,8 @@ export default function KeHeVelocityView() {
         periodType,
         monthInput,
         yearInput,
-        weekEndingDate,
+        weekStartDate,
+        weekEndDate,
       });
       const parsedRows = parseKeheWorksheet(
         rawRows,
@@ -1022,17 +1040,31 @@ export default function KeHeVelocityView() {
                     </div>
                   </>
                 ) : (
-                  <div className="md:col-span-2">
-                    <label className="mb-2 block text-sm font-medium text-slate-700">
-                      Week Ending Date
-                    </label>
-                    <Input
-                      type="date"
-                      value={weekEndingDate}
-                      onChange={(e) => setWeekEndingDate(e.target.value)}
-                      className="rounded-xl"
-                    />
-                  </div>
+                  <>
+                    <div>
+                      <label className="mb-2 block text-sm font-medium text-slate-700">
+                        From
+                      </label>
+                      <Input
+                        type="date"
+                        value={weekStartDate}
+                        onChange={(e) => setWeekStartDate(e.target.value)}
+                        className="rounded-xl"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm font-medium text-slate-700">
+                        To
+                      </label>
+                      <Input
+                        type="date"
+                        value={weekEndDate}
+                        onChange={(e) => setWeekEndDate(e.target.value)}
+                        className="rounded-xl"
+                      />
+                    </div>
+                  </>
                 )}
 
                 <div>
@@ -1051,7 +1083,7 @@ export default function KeHeVelocityView() {
               </div>
 
               <p className="mt-3 text-xs text-slate-500">
-                Weekly uploads use the selected week ending date and the prior 6 days for MTD and Last Week.
+                Weekly uploads use the selected From and To dates for the period label and month assignment.
                 Cases = Shipped ÷ 36.03, rounded. Eaches = Cases × 12.
               </p>
             </div>
