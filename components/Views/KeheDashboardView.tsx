@@ -380,10 +380,11 @@ function buildFillRatePeriodConfig(
     const weeklyRanges = getFillRateWeeklyRanges(rows, referenceMonthNorm);
     const columns: FillRatePeriodColumn[] = [];
 
-    if (weeklyRanges.length >= 2) {
+    const pastWeeksCount = weeklyRanges.length - 1;
+    if (pastWeeksCount >= 1) {
       columns.push({
         key: "past-weeks",
-        label: `Past ${weeklyRanges.length} Weeks`,
+        label: `Past ${pastWeeksCount} Week${pastWeeksCount === 1 ? "" : "s"}`,
         kind: "past-weeks",
       });
     }

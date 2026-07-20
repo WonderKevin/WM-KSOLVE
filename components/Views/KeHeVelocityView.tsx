@@ -633,6 +633,16 @@ export default function KeHeVelocityView() {
         const monthCompare = compareMonthLabelsDesc(a.month, b.month);
         if (monthCompare !== 0) return monthCompare;
 
+        const endCompare = String(b.period_end_date || "").localeCompare(
+          String(a.period_end_date || "")
+        );
+        if (endCompare !== 0) return endCompare;
+
+        const startCompare = String(b.period_start_date || "").localeCompare(
+          String(a.period_start_date || "")
+        );
+        if (startCompare !== 0) return startCompare;
+
         return String(a.customer || "").localeCompare(String(b.customer || ""));
       });
 
