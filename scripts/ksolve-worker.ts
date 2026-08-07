@@ -57,13 +57,9 @@ function extractBearerToken(authorization: string | undefined) {
   return authorization.replace(/^bearer\s+/i, "").trim();
 }
 
-function isJwt(value: string) {
-  return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value.trim());
-}
-
 function addUniqueToken(tokens: string[], token: string | undefined | null) {
   const cleaned = String(token || "").trim();
-  if (cleaned && isJwt(cleaned) && !tokens.includes(cleaned)) {
+  if (cleaned && !tokens.includes(cleaned)) {
     tokens.push(cleaned);
   }
 }
