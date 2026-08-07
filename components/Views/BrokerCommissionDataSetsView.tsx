@@ -172,7 +172,11 @@ function dedupString(value: string): string {
 
 function stripLocationSuffix(rawCustomer: string): string {
   const dashIndex = rawCustomer.indexOf(" - ");
-  return dashIndex !== -1 ? rawCustomer.slice(0, dashIndex) : rawCustomer;
+  const slashReferenceIndex = rawCustomer.search(/\/\s*REF\b/i);
+  const suffixIndexes = [dashIndex, slashReferenceIndex].filter((index) => index !== -1);
+  const firstSuffixIndex = suffixIndexes.length ? Math.min(...suffixIndexes) : -1;
+
+  return firstSuffixIndex !== -1 ? rawCustomer.slice(0, firstSuffixIndex) : rawCustomer;
 }
 
 function getMeaningfulWords(normalized: string): string[] {
@@ -384,6 +388,20 @@ function applyAmountBasedDiscrepancy(
   return result;
 }
 
+function getCustomerOverrideKey(customerName: string) {
+  return getCustomerLocationKey(customerName);
+}
+
+function getCustomerMatchedRows(rows: Row[], rowId: string) {
+  const targetRow = rows.find((row) => row.id === rowId);
+  if (!targetRow) return [];
+
+  const targetKey = getCustomerOverrideKey(targetRow.custName);
+  if (!targetKey) return [targetRow];
+
+  return rows.filter((row) => getCustomerOverrideKey(row.custName) === targetKey);
+}
+
 async function fetchAllDatasetRows(): Promise<DatasetDbRow[]> {
   let allRows: DatasetDbRow[] = [];
   let from = 0;
@@ -420,8 +438,11 @@ async function fetchAllDatasetRows(): Promise<DatasetDbRow[]> {
 }
 
 export default function BrokerCommissionDataSetsView() {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<BrokerDataSetsCache | null>(() =>
+    readBrowserCache<BrokerDataSetsCache>(BROKER_DATA_SETS_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<Row[]>(() => startupCache?.rows || []);
+  const [loading, setLoading] = useState(() => !startupCache);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [bulkSaving, setBulkSaving] = useState(false);
 
@@ -435,7 +456,9 @@ export default function BrokerCommissionDataSetsView() {
 
   const [search, setSearch] = useState("");
 
-  const [missingInvoices, setMissingInvoices] = useState<string[]>([]);
+  const [missingInvoices, setMissingInvoices] = useState<string[]>(
+    () => startupCache?.missingInvoices || []
+  );
   const [notifOpen, setNotifOpen] = useState(false);
 
   const [menuRowId, setMenuRowId] = useState<string | null>(null);
@@ -458,12 +481,12 @@ export default function BrokerCommissionDataSetsView() {
     if (!hasCachedData) setLoading(true);
 
     let datasetData: DatasetDbRow[] = [];
-    let datasetError: any = null;
+    let datasetError: Error | null = null;
 
     try {
       datasetData = await fetchAllDatasetRows();
     } catch (error) {
-      datasetError = error;
+      datasetError = error instanceof Error ? error : new Error(String(error));
     }
 
     const [
@@ -494,7 +517,7 @@ export default function BrokerCommissionDataSetsView() {
     if (locationsError) console.error("Failed to load locations:", locationsError);
     if (overrideError) console.error("Failed to load retailer overrides:", overrideError);
 
-    const locations: LocationRow[] = (locationsData ?? []).map((row: any) => ({
+    const locations: LocationRow[] = ((locationsData ?? []) as Partial<LocationRow>[]).map((row) => ({
       customer: row.customer ?? "",
       retailer: row.retailer ?? "",
     }));
@@ -597,16 +620,12 @@ export default function BrokerCommissionDataSetsView() {
   };
 
   useEffect(() => {
-    const cached = readBrowserCache<BrokerDataSetsCache>(BROKER_DATA_SETS_CACHE_KEY);
+    const refreshTimer = window.setTimeout(() => {
+      void loadData(Boolean(startupCache));
+    }, 0);
 
-    if (cached) {
-      setRows(cached.rows || []);
-      setMissingInvoices(cached.missingInvoices || []);
-      setLoading(false);
-    }
-
-    loadData(Boolean(cached));
-  }, []);
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -655,9 +674,9 @@ export default function BrokerCommissionDataSetsView() {
     return options;
   }, [rows]);
 
-  useEffect(() => {
-    if (!retailerOptions.includes(selectedRetailer)) setSelectedRetailer("All Retailers");
-  }, [retailerOptions, selectedRetailer]);
+  const effectiveSelectedRetailer = retailerOptions.includes(selectedRetailer)
+    ? selectedRetailer
+    : "All Retailers";
 
   // Computed fresh every render — no useMemo so there's no stale cache
   const data = (() => {
@@ -666,12 +685,12 @@ export default function BrokerCommissionDataSetsView() {
       if (selectedType !== "All Types") {
         if ((row.type ?? "").trim().toLowerCase() !== selectedType.trim().toLowerCase()) return false;
       }
-      if (selectedRetailer !== "All Retailers") {
+      if (effectiveSelectedRetailer !== "All Retailers") {
         const rowRetailer = (row.retailer ?? "").trim();
-        if (selectedRetailer === "Blank") {
+        if (effectiveSelectedRetailer === "Blank") {
           if (rowRetailer !== "") return false;
         } else {
-          if (rowRetailer.toLowerCase() !== selectedRetailer.toLowerCase()) return false;
+          if (rowRetailer.toLowerCase() !== effectiveSelectedRetailer.toLowerCase()) return false;
         }
       }
       if (selectedMonth !== "All Months") {
@@ -710,7 +729,9 @@ export default function BrokerCommissionDataSetsView() {
 
     const fileNameParts = ["broker_commission_datasets"];
     if (selectedType !== "All Types") fileNameParts.push(selectedType.replace(/\s+/g, "_"));
-    if (selectedRetailer !== "All Retailers") fileNameParts.push(selectedRetailer.replace(/\s+/g, "_"));
+    if (effectiveSelectedRetailer !== "All Retailers") {
+      fileNameParts.push(effectiveSelectedRetailer.replace(/\s+/g, "_"));
+    }
     if (selectedMonth !== "All Months") fileNameParts.push(selectedMonth.replace(/\s+/g, "_"));
 
     XLSX.writeFile(workbook, `${fileNameParts.join("_")}.xlsx`);
@@ -791,11 +812,20 @@ export default function BrokerCommissionDataSetsView() {
         : editRetailerChoice.trim();
     if (!finalRetailer) return;
 
+    const matchedRows = getCustomerMatchedRows(rows, rowId);
+    const targetRows = matchedRows.length ? matchedRows : rows.filter((row) => row.id === rowId);
+    const targetRowIds = targetRows.map((row) => row.id);
+    const updatedAt = new Date().toISOString();
+
     setSavingRowId(rowId);
     const { data, error } = await supabase
       .from("retailer_overrides")
       .upsert(
-        { dataset_id: rowId, retailer: finalRetailer, updated_at: new Date().toISOString() },
+        targetRowIds.map((targetRowId) => ({
+          dataset_id: targetRowId,
+          retailer: finalRetailer,
+          updated_at: updatedAt,
+        })),
         { onConflict: "dataset_id" }
       )
       .select();
@@ -808,8 +838,9 @@ export default function BrokerCommissionDataSetsView() {
     }
 
     console.log("Saved retailer override:", data);
+    const updatedRowIds = new Set(targetRowIds);
     setRows((prev) =>
-      prev.map((row) => (row.id === rowId ? { ...row, retailer: finalRetailer } : row))
+      prev.map((row) => (updatedRowIds.has(row.id) ? { ...row, retailer: finalRetailer } : row))
     );
     setSavingRowId(null);
     cancelEditing();
@@ -936,7 +967,7 @@ export default function BrokerCommissionDataSetsView() {
               variant="outline"
               className="rounded-2xl"
             >
-              {selectedRetailer}
+              {effectiveSelectedRetailer}
               <ChevronDown className="ml-2 h-4 w-4" />
             </Button>
             {retailerFilterOpen && (

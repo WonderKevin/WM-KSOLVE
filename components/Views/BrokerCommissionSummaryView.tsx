@@ -247,7 +247,11 @@ function getFirstTwoWords(value: string) {
 
 function stripLocationSuffix(rawCustomer: string) {
   const dashIndex = rawCustomer.indexOf(" - ");
-  return dashIndex !== -1 ? rawCustomer.slice(0, dashIndex) : rawCustomer;
+  const slashReferenceIndex = rawCustomer.search(/\/\s*REF\b/i);
+  const suffixIndexes = [dashIndex, slashReferenceIndex].filter((index) => index !== -1);
+  const firstSuffixIndex = suffixIndexes.length ? Math.min(...suffixIndexes) : -1;
+
+  return firstSuffixIndex !== -1 ? rawCustomer.slice(0, firstSuffixIndex) : rawCustomer;
 }
 
 function getCustomerLocationKey(rawCustomer: string) {
@@ -616,36 +620,49 @@ async function fetchBrokerCommissionStatuses(): Promise<BrokerCommissionStatusRo
 }
 
 export default function BrokerCommissionSummaryView() {
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<BrokerSummaryCache | null>(() =>
+    readBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY)
+  );
+  const startupRows = startupCache?.rows || [];
+  const [loading, setLoading] = useState(() => !startupCache);
   const [refreshing, setRefreshing] = useState(false);
-  const [rows, setRows] = useState<DatasetRow[]>([]);
-  const [velocityRows, setVelocityRows] = useState<VelocityRow[]>([]);
-  const [monthStatuses, setMonthStatuses] = useState<Record<string, BrokerageStatus>>({});
+  const [rows, setRows] = useState<DatasetRow[]>(() => startupRows);
+  const [velocityRows, setVelocityRows] = useState<VelocityRow[]>(
+    () => startupCache?.velocityRows || []
+  );
+  const [monthStatuses, setMonthStatuses] = useState<Record<string, BrokerageStatus>>(
+    () => startupCache?.monthStatuses || {}
+  );
   const [savingStatusKey, setSavingStatusKey] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState("All Months");
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>(
-    {}
+    () =>
+      Object.fromEntries(
+        Array.from(new Set(startupRows.map((row) => row.month).filter(Boolean))).map((month) => [
+          month,
+          false,
+        ])
+      )
   );
   const [expandedInvoiceRows, setExpandedInvoiceRows] = useState<
     Record<string, boolean>
   >({});
-  const [transferAllocations, setTransferAllocations] =
-    useState<TransferAllocationMap>({});
+  const [transferAllocations, setTransferAllocations] = useState<TransferAllocationMap>(() => {
+    if (typeof window === "undefined") return {};
+
+    try {
+      const saved = window.localStorage.getItem(TRANSFER_ALLOCATIONS_STORAGE_KEY);
+      if (!saved) return {};
+      const parsed = JSON.parse(saved) as TransferAllocationMap;
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
   const [allocationModal, setAllocationModal] = useState<TransferAlert | null>(
     null
   );
   const [draftAllocationInvoices, setDraftAllocationInvoices] = useState<string[]>([]);
-
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(TRANSFER_ALLOCATIONS_STORAGE_KEY);
-      if (!saved) return;
-      const parsed = JSON.parse(saved) as TransferAllocationMap;
-      if (parsed && typeof parsed === "object") setTransferAllocations(parsed);
-    } catch {
-      // ignore saved allocation parse errors
-    }
-  }, []);
 
   useEffect(() => {
     try {
@@ -859,28 +876,12 @@ export default function BrokerCommissionSummaryView() {
   }, []);
 
   useEffect(() => {
-    const cached = readBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY);
+    const refreshTimer = window.setTimeout(() => {
+      void load(false, Boolean(startupCache));
+    }, 0);
 
-    if (cached) {
-      const cachedRows = cached.rows || [];
-
-      setRows(cachedRows);
-      setVelocityRows(cached.velocityRows || []);
-      setMonthStatuses(cached.monthStatuses || {});
-      setLoading(false);
-      setExpandedMonths((prev) => {
-        const next = { ...prev };
-        Array.from(new Set(cachedRows.map((r) => r.month).filter(Boolean))).forEach(
-          (month) => {
-            if (!(month in next)) next[month] = false;
-          }
-        );
-        return next;
-      });
-    }
-
-    load(false, Boolean(cached));
-  }, [load]);
+    return () => window.clearTimeout(refreshTimer);
+  }, [load, startupCache]);
 
   const monthOptions = useMemo(() => {
     return [
