@@ -52,6 +52,45 @@ function getRunConfig() {
   };
 }
 
+function extractBearerToken(authorization: string | undefined) {
+  if (!authorization?.toLowerCase().startsWith("bearer ")) return "";
+  return authorization.replace(/^bearer\s+/i, "").trim();
+}
+
+function isJwt(value: string) {
+  return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value.trim());
+}
+
+function addUniqueToken(tokens: string[], token: string | undefined | null) {
+  const cleaned = String(token || "").trim();
+  if (cleaned && isJwt(cleaned) && !tokens.includes(cleaned)) {
+    tokens.push(cleaned);
+  }
+}
+
+async function validateKsolveToken(token: string, cookieHeader: string) {
+  const response = await fetch(
+    "https://connect.kehe.com/ksolve/services/api/ksolve/list/dcs",
+    {
+      method: "GET",
+      headers: {
+        accept: "application/json, text/plain, */*",
+        authorization: `Bearer ${token}`,
+        cookie: cookieHeader,
+        origin: "https://connect.kehe.com",
+        referer: "https://connect.kehe.com/ksolve/",
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
+      },
+    }
+  );
+
+  if (response.ok) return true;
+
+  console.warn(`K-Solve auth validation returned ${response.status}.`);
+  return false;
+}
+
 async function loginAndGetKsolveAuth() {
   const username = process.env.KSOLVE_USERNAME;
   const password = process.env.KSOLVE_PASSWORD;
@@ -67,13 +106,18 @@ async function loginAndGetKsolveAuth() {
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  let bearerToken = "";
+  let ksolveBearerToken = "";
+  let fallbackBearerToken = "";
 
   page.on("request", (request) => {
-    const authorization = request.headers()["authorization"];
+    const token = extractBearerToken(request.headers()["authorization"]);
 
-    if (authorization?.toLowerCase().startsWith("bearer ")) {
-      bearerToken = authorization.replace(/^bearer\s+/i, "").trim();
+    if (!token) return;
+
+    if (request.url().includes("/ksolve/services/api/")) {
+      ksolveBearerToken = token;
+    } else {
+      fallbackBearerToken = token;
     }
   });
 
@@ -123,10 +167,21 @@ async function loginAndGetKsolveAuth() {
       () => null
     );
 
+    const ksolveApiRequest = page
+      .waitForRequest(
+        (request) =>
+          request.url().includes("/ksolve/services/api/") &&
+          Boolean(extractBearerToken(request.headers()["authorization"])),
+        { timeout: 20000 }
+      )
+      .catch(() => null);
+
     await page.goto("https://connect.kehe.com/ksolve/", {
       waitUntil: "networkidle",
       timeout: 60000,
     });
+
+    await ksolveApiRequest;
 
     await page.waitForTimeout(5000);
 
@@ -137,29 +192,55 @@ async function loginAndGetKsolveAuth() {
       .map((cookie) => `${cookie.name}=${cookie.value}`)
       .join("; ");
 
-    if (!bearerToken) {
-      await page.goto(
-        "https://connect.kehe.com/ksolve/services/api/ksolve/list/dcs",
-        {
-          waitUntil: "networkidle",
-          timeout: 60000,
-        }
-      );
-
-      await page.waitForTimeout(3000);
-    }
-
-    if (!bearerToken) {
-      throw new Error(
-        "Login succeeded, but no K-Solve bearer token was captured."
-      );
-    }
-
     if (!cookieHeader) {
       throw new Error("Login succeeded, but no KeHE cookies were captured.");
     }
 
-    process.env.KSOLVE_BEARER_TOKEN = bearerToken;
+    const storageTokens = await page.evaluate(() => {
+      const tokens: string[] = [];
+      const stores = [window.localStorage, window.sessionStorage];
+      const jwtRegex = /[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
+
+      for (const store of stores) {
+        for (let index = 0; index < store.length; index += 1) {
+          const key = store.key(index);
+          const value = key ? store.getItem(key) || "" : "";
+          const matches = value.match(jwtRegex) || [];
+
+          for (const match of matches) {
+            if (!tokens.includes(match)) tokens.push(match);
+          }
+        }
+      }
+
+      return tokens;
+    });
+
+    const bearerCandidates: string[] = [];
+    addUniqueToken(bearerCandidates, ksolveBearerToken);
+    for (const token of storageTokens) addUniqueToken(bearerCandidates, token);
+    addUniqueToken(bearerCandidates, fallbackBearerToken);
+
+    if (!bearerCandidates.length) {
+      throw new Error("Login succeeded, but no bearer token was captured.");
+    }
+
+    let validatedBearerToken = "";
+
+    for (const token of bearerCandidates) {
+      if (await validateKsolveToken(token, cookieHeader)) {
+        validatedBearerToken = token;
+        break;
+      }
+    }
+
+    if (!validatedBearerToken) {
+      throw new Error(
+        "Login succeeded, but K-Solve rejected the captured bearer token."
+      );
+    }
+
+    process.env.KSOLVE_BEARER_TOKEN = validatedBearerToken;
     process.env.KSOLVE_COOKIE = cookieHeader;
 
     console.log("K-Solve login completed.");

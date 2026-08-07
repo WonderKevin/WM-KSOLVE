@@ -15,6 +15,12 @@ type KsolveDocument = {
   SignedUrl?: string | null;
 };
 
+type KsolveSchedule = {
+  id: string;
+  run_day: string;
+  run_time: string;
+};
+
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -49,12 +55,14 @@ export default function AutomationView() {
 
         if (!response.ok || !result?.schedules) return;
 
-        const invoiceFile = result.schedules.find(
-          (schedule: any) => schedule.id === "invoice-file"
+        const schedules = result.schedules as KsolveSchedule[];
+
+        const invoiceFile = schedules.find(
+          (schedule) => schedule.id === "invoice-file"
         );
 
-        const invoiceSummary = result.schedules.find(
-          (schedule: any) => schedule.id === "invoice-summary"
+        const invoiceSummary = schedules.find(
+          (schedule) => schedule.id === "invoice-summary"
         );
 
         if (invoiceFile) {
@@ -98,6 +106,11 @@ export default function AutomationView() {
   }) => {
     if (!startDate || !endDate) {
       alert("Please select a start date and end date.");
+      return;
+    }
+
+    if (new Date(`${startDate}T00:00:00`) > new Date(`${endDate}T00:00:00`)) {
+      alert("Start date must be before end date.");
       return;
     }
 

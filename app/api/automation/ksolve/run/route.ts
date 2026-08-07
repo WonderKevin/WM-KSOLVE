@@ -20,6 +20,29 @@ export async function POST(request: Request) {
       );
     }
 
+    const startTime = new Date(`${startDate}T00:00:00`).getTime();
+    const endTime = new Date(`${endDate}T00:00:00`).getTime();
+
+    if (Number.isNaN(startTime) || Number.isNaN(endTime)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: "Enter valid start and end dates.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (startTime > endTime) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: "Start date must be before end date.",
+        },
+        { status: 400 }
+      );
+    }
+
     if (!includeInvoiceSummary && !includeInvoiceFiles) {
       return NextResponse.json(
         {
@@ -77,7 +100,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      message: `K-Solve automation was triggered for ${startDate} to ${endDate}. Check GitHub Actions for progress.`,
+      message: `K-Solve automation was triggered for ${startDate} to ${endDate}. Historical ranges are split into safe K-Solve search batches in GitHub Actions.`,
     });
   } catch (error) {
     console.error("K-Solve manual trigger failed:", error);

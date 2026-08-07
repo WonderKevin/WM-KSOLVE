@@ -75,6 +75,10 @@ function parseIsoDate(date: string) {
   return new Date(`${date}T00:00:00`);
 }
 
+function toIsoDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
 function formatKsolveDate(date: Date) {
   return `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`;
 }
@@ -110,6 +114,40 @@ function subtractDays(date: Date, days: number) {
   return nextDate;
 }
 
+function addDays(date: Date, days: number) {
+  const nextDate = new Date(date);
+  nextDate.setDate(nextDate.getDate() + days);
+  return nextDate;
+}
+
+function getMaxCheckRangeDays() {
+  const configured = Number(process.env.KSOLVE_MAX_CHECK_RANGE_DAYS || "");
+  return Number.isFinite(configured) && configured > 0 ? configured : 14;
+}
+
+function splitCheckDateRange(startDate: string, endDate: string) {
+  const selectedStart = parseIsoDate(startDate);
+  const selectedEnd = parseIsoDate(endDate);
+  const maxDays = getMaxCheckRangeDays();
+  const ranges: Array<{ startDate: string; endDate: string }> = [];
+
+  let chunkStart = selectedStart;
+
+  while (chunkStart <= selectedEnd) {
+    const chunkEnd = addDays(chunkStart, maxDays - 1);
+    const boundedEnd = chunkEnd > selectedEnd ? selectedEnd : chunkEnd;
+
+    ranges.push({
+      startDate: toIsoDate(chunkStart),
+      endDate: toIsoDate(boundedEnd),
+    });
+
+    chunkStart = addDays(boundedEnd, 1);
+  }
+
+  return ranges;
+}
+
 function isCheckDateInRange(
   checkDate: string | null,
   startDate: string,
@@ -127,7 +165,7 @@ function isCheckDateInRange(
 function getKsolveHeaders() {
   return {
     accept: "application/json, text/plain, */*",
-    authorization: `bearer ${process.env.KSOLVE_BEARER_TOKEN}`,
+    authorization: `Bearer ${process.env.KSOLVE_BEARER_TOKEN}`,
     cookie: process.env.KSOLVE_COOKIE || "",
     origin: "https://connect.kehe.com",
     referer: "https://connect.kehe.com/ksolve/",
@@ -978,20 +1016,23 @@ async function uploadInvoiceSummaryToSupabase({
   };
 }
 
-export async function runKsolveAutomation({
+async function fetchKsolveSearchRowsForCheckRange({
   startDate,
   endDate,
-  includeInvoiceSummary = true,
-  includeInvoiceFiles = true,
-}: RunKsolveAutomationInput) {
-  console.log("Running K-Solve API automation...");
-  console.log(`Selected check date range: ${startDate} to ${endDate}`);
-
+}: {
+  startDate: string;
+  endDate: string;
+}) {
   const selectedStart = parseIsoDate(startDate);
   const selectedEnd = parseIsoDate(endDate);
-
   const searchStart = subtractDays(selectedStart, 90);
   const searchEnd = selectedEnd;
+
+  console.log(
+    `Searching K-Solve invoice dates ${formatKsolveDate(searchStart)} to ${formatKsolveDate(
+      searchEnd
+    )} for check dates ${startDate} to ${endDate}.`
+  );
 
   const searchEndpoint =
     "https://connect.kehe.com/ksolve/services/api/ksolve/search";
@@ -1016,14 +1057,103 @@ export async function runKsolveAutomation({
     const errorText = await searchResponse.text();
 
     throw new Error(
-      `K-Solve search failed (${searchResponse.status}): ${errorText}`
+      `K-Solve search failed (${searchResponse.status}) for ${startDate} to ${endDate}: ${errorText}`
     );
   }
 
   const searchRows = (await searchResponse.json()) as KsolveSearchRow[];
-
   const matchingRows = searchRows.filter((row) =>
     isCheckDateInRange(row.CheckDate, startDate, endDate)
+  );
+
+  console.log(
+    `K-Solve search returned ${searchRows.length} row(s); ${matchingRows.length} matched the selected check dates.`
+  );
+
+  return {
+    searchStart,
+    searchEnd,
+    searchRowCount: searchRows.length,
+    matchingRows,
+  };
+}
+
+function getSearchRowKey(row: KsolveSearchRow) {
+  if (row.Id) return `id:${row.Id}`;
+
+  return [
+    row.InvoiceNumber || "",
+    row.CheckNumber || "",
+    row.CheckDate || "",
+    row.InvoiceAmount ?? "",
+    row.DcNameDisplayable || "",
+  ].join("|");
+}
+
+export async function runKsolveAutomation({
+  startDate,
+  endDate,
+  includeInvoiceSummary = true,
+  includeInvoiceFiles = true,
+}: RunKsolveAutomationInput) {
+  console.log("Running K-Solve API automation...");
+  console.log(`Selected check date range: ${startDate} to ${endDate}`);
+
+  const selectedStart = parseIsoDate(startDate);
+  const selectedEnd = parseIsoDate(endDate);
+
+  if (Number.isNaN(selectedStart.getTime()) || Number.isNaN(selectedEnd.getTime())) {
+    throw new Error(`Invalid K-Solve date range: ${startDate} to ${endDate}.`);
+  }
+
+  if (selectedStart > selectedEnd) {
+    throw new Error(`K-Solve start date must be before end date: ${startDate} to ${endDate}.`);
+  }
+
+  const checkDateRanges = splitCheckDateRange(startDate, endDate);
+  const rowsByKey = new Map<string, KsolveSearchRow>();
+  let searchedInvoiceDateFrom: Date | null = null;
+  let searchedInvoiceDateTo: Date | null = null;
+  let totalSearchRowCount = 0;
+
+  if (checkDateRanges.length > 1) {
+    console.log(
+      `Splitting selected range into ${checkDateRanges.length} K-Solve search chunk(s).`
+    );
+  }
+
+  for (const range of checkDateRanges) {
+    const result = await fetchKsolveSearchRowsForCheckRange(range);
+
+    totalSearchRowCount += result.searchRowCount;
+
+    if (
+      !searchedInvoiceDateFrom ||
+      result.searchStart.getTime() < searchedInvoiceDateFrom.getTime()
+    ) {
+      searchedInvoiceDateFrom = result.searchStart;
+    }
+
+    if (
+      !searchedInvoiceDateTo ||
+      result.searchEnd.getTime() > searchedInvoiceDateTo.getTime()
+    ) {
+      searchedInvoiceDateTo = result.searchEnd;
+    }
+
+    for (const row of result.matchingRows) {
+      rowsByKey.set(getSearchRowKey(row), row);
+    }
+  }
+
+  const matchingRows = Array.from(rowsByKey.values()).sort(
+    (a, b) =>
+      new Date(a.CheckDate || 0).getTime() - new Date(b.CheckDate || 0).getTime() ||
+      String(a.InvoiceNumber || "").localeCompare(String(b.InvoiceNumber || ""))
+  );
+
+  console.log(
+    `Matched ${matchingRows.length} unique invoice row(s) from ${totalSearchRowCount} searched row(s).`
   );
 
   if (includeInvoiceSummary) {
@@ -1095,8 +1225,14 @@ export async function runKsolveAutomation({
   return {
     startDate,
     endDate,
-    searchedInvoiceDateFrom: formatKsolveDate(searchStart),
-    searchedInvoiceDateTo: formatKsolveDate(searchEnd),
+    searchedInvoiceDateFrom: searchedInvoiceDateFrom
+      ? formatKsolveDate(searchedInvoiceDateFrom)
+      : "",
+    searchedInvoiceDateTo: searchedInvoiceDateTo
+      ? formatKsolveDate(searchedInvoiceDateTo)
+      : "",
+    searchChunkCount: checkDateRanges.length,
+    searchedRowCount: totalSearchRowCount,
     matchedRowCount: matchingRows.length,
     documentCount: documents.length,
     documents,
