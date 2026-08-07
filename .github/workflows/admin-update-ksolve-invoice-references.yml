@@ -1,0 +1,106 @@
+name: Admin Update K-Solve Invoice References
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update-ksolve-invoice-references:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+
+      - name: Update invoice references
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          node <<'NODE'
+          const { createClient } = require("@supabase/supabase-js");
+
+          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+          const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+          if (!supabaseUrl || !serviceRoleKey) {
+            throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+          }
+
+          const supabase = createClient(supabaseUrl, serviceRoleKey);
+          const updates = [
+            { from: "INV4275652", to: "1896" },
+            { from: "INV4617440", to: "1872" },
+          ];
+
+          function normalize(value) {
+            return String(value || "").trim().toUpperCase();
+          }
+
+          async function fetchAll(table, columns) {
+            const rows = [];
+            const pageSize = 1000;
+
+            for (let from = 0; ; from += pageSize) {
+              const to = from + pageSize - 1;
+              const { data, error } = await supabase.from(table).select(columns).range(from, to);
+              if (error) throw error;
+              rows.push(...(data || []));
+              if (!data || data.length < pageSize) return rows;
+            }
+          }
+
+          async function updateTableReferences(table, idColumn, referenceColumn, label, strictTargetCheck) {
+            const rows = await fetchAll(table, `${idColumn}, ${referenceColumn}`);
+
+            for (const update of updates) {
+              const fromKey = normalize(update.from);
+              const toKey = normalize(update.to);
+              const oldMatches = rows.filter((row) => normalize(row[referenceColumn]) === fromKey);
+              const newMatches = rows.filter((row) => normalize(row[referenceColumn]) === toKey);
+
+              if (strictTargetCheck && oldMatches.length > 0 && newMatches.length > 0) {
+                throw new Error(
+                  `${label}: cannot update ${update.from} to ${update.to} because ${update.to} already exists.`
+                );
+              }
+
+              let updated = 0;
+              if (oldMatches.length > 0) {
+                const ids = oldMatches.map((row) => row[idColumn]);
+                const { error, count } = await supabase
+                  .from(table)
+                  .update({ [referenceColumn]: update.to }, { count: "exact" })
+                  .in(idColumn, ids);
+
+                if (error) throw error;
+                updated = count || oldMatches.length;
+              }
+
+              console.log(`${label} ${update.from} -> ${update.to}: matched=${oldMatches.length} updated=${updated}`);
+            }
+          }
+
+          (async () => {
+            await updateTableReferences("invoices", "id", "invoice_number", "invoices", true);
+            await updateTableReferences("uploads", "id", "invoice", "uploads", false);
+
+            const invoiceRows = await fetchAll("invoices", "id, invoice_number");
+            for (const update of updates) {
+              const oldRemaining = invoiceRows.filter((row) => normalize(row.invoice_number) === normalize(update.from)).length;
+              const newCount = invoiceRows.filter((row) => normalize(row.invoice_number) === normalize(update.to)).length;
+              console.log(`verify ${update.from}: remaining=${oldRemaining}`);
+              console.log(`verify ${update.to}: count=${newCount}`);
+
+              if (oldRemaining !== 0 || newCount === 0) {
+                throw new Error(`Verification failed for ${update.from} -> ${update.to}.`);
+              }
+            }
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
