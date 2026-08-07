@@ -1,0 +1,86 @@
+name: Admin Delete PENNYTEST K-Solve Invoice
+
+on:
+  workflow_dispatch:
+
+jobs:
+  delete-pennytest-ksolve-invoice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+
+      - name: Delete PENNYTEST K-Solve invoice row
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          node <<'NODE'
+          const { createClient } = require("@supabase/supabase-js");
+
+          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+          const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+          if (!supabaseUrl || !serviceRoleKey) {
+            throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+          }
+
+          const supabase = createClient(supabaseUrl, serviceRoleKey);
+          const targetInvoice = "PENNYTEST";
+
+          function normalizeInvoice(value) {
+            return String(value || "").trim().toUpperCase();
+          }
+
+          async function fetchAllInvoiceRows() {
+            const rows = [];
+            const pageSize = 1000;
+
+            for (let from = 0; ; from += pageSize) {
+              const to = from + pageSize - 1;
+              const { data, error } = await supabase
+                .from("invoices")
+                .select("id, month, check_date, invoice_number")
+                .range(from, to);
+
+              if (error) throw error;
+              rows.push(...(data || []));
+              if (!data || data.length < pageSize) return rows;
+            }
+          }
+
+          (async () => {
+            const rows = await fetchAllInvoiceRows();
+            const matches = rows.filter(
+              (row) => normalizeInvoice(row.invoice_number) === targetInvoice
+            );
+
+            if (matches.length > 0) {
+              const { error, count } = await supabase
+                .from("invoices")
+                .delete({ count: "exact" })
+                .in("id", matches.map((row) => row.id));
+
+              if (error) throw error;
+              console.log(`PENNYTEST invoice rows matched: ${matches.length}`);
+              console.log(`PENNYTEST invoice rows deleted: ${count || matches.length}`);
+            } else {
+              console.log("PENNYTEST invoice rows matched: 0");
+              console.log("PENNYTEST invoice rows deleted: 0");
+            }
+
+            const remainingRows = await fetchAllInvoiceRows();
+            const remaining = remainingRows.filter(
+              (row) => normalizeInvoice(row.invoice_number) === targetInvoice
+            ).length;
+            console.log(`PENNYTEST invoice rows remaining: ${remaining}`);
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
