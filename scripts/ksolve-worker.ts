@@ -64,6 +64,10 @@ function addUniqueToken(tokens: string[], token: string | undefined | null) {
   }
 }
 
+function isKeheIdentityLoginUrl(url: string) {
+  return /connect-identity-server\.kehe\.com\/Account\/Login/i.test(url);
+}
+
 function getKsolveValidationHeaders({
   cookieHeader,
   token,
@@ -266,6 +270,7 @@ async function getKsolvePageDiagnostics(page: Page) {
       title: document.title || "",
       textLength: text.length,
       hasAccessDenied: /access\s*denied|not\s*authorized|authorization\s+has\s+been\s+denied/.test(text),
+      hasInvalidCredentials: /invalid|incorrect|failed|try\s+again/.test(text),
       hasLogin: /log\s*in|login|sign\s*in/.test(text),
       hasMfa: /multi-factor|mfa|verification|verify\s+your|authenticator/.test(text),
       hasKsolveText: /k-?solve|invoice|deduction/.test(text),
@@ -405,11 +410,33 @@ async function loginAndGetKsolveAuth() {
           .first()
       );
 
-    await loginButton.click();
+    await Promise.all([
+      page
+        .waitForURL((url) => !isKeheIdentityLoginUrl(url.href), {
+          timeout: 60000,
+        })
+        .catch(() => null),
+      loginButton.click(),
+    ]);
 
     await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(
       () => null
     );
+
+    const postLoginDiagnostics = await getKsolvePageDiagnostics(page);
+    console.log(
+      `KeHE post-login diagnostics: ${JSON.stringify(postLoginDiagnostics)}`
+    );
+
+    if (isKeheIdentityLoginUrl(postLoginDiagnostics.url)) {
+      throw new Error(
+        postLoginDiagnostics.hasMfa
+          ? "KeHE login requires MFA or verification before K-Solve automation can run."
+          : postLoginDiagnostics.hasInvalidCredentials
+            ? "KeHE login was rejected. Update the KSOLVE_USERNAME/KSOLVE_PASSWORD GitHub secrets."
+            : "KeHE login did not leave the sign-in page. Check the KSOLVE_USERNAME/KSOLVE_PASSWORD GitHub secrets and any KeHE login prompts."
+      );
+    }
 
     const ksolveApiRequest = page
       .waitForRequest(
