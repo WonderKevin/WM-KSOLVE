@@ -163,9 +163,8 @@ function isCheckDateInRange(
 }
 
 function getKsolveHeaders() {
-  return {
+  const headers: Record<string, string> = {
     accept: "application/json, text/plain, */*",
-    authorization: `Bearer ${process.env.KSOLVE_BEARER_TOKEN}`,
     cookie: process.env.KSOLVE_COOKIE || "",
     origin: "https://connect.kehe.com",
     referer: "https://connect.kehe.com/ksolve/",
@@ -173,6 +172,13 @@ function getKsolveHeaders() {
     "user-agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
   };
+
+  const bearerToken = process.env.KSOLVE_BEARER_TOKEN?.trim();
+  if (bearerToken) {
+    headers.authorization = `Bearer ${bearerToken}`;
+  }
+
+  return headers;
 }
 
 function getSupabaseClient() {

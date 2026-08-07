@@ -87,6 +87,28 @@ async function validateKsolveToken(token: string, cookieHeader: string) {
   return false;
 }
 
+async function validateKsolveCookieSession(cookieHeader: string) {
+  const response = await fetch(
+    "https://connect.kehe.com/ksolve/services/api/ksolve/list/dcs",
+    {
+      method: "GET",
+      headers: {
+        accept: "application/json, text/plain, */*",
+        cookie: cookieHeader,
+        origin: "https://connect.kehe.com",
+        referer: "https://connect.kehe.com/ksolve/",
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
+      },
+    }
+  );
+
+  if (response.ok) return true;
+
+  console.warn(`K-Solve cookie-session validation returned ${response.status}.`);
+  return false;
+}
+
 async function loginAndGetKsolveAuth() {
   const username = process.env.KSOLVE_USERNAME;
   const password = process.env.KSOLVE_PASSWORD;
@@ -217,10 +239,6 @@ async function loginAndGetKsolveAuth() {
     for (const token of storageTokens) addUniqueToken(bearerCandidates, token);
     addUniqueToken(bearerCandidates, fallbackBearerToken);
 
-    if (!bearerCandidates.length) {
-      throw new Error("Login succeeded, but no bearer token was captured.");
-    }
-
     let validatedBearerToken = "";
 
     for (const token of bearerCandidates) {
@@ -230,13 +248,24 @@ async function loginAndGetKsolveAuth() {
       }
     }
 
-    if (!validatedBearerToken) {
+    const hasCookieSession = validatedBearerToken
+      ? false
+      : await validateKsolveCookieSession(cookieHeader);
+
+    if (!validatedBearerToken && !hasCookieSession) {
       throw new Error(
-        "Login succeeded, but K-Solve rejected the captured bearer token."
+        bearerCandidates.length
+          ? "Login succeeded, but K-Solve rejected the captured bearer token and cookie session."
+          : "Login succeeded, but no K-Solve bearer token or valid cookie session was captured."
       );
     }
 
-    process.env.KSOLVE_BEARER_TOKEN = validatedBearerToken;
+    if (validatedBearerToken) {
+      process.env.KSOLVE_BEARER_TOKEN = validatedBearerToken;
+    } else {
+      delete process.env.KSOLVE_BEARER_TOKEN;
+    }
+
     process.env.KSOLVE_COOKIE = cookieHeader;
 
     console.log("K-Solve login completed.");
