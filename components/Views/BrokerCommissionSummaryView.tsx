@@ -69,7 +69,7 @@ type BrokerCommissionStatusRow = {
   status: BrokerageStatus | null;
 };
 
-const BROKER_SUMMARY_CACHE_KEY = "wmksolve:report-cache:broker-commission-summary:v2";
+const BROKER_SUMMARY_CACHE_KEY = "wmksolve:report-cache:broker-commission-summary:v3";
 
 type BrokerSummaryCache = {
   rows: DatasetRow[];

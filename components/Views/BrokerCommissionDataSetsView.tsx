@@ -69,11 +69,18 @@ const EDITABLE_RETAILERS = [
 ] as const;
 
 const PAGE_SIZE = 1000;
-const BROKER_DATA_SETS_CACHE_KEY = "wmksolve:report-cache:broker-data-sets:v2";
+const WRITE_BATCH_SIZE = 500;
+const BROKER_DATA_SETS_CACHE_KEY = "wmksolve:report-cache:broker-data-sets:v3";
 
 type BrokerDataSetsCache = {
   rows: Row[];
   missingInvoices: string[];
+};
+
+type RetailerOverridePayload = {
+  dataset_id: string;
+  retailer: string;
+  updated_at: string;
 };
 
 function round2(value: number) {
@@ -437,6 +444,105 @@ async function fetchAllDatasetRows(): Promise<DatasetDbRow[]> {
   });
 }
 
+async function fetchAllInvoiceRows(): Promise<InvoiceRow[]> {
+  let allRows: InvoiceRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("invoices")
+      .select("invoice_number, check_date, check_number, invoice_amt, type")
+      .ilike("type", "WM Invoice")
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as InvoiceRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
+async function fetchAllLocations(): Promise<LocationRow[]> {
+  let allRows: LocationRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("locations")
+      .select("customer, retailer")
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = ((data ?? []) as Partial<LocationRow>[]).map((row) => ({
+      customer: row.customer ?? "",
+      retailer: row.retailer ?? "",
+    }));
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
+async function fetchAllRetailerOverrides(): Promise<RetailerOverrideRow[]> {
+  let allRows: RetailerOverrideRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("retailer_overrides")
+      .select("dataset_id, retailer")
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as RetailerOverrideRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) {
+      keepGoing = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
+async function upsertRetailerOverrides(payload: RetailerOverridePayload[]) {
+  const savedRows: RetailerOverrideRow[] = [];
+
+  for (let index = 0; index < payload.length; index += WRITE_BATCH_SIZE) {
+    const batch = payload.slice(index, index + WRITE_BATCH_SIZE);
+    const { data, error } = await supabase
+      .from("retailer_overrides")
+      .upsert(batch, { onConflict: "dataset_id" })
+      .select("dataset_id, retailer");
+
+    if (error) throw error;
+    savedRows.push(...((data ?? []) as RetailerOverrideRow[]));
+  }
+
+  return savedRows;
+}
+
 export default function BrokerCommissionDataSetsView() {
   const [startupCache] = useState<BrokerDataSetsCache | null>(() =>
     readBrowserCache<BrokerDataSetsCache>(BROKER_DATA_SETS_CACHE_KEY)
@@ -482,6 +588,12 @@ export default function BrokerCommissionDataSetsView() {
 
     let datasetData: DatasetDbRow[] = [];
     let datasetError: Error | null = null;
+    let invoiceData: InvoiceRow[] = [];
+    let invoiceError: Error | null = null;
+    let locations: LocationRow[] = [];
+    let locationsError: Error | null = null;
+    let overrideData: RetailerOverrideRow[] = [];
+    let overrideError: Error | null = null;
 
     try {
       datasetData = await fetchAllDatasetRows();
@@ -489,18 +601,38 @@ export default function BrokerCommissionDataSetsView() {
       datasetError = error instanceof Error ? error : new Error(String(error));
     }
 
-    const [
-      { data: invoiceData, error: invoiceError },
-      { data: locationsData, error: locationsError },
-      { data: overrideData, error: overrideError },
-    ] = await Promise.all([
-      supabase
-        .from("invoices")
-        .select("invoice_number, check_date, check_number, invoice_amt, type")
-        .ilike("type", "WM Invoice"),
-      supabase.from("locations").select("customer, retailer"),
-      supabase.from("retailer_overrides").select("dataset_id, retailer"),
+    const [invoiceResult, locationsResult, overrideResult] = await Promise.allSettled([
+      fetchAllInvoiceRows(),
+      fetchAllLocations(),
+      fetchAllRetailerOverrides(),
     ]);
+
+    if (invoiceResult.status === "fulfilled") {
+      invoiceData = invoiceResult.value;
+    } else {
+      invoiceError =
+        invoiceResult.reason instanceof Error
+          ? invoiceResult.reason
+          : new Error(String(invoiceResult.reason));
+    }
+
+    if (locationsResult.status === "fulfilled") {
+      locations = locationsResult.value;
+    } else {
+      locationsError =
+        locationsResult.reason instanceof Error
+          ? locationsResult.reason
+          : new Error(String(locationsResult.reason));
+    }
+
+    if (overrideResult.status === "fulfilled") {
+      overrideData = overrideResult.value;
+    } else {
+      overrideError =
+        overrideResult.reason instanceof Error
+          ? overrideResult.reason
+          : new Error(String(overrideResult.reason));
+    }
 
     if (datasetError) {
       console.error("Failed to load datasets:", datasetError);
@@ -517,22 +649,17 @@ export default function BrokerCommissionDataSetsView() {
     if (locationsError) console.error("Failed to load locations:", locationsError);
     if (overrideError) console.error("Failed to load retailer overrides:", overrideError);
 
-    const locations: LocationRow[] = ((locationsData ?? []) as Partial<LocationRow>[]).map((row) => ({
-      customer: row.customer ?? "",
-      retailer: row.retailer ?? "",
-    }));
-
     const locationIndex = buildLocationIndex(locations);
 
     const overrideMap = new Map(
-      ((overrideData ?? []) as RetailerOverrideRow[]).map((row) => [
+      overrideData.map((row) => [
         row.dataset_id,
         row.retailer,
       ])
     );
 
     const ksolveByInvoice = new Map<string, number>();
-    for (const row of (invoiceData ?? []) as InvoiceRow[]) {
+    for (const row of invoiceData) {
       const invoice = normalizeInvoice(row.invoice_number);
       if (!invoice) continue;
       ksolveByInvoice.set(
@@ -600,7 +727,7 @@ export default function BrokerCommissionDataSetsView() {
       );
       const ksolveInvoiceList = Array.from(
         new Set(
-          ((invoiceData ?? []) as InvoiceRow[])
+          invoiceData
             .map((row) => normalizeInvoice(row.invoice_number))
             .filter(Boolean)
         )
@@ -818,26 +945,25 @@ export default function BrokerCommissionDataSetsView() {
     const updatedAt = new Date().toISOString();
 
     setSavingRowId(rowId);
-    const { data, error } = await supabase
-      .from("retailer_overrides")
-      .upsert(
+    let savedRows: RetailerOverrideRow[] = [];
+
+    try {
+      savedRows = await upsertRetailerOverrides(
         targetRowIds.map((targetRowId) => ({
           dataset_id: targetRowId,
           retailer: finalRetailer,
           updated_at: updatedAt,
-        })),
-        { onConflict: "dataset_id" }
-      )
-      .select();
-
-    if (error) {
+        }))
+      );
+    } catch (error) {
       console.error("Failed to save retailer override:", error);
-      alert(`Failed to save retailer: ${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      alert(`Failed to save retailer: ${message}`);
       setSavingRowId(null);
       return;
     }
 
-    console.log("Saved retailer override:", data);
+    console.log("Saved retailer override:", savedRows);
     const updatedRowIds = new Set(targetRowIds);
     setRows((prev) =>
       prev.map((row) => (updatedRowIds.has(row.id) ? { ...row, retailer: finalRetailer } : row))
@@ -861,25 +987,26 @@ export default function BrokerCommissionDataSetsView() {
     if (!finalRetailer || selectedRowIds.length === 0) return;
 
     setBulkSaving(true);
+    const updatedAt = new Date().toISOString();
     const payload = selectedRowIds.map((rowId) => ({
       dataset_id: rowId,
       retailer: finalRetailer,
-      updated_at: new Date().toISOString(),
+      updated_at: updatedAt,
     }));
 
-    const { data, error } = await supabase
-      .from("retailer_overrides")
-      .upsert(payload, { onConflict: "dataset_id" })
-      .select();
+    let savedRows: RetailerOverrideRow[] = [];
 
-    if (error) {
+    try {
+      savedRows = await upsertRetailerOverrides(payload);
+    } catch (error) {
       console.error("Failed to save bulk retailer overrides:", error);
-      alert(`Failed to save selected retailers: ${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      alert(`Failed to save selected retailers: ${message}`);
       setBulkSaving(false);
       return;
     }
 
-    console.log("Saved bulk retailer overrides:", data);
+    console.log("Saved bulk retailer overrides:", savedRows);
     setRows((prev) =>
       prev.map((row) =>
         selectedRowIds.includes(row.id) ? { ...row, retailer: finalRetailer } : row
