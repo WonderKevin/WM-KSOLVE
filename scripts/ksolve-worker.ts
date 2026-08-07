@@ -110,12 +110,13 @@ async function validateKsolveCookieSession(cookieHeader: string) {
 }
 
 async function getBrowserTokenCandidates(page: Page) {
-  return page.evaluate(async () => {
-    const tokens: string[] = [];
+  const browserTokenScript = String.raw`
+  (async () => {
+    const tokens = [];
     const tokenHint = /auth|bearer|token|access|credential|session/i;
     const jwtRegex = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
-    function addToken(raw: unknown, hint = "") {
+    function addToken(raw, hint = "") {
       if (typeof raw !== "string") return;
 
       const cleaned = raw.trim();
@@ -127,7 +128,7 @@ async function getBrowserTokenCandidates(page: Page) {
       if (!tokens.includes(cleaned)) tokens.push(cleaned);
     }
 
-    function walk(value: unknown, hint = "", depth = 0) {
+    function walk(value, hint = "", depth = 0) {
       if (depth > 5 || value === null || value === undefined) return;
 
       if (typeof value === "string") {
@@ -147,12 +148,12 @@ async function getBrowserTokenCandidates(page: Page) {
       if (typeof value !== "object") return;
 
       if (Array.isArray(value)) {
-        value.forEach((item, index) => walk(item, `${hint}.${index}`, depth + 1));
+        value.forEach((item, index) => walk(item, hint + "." + index, depth + 1));
         return;
       }
 
-      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-        walk(child, hint ? `${hint}.${key}` : key, depth + 1);
+      for (const [key, child] of Object.entries(value)) {
+        walk(child, hint ? hint + "." + key : key, depth + 1);
       }
     }
 
@@ -163,14 +164,14 @@ async function getBrowserTokenCandidates(page: Page) {
       }
     }
 
-    async function readRequest<T>(request: IDBRequest<T>) {
-      return new Promise<T>((resolve, reject) => {
+    async function readRequest(request) {
+      return new Promise((resolve, reject) => {
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });
     }
 
-    async function readStore(db: IDBDatabase, storeName: string) {
+    async function readStore(db, storeName) {
       try {
         const transaction = db.transaction(storeName, "readonly");
         const store = transaction.objectStore(storeName);
@@ -183,7 +184,7 @@ async function getBrowserTokenCandidates(page: Page) {
         ]);
 
         values.forEach((value, index) => {
-          walk(value, `${db.name}.${storeName}.${String(keys[index] || index)}`);
+          walk(value, db.name + "." + storeName + "." + String(keys[index] || index));
         });
       } catch {
         // Ignore stores that cannot be read.
@@ -196,7 +197,7 @@ async function getBrowserTokenCandidates(page: Page) {
       for (const database of databases.slice(0, 20)) {
         if (!database.name) continue;
 
-        const db = await new Promise<IDBDatabase | null>((resolve) => {
+        const db = await new Promise((resolve) => {
           const request = indexedDB.open(database.name || "");
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => resolve(null);
@@ -216,7 +217,10 @@ async function getBrowserTokenCandidates(page: Page) {
     }
 
     return tokens.slice(0, 50);
-  });
+  })()
+  `;
+
+  return (await page.evaluate(browserTokenScript)) as string[];
 }
 
 async function loginAndGetKsolveAuth() {
