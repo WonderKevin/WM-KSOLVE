@@ -6,6 +6,7 @@ import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type Retailer = "all" | "kehe" | "target" | "unfi" | "wegmans" | "tony";
 
@@ -76,6 +77,12 @@ type TonyInvoiceWireRow = {
   ach_number: string | null;
   total_wire: number | null;
   details?: TonyInvoiceDetailRow[];
+};
+
+const CHECK_DETAILS_CACHE_KEY = "wmksolve:report-cache:check-details";
+
+type CheckDetailsCache = {
+  rows: InvoiceRecord[];
 };
 
 type CheckGroup = {
@@ -174,9 +181,16 @@ export default function CheckDetailsView() {
   const [openTypes, setOpenTypes] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    const loadData = async () => {
+    const cached = readBrowserCache<CheckDetailsCache>(CHECK_DETAILS_CACHE_KEY);
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setLoading(false);
+    }
+
+    const loadData = async (hasCachedData = false) => {
       try {
-        setLoading(true);
+        if (!hasCachedData) setLoading(true);
 
         const [keheRes, targetRes, wegmansRes, tonyRes] = await Promise.all([
           supabase
@@ -323,7 +337,11 @@ export default function CheckDetailsView() {
                 })
             );
 
-        setRows([...keheRows, ...targetRows, ...wegmansRows, ...tonyRows]);
+        const nextRows = [...keheRows, ...targetRows, ...wegmansRows, ...tonyRows];
+        setRows(nextRows);
+        writeBrowserCache<CheckDetailsCache>(CHECK_DETAILS_CACHE_KEY, {
+          rows: nextRows,
+        });
       } catch (error) {
         console.error("Check details load error:", error);
       } finally {
@@ -331,7 +349,7 @@ export default function CheckDetailsView() {
       }
     };
 
-    loadData();
+    loadData(Boolean(cached));
   }, []);
 
   const retailerFilteredRows = useMemo(() => {

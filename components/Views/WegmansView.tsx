@@ -7,6 +7,7 @@ import { Search, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type WorksheetRow = unknown[];
 
@@ -28,6 +29,11 @@ type WegmansInvoiceRow = {
 const VENDOR = "Wegman";
 const CHARGEBACK_TYPE = "Wegman's Chargeback";
 const PAGE_SIZE = 1000;
+const WEGMANS_INVOICES_CACHE_KEY = "wmksolve:report-cache:wegmans-invoices";
+
+type WegmansInvoicesCache = {
+  rows: WegmansInvoiceRow[];
+};
 
 function clean(value: unknown) {
   return String(value ?? "").replace(/\u0000/g, "").trim();
@@ -245,12 +251,15 @@ export default function WegmansView() {
   const [search, setSearch] = useState("");
   const [monthFilter, setMonthFilter] = useState("All Months");
 
-  const loadRows = async () => {
+  const loadRows = async (hasCachedData = false) => {
     try {
-      setLoading(true);
+      if (!hasCachedData) setLoading(true);
       setLoadError("");
       const data = await fetchAllWegmansRows();
       setRows(data);
+      writeBrowserCache<WegmansInvoicesCache>(WEGMANS_INVOICES_CACHE_KEY, {
+        rows: data,
+      });
     } catch (error: unknown) {
       console.error("Failed to load wegmans_invoices:", error);
       const message = getErrorMessage(error, "Failed to load Wegmans invoices.");
@@ -259,14 +268,23 @@ export default function WegmansView() {
           ? "Supabase table public.wegmans_invoices is not available yet."
           : message
       );
-      setRows([]);
+      if (!hasCachedData) setRows([]);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadRows();
+    const cached = readBrowserCache<WegmansInvoicesCache>(
+      WEGMANS_INVOICES_CACHE_KEY
+    );
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setLoading(false);
+    }
+
+    loadRows(Boolean(cached));
   }, []);
 
   const sortedRows = useMemo(() => {

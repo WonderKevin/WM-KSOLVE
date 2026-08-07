@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 import { Upload, Search, X, Plus } from "lucide-react";
 
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -44,6 +45,12 @@ type VelocityRow = {
   period_type?: "monthly" | "weekly" | string | null;
   period_start_date?: string | null;
   period_end_date?: string | null;
+};
+
+const KEHE_VELOCITY_CACHE_KEY = "wmksolve:report-cache:kehe-velocity";
+
+type KeheVelocityCache = {
+  rows: VelocityRow[];
 };
 
 type MissingLocationEntry = {
@@ -623,9 +630,9 @@ export default function KeHeVelocityView() {
   const [pendingRows, setPendingRows] = useState<VelocityRow[]>([]);
   const [retailerOptionsForModal, setRetailerOptionsForModal] = useState<string[]>(DEFAULT_RETAILER_OPTIONS);
 
-  const loadRows = async () => {
+  const loadRows = async (hasCachedData = false) => {
     try {
-      setLoading(true);
+      if (!hasCachedData) setLoading(true);
 
       const data = await fetchAllVelocityRows();
 
@@ -647,16 +654,26 @@ export default function KeHeVelocityView() {
       });
 
       setRows(sortedData);
+      writeBrowserCache<KeheVelocityCache>(KEHE_VELOCITY_CACHE_KEY, {
+        rows: sortedData,
+      });
     } catch (error) {
       console.error("Failed to load kehe_velocity:", error);
-      setRows([]);
+      if (!hasCachedData) setRows([]);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadRows();
+    const cached = readBrowserCache<KeheVelocityCache>(KEHE_VELOCITY_CACHE_KEY);
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setLoading(false);
+    }
+
+    loadRows(Boolean(cached));
   }, []);
 
   useEffect(() => {

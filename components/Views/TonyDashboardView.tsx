@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FileSpreadsheet, Upload, Plus, X, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type TabKey = "analytics" | "velocity" | "pullout" | "priority-pullout";
 type PulloutSubTabKey = "by-location" | "by-store";
@@ -31,6 +32,13 @@ type TonyLocation = {
   id?: string;
   customer: string;
   location: string;
+};
+
+const TONY_DASHBOARD_CACHE_KEY = "wmksolve:report-cache:tony-dashboard";
+
+type TonyDashboardCache = {
+  rows: TonyVelocityRow[];
+  locations: TonyLocation[];
 };
 
 type MissingLocation = {
@@ -887,8 +895,9 @@ export default function TonyDashboardView() {
   }, []);
   useEffect(() => { window.localStorage.setItem(PRIORITY_PULL_OUT_STORAGE_KEY, JSON.stringify(priorityList)); }, [priorityList]);
 
-  const loadData = async () => {
-    setLoading(true); setError("");
+  const loadData = async (hasCachedData = false) => {
+    if (!hasCachedData) setLoading(true);
+    setError("");
     try {
       const pageSize = 1000; let from = 0; let all: TonyVelocityRow[] = [];
       while (true) {
@@ -914,10 +923,24 @@ export default function TonyDashboardView() {
       }
       setRows(all);
       setLocations(allLocations);
+      writeBrowserCache<TonyDashboardCache>(TONY_DASHBOARD_CACHE_KEY, {
+        rows: all,
+        locations: allLocations,
+      });
     } catch (err: any) { setError(err?.message || "Failed to load Tony dashboard data."); }
     finally { setLoading(false); }
   };
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => {
+    const cached = readBrowserCache<TonyDashboardCache>(TONY_DASHBOARD_CACHE_KEY);
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setLocations(cached.locations || []);
+      setLoading(false);
+    }
+
+    loadData(Boolean(cached));
+  }, []);
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(""), 3500); return () => window.clearTimeout(timer); }, [notice]);
 
   const locationMap = useMemo(() => {
@@ -1109,7 +1132,7 @@ export default function TonyDashboardView() {
     <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-end lg:justify-end">
       <button type="button" onClick={() => setShowLocationModal(true)} className="inline-flex h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50" disabled={uploadingLocations}><Upload className="h-4 w-4" />{uploadingLocations ? "Uploading..." : "Upload Location"}</button>
       <button type="button" onClick={() => setShowVelocityUploadOptions((open) => !open)} className="inline-flex h-10 items-center gap-2 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800" disabled={uploadingVelocity}><Upload className="h-4 w-4" />{uploadingVelocity ? "Uploading..." : "Upload Velocity File"}</button>
-      <button type="button" onClick={loadData} className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50">Refresh</button>
+      <button type="button" onClick={() => loadData()} className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50">Refresh</button>
       <input ref={locationInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => handleLocationFile(e.target.files?.[0])} />
       <input ref={velocityInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => handleVelocityFile(e.target.files?.[0])} />
     </div>

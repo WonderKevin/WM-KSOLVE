@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 import * as XLSX from "xlsx";
 
 type Row = {
@@ -68,6 +69,12 @@ const EDITABLE_RETAILERS = [
 ] as const;
 
 const PAGE_SIZE = 1000;
+const BROKER_DATA_SETS_CACHE_KEY = "wmksolve:report-cache:broker-data-sets:v2";
+
+type BrokerDataSetsCache = {
+  rows: Row[];
+  missingInvoices: string[];
+};
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -124,6 +131,10 @@ function normalizeText(value: string) {
     .replace(/[^A-Z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function getCustomerLocationKey(raw: string) {
+  return normalizeText(stripLocationSuffix(raw));
 }
 
 function normalizeType(value: string) {
@@ -193,22 +204,75 @@ function categorizeRetailerName(rawRetailer: string): string {
   return "INFRA & Others";
 }
 
+function directRetailerFromCustomer(custName: string): string {
+  const customer = normalizeText(custName);
+  if (!customer) return "";
+
+  const krogerBannerStarts = [
+    "KROGER ",
+    "KRO ",
+    "DILLONS ",
+    "PICK N SAVE ",
+    "METRO MARKET ",
+    "MARIANO S ",
+    "MARIANOS ",
+    "RALPHS ",
+    "SMITH S ",
+    "SMITHS ",
+    "KING SOOPERS ",
+    "CITY MARKET ",
+    "FRYS ",
+    "FRY S ",
+    "FOOD 4 LESS ",
+    "FRED MEYER ",
+    "QFC ",
+    "HARRIS TEETER ",
+    "ROUNDY S ",
+  ];
+
+  if (
+    krogerBannerStarts.some((prefix) => customer.startsWith(prefix)) ||
+    customer.includes(" KROGER ") ||
+    customer.includes(" KRO ") ||
+    customer.endsWith(" KGR") ||
+    customer.includes(" KGR ")
+  ) {
+    return "Kroger";
+  }
+
+  if (
+    customer.includes("FRESH THYME") ||
+    customer.includes("FRSH THYME") ||
+    customer.includes("FRMR MKT")
+  ) {
+    return "Fresh Thyme";
+  }
+
+  if (customer === "HEB" || customer.startsWith("HEB ")) return "HEB";
+
+  return "";
+}
+
 type LocationIndex = {
+  exactCustomerMap: Map<string, LocationRow>;
   twoWordMap: Map<string, LocationRow>;
   oneWordMap: Map<string, LocationRow>;
   wordMap: Map<string, LocationRow>;
 };
 
 function buildLocationIndex(locations: LocationRow[]): LocationIndex {
+  const exactCustomerMap = new Map<string, LocationRow>();
   const twoWordMap = new Map<string, LocationRow>();
   const oneWordMap = new Map<string, LocationRow>();
   const wordMap = new Map<string, LocationRow>();
 
   for (const loc of locations) {
+    const exactKey = getCustomerLocationKey(loc.customer);
     const twoKey = getFirstNWordsKey(loc.customer, 2);
     const oneKey = getFirstNWordsKey(loc.customer, 1);
     const sigWords = getSignificantWords(loc.customer);
 
+    if (exactKey && !exactCustomerMap.has(exactKey)) exactCustomerMap.set(exactKey, loc);
     if (twoKey && !twoWordMap.has(twoKey)) twoWordMap.set(twoKey, loc);
     if (oneKey && !oneWordMap.has(oneKey)) oneWordMap.set(oneKey, loc);
     for (const w of sigWords) {
@@ -216,7 +280,7 @@ function buildLocationIndex(locations: LocationRow[]): LocationIndex {
     }
   }
 
-  return { twoWordMap, oneWordMap, wordMap };
+  return { exactCustomerMap, twoWordMap, oneWordMap, wordMap };
 }
 
 function findRetailer(
@@ -239,6 +303,13 @@ function findRetailer(
   }
 
   if (/^DC\s*\d+$/i.test(trimmedCustomer)) return "";
+
+  const exactKey = getCustomerLocationKey(trimmedCustomer);
+  const exactMatch = index.exactCustomerMap.get(exactKey);
+  if (exactMatch) return categorizeRetailerName(exactMatch.retailer);
+
+  const directRetailer = directRetailerFromCustomer(trimmedCustomer);
+  if (directRetailer) return directRetailer;
 
   const twoKey = getFirstNWordsKey(trimmedCustomer, 2);
   const twoMatch = index.twoWordMap.get(twoKey);
@@ -383,8 +454,8 @@ export default function BrokerCommissionDataSetsView() {
   const monthFilterRef = useRef<HTMLDivElement | null>(null);
   const actionMenuRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (hasCachedData = false) => {
+    if (!hasCachedData) setLoading(true);
 
     let datasetData: DatasetDbRow[] = [];
     let datasetError: any = null;
@@ -411,8 +482,10 @@ export default function BrokerCommissionDataSetsView() {
     if (datasetError) {
       console.error("Failed to load datasets:", datasetError);
       alert(`Failed to load datasets: ${datasetError.message ?? "Unknown error"}`);
-      setRows([]);
-      setMissingInvoices([]);
+      if (!hasCachedData) {
+        setRows([]);
+        setMissingInvoices([]);
+      }
       setLoading(false);
       return;
     }
@@ -492,7 +565,9 @@ export default function BrokerCommissionDataSetsView() {
       };
     });
 
-    setRows(applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice));
+    const nextRows = applyAmountBasedDiscrepancy(baseRows, discrepancyByInvoice);
+    let nextMissingInvoices: string[] = [];
+    setRows(nextRows);
 
     if (invoiceError) {
       setMissingInvoices([]);
@@ -510,14 +585,27 @@ export default function BrokerCommissionDataSetsView() {
       const missing = ksolveInvoiceList.filter(
         (invoice) => !datasetInvoiceSet.has(invoice)
       );
-      setMissingInvoices(missing.sort((a, b) => a.localeCompare(b)));
+      nextMissingInvoices = missing.sort((a, b) => a.localeCompare(b));
+      setMissingInvoices(nextMissingInvoices);
     }
+    writeBrowserCache<BrokerDataSetsCache>(BROKER_DATA_SETS_CACHE_KEY, {
+      rows: nextRows,
+      missingInvoices: nextMissingInvoices,
+    });
 
     setLoading(false);
   };
 
   useEffect(() => {
-    loadData();
+    const cached = readBrowserCache<BrokerDataSetsCache>(BROKER_DATA_SETS_CACHE_KEY);
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setMissingInvoices(cached.missingInvoices || []);
+      setLoading(false);
+    }
+
+    loadData(Boolean(cached));
   }, []);
 
   useEffect(() => {

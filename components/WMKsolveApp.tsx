@@ -15,6 +15,7 @@ import {
   LogOut,
   Shield,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
@@ -75,27 +76,52 @@ type Permissions = {
   can_reprocess_invoices: boolean;
 };
 
+type SidebarChild = {
+  label: string;
+  key: string;
+};
+
+type SidebarItemConfig = {
+  label: string;
+  icon: LucideIcon;
+  key: string;
+  children?: SidebarChild[];
+};
+
+function isSidebarChild(value: SidebarChild | null): value is SidebarChild {
+  return Boolean(value);
+}
+
 function SidebarItem({
   item,
   activeKey,
   setActiveKey,
-  openGroups,
-  setOpenGroups,
-}: any) {
+  openGroupKey,
+  setOpenGroupKey,
+}: {
+  item: SidebarItemConfig;
+  activeKey: string;
+  setActiveKey: React.Dispatch<React.SetStateAction<string>>;
+  openGroupKey: string;
+  setOpenGroupKey: React.Dispatch<React.SetStateAction<string>>;
+}) {
   const isGroup = !!item.children?.length;
-  const isOpen = openGroups[item.key];
+  const isOpen = openGroupKey === item.key;
   const isActive = activeKey === item.key;
   const Icon = item.icon;
 
   const hasActiveChild = item.children?.some(
-    (child: any) => child.key === activeKey
+    (child) => child.key === activeKey
   );
 
   if (!isGroup) {
     return (
       <button
         type="button"
-        onClick={() => setActiveKey(item.key)}
+        onClick={() => {
+          setActiveKey(item.key);
+          setOpenGroupKey("");
+        }}
         className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
           isActive
             ? "bg-slate-900 text-white shadow-sm"
@@ -113,10 +139,9 @@ function SidebarItem({
       <button
         type="button"
         onClick={() =>
-          setOpenGroups((prev: any) => ({
-            ...prev,
-            [item.key]: !prev[item.key],
-          }))
+          setOpenGroupKey((prev) =>
+            prev === item.key ? "" : item.key
+          )
         }
         className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
           hasActiveChild || isOpen
@@ -138,11 +163,14 @@ function SidebarItem({
 
       {isOpen && (
         <div className="ml-8 mt-2 space-y-1">
-          {item.children.map((child: any) => (
+          {(item.children ?? []).map((child) => (
             <button
               type="button"
               key={child.key}
-              onClick={() => setActiveKey(child.key)}
+              onClick={() => {
+                setActiveKey(child.key);
+                setOpenGroupKey(item.key);
+              }}
               className={`block w-full rounded-xl px-4 py-2 text-left text-sm transition ${
                 activeKey === child.key
                   ? "bg-slate-200 font-medium text-slate-900"
@@ -163,14 +191,9 @@ export default function WMKsolveApp() {
 
   const [checkingSession, setCheckingSession] = useState(true);
   const [activeKey, setActiveKey] = useState("");
-  const [openGroups, setOpenGroups] = useState({
-    dashboard: false,
-    "broker-commission": false,
-    accounting: false,
-    database: false,
-    admin: false,
-  });
+  const [openGroupKey, setOpenGroupKey] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [visitedKeys, setVisitedKeys] = useState<string[]>([""]);
   const [documentUploadSignal, setDocumentUploadSignal] = useState(0);
   const [invoiceUploadSignal, setInvoiceUploadSignal] = useState(0);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -267,7 +290,7 @@ export default function WMKsolveApp() {
   const sidebarItems = useMemo(() => {
     if (!permissions) return [];
 
-    const items: any[] = [];
+    const items: SidebarItemConfig[] = [];
 
     const dashboardChildren = [
       permissions.can_view_kehe_dashboard
@@ -276,7 +299,7 @@ export default function WMKsolveApp() {
       permissions.can_view_tonys_dashboard
         ? { label: "Tony's Dashboard", key: "dashboard-tony" }
         : null,
-    ].filter(Boolean);
+    ].filter(isSidebarChild);
 
     if (permissions.can_view_dashboard || dashboardChildren.length) {
       items.push({
@@ -306,7 +329,7 @@ export default function WMKsolveApp() {
             key: "broker-commission-data-sets",
           }
         : null,
-    ].filter(Boolean);
+    ].filter(isSidebarChild);
 
     if (brokerChildren.length) {
       items.push({
@@ -330,7 +353,7 @@ export default function WMKsolveApp() {
             key: "accounting-wm-invoice-discrepancy",
           }
         : null,
-    ].filter(Boolean);
+    ].filter(isSidebarChild);
 
     if (accountingChildren.length) {
       items.push({
@@ -375,7 +398,7 @@ export default function WMKsolveApp() {
       permissions.can_view_database_deduction_type
         ? { label: "Deduction Type", key: "database-deduction-type" }
         : null,
-    ].filter(Boolean);
+    ].filter(isSidebarChild);
 
     if (databaseChildren.length) {
       items.push({
@@ -393,7 +416,7 @@ export default function WMKsolveApp() {
       permissions.can_view_admin_automation
         ? { label: "Automation", key: "admin-automation" }
         : null,
-    ].filter(Boolean);
+    ].filter(isSidebarChild);
 
     if (adminChildren.length) {
       items.push({
@@ -407,8 +430,22 @@ export default function WMKsolveApp() {
     return items;
   }, [permissions, userEmail]);
 
-  const renderContent = () => {
-    switch (activeKey) {
+  useEffect(() => {
+    setVisitedKeys((prev) =>
+      prev.includes(activeKey) ? prev : [...prev, activeKey]
+    );
+  }, [activeKey]);
+
+  useEffect(() => {
+    const activeGroup = sidebarItems.find((item) =>
+      item.children?.some((child) => child.key === activeKey)
+    );
+
+    if (activeGroup) setOpenGroupKey(activeGroup.key);
+  }, [activeKey, sidebarItems]);
+
+  const renderContent = (key: string) => {
+    switch (key) {
       case "dashboard-kehe":
         return <KeheDashboardView />;
       case "dashboard-tony":
@@ -471,6 +508,10 @@ export default function WMKsolveApp() {
     );
   }
 
+  const renderedKeys = visitedKeys.includes(activeKey)
+    ? visitedKeys
+    : [...visitedKeys, activeKey];
+
   return (
     <div className="flex min-h-screen bg-slate-100">
       {sidebarOpen && (
@@ -488,8 +529,8 @@ export default function WMKsolveApp() {
                 item={item}
                 activeKey={activeKey}
                 setActiveKey={setActiveKey}
-                openGroups={openGroups}
-                setOpenGroups={setOpenGroups}
+                openGroupKey={openGroupKey}
+                setOpenGroupKey={setOpenGroupKey}
               />
             ))}
           </div>
@@ -566,7 +607,13 @@ export default function WMKsolveApp() {
           </div>
         </div>
 
-        <div className="px-6 py-5">{renderContent()}</div>
+        <div className="px-6 py-5">
+          {renderedKeys.map((key) => (
+            <div key={key || "home"} hidden={key !== activeKey}>
+              {renderContent(key)}
+            </div>
+          ))}
+        </div>
       </main>
     </div>
   );

@@ -7,6 +7,7 @@ import { Search, Upload } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type TargetInvoiceRow = {
   id?: number;
@@ -28,6 +29,12 @@ type ParsedTargetFile = {
   fileName: string;
   checkDate: string | null;
   checkNumber: string | null;
+  rows: TargetInvoiceRow[];
+};
+
+const TARGET_INVOICES_CACHE_KEY = "wmksolve:report-cache:target-invoices";
+
+type TargetInvoicesCache = {
   rows: TargetInvoiceRow[];
 };
 
@@ -324,8 +331,8 @@ export default function TargetView() {
   const [selectedMonth, setSelectedMonth] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
 
-  const loadRows = async () => {
-    setLoading(true);
+  const loadRows = async (hasCachedData = false) => {
+    if (!hasCachedData) setLoading(true);
 
     try {
       const { data, error } = await supabase
@@ -335,7 +342,11 @@ export default function TargetView() {
 
       if (error) throw error;
 
-      setRows((data || []) as TargetInvoiceRow[]);
+      const nextRows = (data || []) as TargetInvoiceRow[];
+      setRows(nextRows);
+      writeBrowserCache<TargetInvoicesCache>(TARGET_INVOICES_CACHE_KEY, {
+        rows: nextRows,
+      });
     } catch (error) {
       console.error(error);
     } finally {
@@ -344,7 +355,14 @@ export default function TargetView() {
   };
 
   useEffect(() => {
-    loadRows();
+    const cached = readBrowserCache<TargetInvoicesCache>(TARGET_INVOICES_CACHE_KEY);
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setLoading(false);
+    }
+
+    loadRows(Boolean(cached));
   }, []);
 
   const existingCheckKeys = useMemo(() => {

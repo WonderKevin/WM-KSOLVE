@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type WorksheetRow = unknown[];
 
@@ -57,6 +58,11 @@ type ParsedTonyInvoiceFile = {
 };
 
 const PAGE_SIZE = 1000;
+const TONY_INVOICES_CACHE_KEY = "wmksolve:report-cache:tony-invoices";
+
+type TonyInvoicesCache = {
+  rows: TonyInvoiceWire[];
+};
 
 function clean(value: unknown) {
   return String(value ?? "").replace(/\u0000/g, "").trim();
@@ -359,12 +365,15 @@ export default function TonyInvoicesView() {
     Record<string, { type: string; amount: string }>
   >({});
 
-  const loadRows = async () => {
+  const loadRows = async (hasCachedData = false) => {
     try {
-      setLoading(true);
+      if (!hasCachedData) setLoading(true);
       setLoadError("");
       const data = await fetchAllTonyWires();
       setRows(data);
+      writeBrowserCache<TonyInvoicesCache>(TONY_INVOICES_CACHE_KEY, {
+        rows: data,
+      });
     } catch (error: unknown) {
       console.error("Failed to load tony_invoice_wires:", error);
       const message = getErrorMessage(error, "Failed to load Tony's invoices.");
@@ -373,14 +382,21 @@ export default function TonyInvoicesView() {
           ? "Supabase tables public.tony_invoice_wires and public.tony_invoice_details are not available yet."
           : message
       );
-      setRows([]);
+      if (!hasCachedData) setRows([]);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadRows();
+    const cached = readBrowserCache<TonyInvoicesCache>(TONY_INVOICES_CACHE_KEY);
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setLoading(false);
+    }
+
+    loadRows(Boolean(cached));
   }, []);
 
   const sortedRows = useMemo(() => {

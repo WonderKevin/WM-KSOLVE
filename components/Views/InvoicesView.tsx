@@ -17,6 +17,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type UploadRecord = {
   id: number;
@@ -43,6 +44,13 @@ type InvoiceRecord = {
   status: string | null;
   type: string | null;
   doc_status: boolean | null;
+};
+
+const KSOLVE_INVOICES_CACHE_KEY = "wmksolve:report-cache:ksolve-invoices";
+
+type KsolveInvoicesCache = {
+  rows: InvoiceRecord[];
+  uploads: UploadRecord[];
 };
 
 type ToastType = "success" | "error" | "info";
@@ -252,6 +260,31 @@ function formatMonthShort(dateStr: string | null | undefined): string {
     return `${d.toLocaleString("en-US", { month: "long" })} '${String(d.getFullYear()).slice(-2)}`;
   }
   return String(dateStr);
+}
+
+function getMonthSortValue(value: string | null | undefined): number {
+  if (!value) return 0;
+
+  const trimmed = String(value).trim();
+  const monthLabel = trimmed.match(/^([A-Za-z]+)\s+(?:'(\d{2})|(\d{4}))$/);
+
+  if (monthLabel) {
+    const monthIndex = new Date(`${monthLabel[1]} 1, 2000`).getMonth();
+    const year = monthLabel[3]
+      ? Number(monthLabel[3])
+      : 2000 + Number(monthLabel[2]);
+
+    if (!Number.isNaN(monthIndex) && Number.isFinite(year)) {
+      return year * 100 + monthIndex + 1;
+    }
+  }
+
+  const formattedMonth = formatMonthShort(trimmed);
+  if (formattedMonth && formattedMonth !== trimmed) {
+    return getMonthSortValue(formattedMonth);
+  }
+
+  return 0;
 }
 
 function formatMonthLabelFromDate(value: string | null | undefined): string {
@@ -2248,17 +2281,23 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
     toastTimerRef.current = setTimeout(() => setToast((p) => ({ ...p, show: false })), 4000);
   };
 
-  const loadData = async () => {
+  const loadData = async (hasCachedData = false) => {
     try {
-      setLoading(true);
+      if (!hasCachedData) setLoading(true);
       const [{ data: id, error: ie }, { data: ud, error: ue }] = await Promise.all([
         supabase.from("invoices").select("*").order("check_date", { ascending: false }),
         supabase.from("uploads").select("*"),
       ]);
       if (ie) throw ie;
       if (ue) throw ue;
-      setRows(id || []);
-      setUploads(ud || []);
+      const nextRows = (id || []) as InvoiceRecord[];
+      const nextUploads = (ud || []) as UploadRecord[];
+      setRows(nextRows);
+      setUploads(nextUploads);
+      writeBrowserCache<KsolveInvoicesCache>(KSOLVE_INVOICES_CACHE_KEY, {
+        rows: nextRows,
+        uploads: nextUploads,
+      });
     } catch (e: any) {
       showToast(e.message || "Failed to load.", "error");
     } finally {
@@ -2267,13 +2306,21 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
   };
 
   useEffect(() => {
+    const cached = readBrowserCache<KsolveInvoicesCache>(KSOLVE_INVOICES_CACHE_KEY);
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setUploads(cached.uploads || []);
+      setLoading(false);
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       console.log("Auth session:", session?.user?.email ?? "NO SESSION");
       if (!session) {
         showToast("You are not logged in. Please sign in.", "error");
         return;
       }
-      loadData();
+      loadData(Boolean(cached));
     });
     fetchDeductionTypes().then(setDeductionTypes);
     fetchProductLookup().then((map) => {
@@ -2320,7 +2367,14 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
   );
 
   const monthOptions = useMemo(
-    () => Array.from(new Set(rows.map((r) => r.month || ""))).filter(Boolean),
+    () =>
+      Array.from(new Set(rows.map((r) => r.month || "")))
+        .filter(Boolean)
+        .sort(
+          (a, b) =>
+            getMonthSortValue(b) - getMonthSortValue(a) ||
+            a.localeCompare(b)
+        ),
     [rows]
   );
 

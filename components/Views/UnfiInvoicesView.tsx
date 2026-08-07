@@ -7,6 +7,7 @@ import { Search, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type WorksheetRow = unknown[];
 
@@ -26,6 +27,12 @@ type UnfiInvoiceRow = {
   source_file_name: string;
   line_number: number;
   created_at?: string;
+};
+
+const UNFI_INVOICES_CACHE_KEY = "wmksolve:report-cache:unfi-invoices";
+
+type UnfiInvoicesCache = {
+  rows: UnfiInvoiceRow[];
 };
 
 function clean(value: unknown) {
@@ -298,12 +305,15 @@ export default function UnfiInvoicesView() {
   const [monthInput, setMonthInput] = useState(String(currentMonth));
   const [yearInput, setYearInput] = useState(String(currentYear));
 
-  const loadRows = async () => {
+  const loadRows = async (hasCachedData = false) => {
     try {
-      setLoading(true);
+      if (!hasCachedData) setLoading(true);
       setLoadError("");
       const data = await fetchAllUnfiRows();
       setRows(data);
+      writeBrowserCache<UnfiInvoicesCache>(UNFI_INVOICES_CACHE_KEY, {
+        rows: data,
+      });
     } catch (error: unknown) {
       console.error("Failed to load unfi_invoices:", error);
       const message = getErrorMessage(error, "Failed to load UNFI invoices.");
@@ -312,14 +322,21 @@ export default function UnfiInvoicesView() {
           ? "Supabase table public.unfi_invoices is not available yet."
           : message
       );
-      setRows([]);
+      if (!hasCachedData) setRows([]);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadRows();
+    const cached = readBrowserCache<UnfiInvoicesCache>(UNFI_INVOICES_CACHE_KEY);
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setLoading(false);
+    }
+
+    loadRows(Boolean(cached));
   }, []);
 
   const sortedRows = useMemo(() => {

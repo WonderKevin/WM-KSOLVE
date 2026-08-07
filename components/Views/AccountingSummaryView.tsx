@@ -6,6 +6,7 @@ import { Filter } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type Retailer = "all" | "kehe" | "target" | "unfi" | "wegmans" | "tony";
 type ViewMode = "accounting" | "discrepancy";
@@ -107,6 +108,15 @@ type MonthOption = {
 };
 
 const PAGE_SIZE = 1000;
+const ACCOUNTING_SUMMARY_CACHE_KEY = "wmksolve:report-cache:accounting-summary";
+
+type AccountingSummaryCache = {
+  invoiceRows: InvoiceSummaryRow[];
+  targetRows: TargetInvoiceRow[];
+  wegmansRows: WegmansInvoiceRow[];
+  tonyRows: TonyInvoiceWireRow[];
+  brokerRows: BrokerCommissionRow[];
+};
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -483,8 +493,21 @@ export default function AccountingSummaryView() {
   ];
 
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
+    const cached = readBrowserCache<AccountingSummaryCache>(
+      ACCOUNTING_SUMMARY_CACHE_KEY
+    );
+
+    if (cached) {
+      setInvoiceRows(cached.invoiceRows || []);
+      setTargetRows(cached.targetRows || []);
+      setWegmansRows(cached.wegmansRows || []);
+      setTonyRows(cached.tonyRows || []);
+      setBrokerRows(cached.brokerRows || []);
+      setLoading(false);
+    }
+
+    const loadData = async (hasCachedData = false) => {
+      if (!hasCachedData) setLoading(true);
 
       try {
         const [
@@ -527,48 +550,55 @@ export default function AccountingSummaryView() {
               .order("wired_on", { ascending: false }),
           ]);
 
+        let nextInvoiceRows: InvoiceSummaryRow[] = [];
+        let nextTargetRows: TargetInvoiceRow[] = [];
+        let nextWegmansRows: WegmansInvoiceRow[] = [];
+        let nextTonyRows: TonyInvoiceWireRow[] = [];
+        let nextBrokerRows: BrokerCommissionRow[] = [];
+
         if (rawInvoiceRes.error) {
           console.error("Invoice query error:", rawInvoiceRes.error);
         } else {
-          setInvoiceRows(
-            ((rawInvoiceRes.data || []) as InvoiceSummaryRow[])
-              .filter((row) => parseUsDate(row.check_date))
-              .map((row) => ({
-                ...row,
-                retailer: "kehe",
-              }))
-          );
+          nextInvoiceRows = ((rawInvoiceRes.data || []) as InvoiceSummaryRow[])
+            .filter((row) => parseUsDate(row.check_date))
+            .map((row) => ({
+              ...row,
+              retailer: "kehe",
+            }));
+          setInvoiceRows(nextInvoiceRows);
         }
 
         if (rawTargetRes.error) {
           console.error("Target invoice query error:", rawTargetRes.error);
         } else {
-          setTargetRows(
-            ((rawTargetRes.data || []) as TargetInvoiceRow[]).map((row) => ({
+          nextTargetRows = ((rawTargetRes.data || []) as TargetInvoiceRow[]).map(
+            (row) => ({
               ...row,
               retailer: "target",
-            }))
+            })
           );
+          setTargetRows(nextTargetRows);
         }
 
         if (rawWegmansRes.error) {
           console.error("Wegmans invoice query error:", rawWegmansRes.error);
           setWegmansRows([]);
         } else {
-          setWegmansRows(
-            ((rawWegmansRes.data || []) as WegmansInvoiceRow[]).map((row) => ({
+          nextWegmansRows = ((rawWegmansRes.data || []) as WegmansInvoiceRow[]).map(
+            (row) => ({
               ...row,
               retailer: "wegmans",
-            }))
+            })
           );
+          setWegmansRows(nextWegmansRows);
         }
 
         if (rawTonyRes.error) {
           console.error("Tony invoice query error:", rawTonyRes.error);
           setTonyRows([]);
         } else {
-          setTonyRows(
-            ((rawTonyRes.data || []) as TonyInvoiceWireRow[]).map((row) => ({
+          nextTonyRows = ((rawTonyRes.data || []) as TonyInvoiceWireRow[]).map(
+            (row) => ({
               ...row,
               details: [...(row.details || [])].sort(
                 (a, b) => Number(a.line_number || 0) - Number(b.line_number || 0)
@@ -579,8 +609,9 @@ export default function AccountingSummaryView() {
                 ),
               })),
               retailer: "tony",
-            }))
+            })
           );
+          setTonyRows(nextTonyRows);
         }
 
         const ksolveByInvoice = new Map<string, number>();
@@ -628,13 +659,20 @@ export default function AccountingSummaryView() {
           discrepancyByInvoice
         );
 
-        const withMonthKey: BrokerCommissionRow[] = adjusted.map((row) => ({
+        nextBrokerRows = adjusted.map((row) => ({
           ...row,
           retailer: row.retailer ?? "kehe",
           derivedMonthKey: deriveBrokerMonthKey(row),
         }));
 
-        setBrokerRows(withMonthKey);
+        setBrokerRows(nextBrokerRows);
+        writeBrowserCache<AccountingSummaryCache>(ACCOUNTING_SUMMARY_CACHE_KEY, {
+          invoiceRows: nextInvoiceRows,
+          targetRows: nextTargetRows,
+          wegmansRows: nextWegmansRows,
+          tonyRows: nextTonyRows,
+          brokerRows: nextBrokerRows,
+        });
       } catch (error) {
         console.error("Summary load error:", error);
       } finally {
@@ -642,7 +680,7 @@ export default function AccountingSummaryView() {
       }
     };
 
-    loadData();
+    loadData(Boolean(cached));
   }, []);
 
   const filteredInvoiceRows = useMemo(() => {

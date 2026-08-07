@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { FileSpreadsheet, Search, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type WMRow = {
   month: string | null;
@@ -36,6 +37,13 @@ type ClaimRow = {
 };
 
 type ClaimStatus = "No Action" | "Needs Review" | "Submitted" | "Follow Up" | "Recovered" | "Rejected";
+
+const WM_INVOICE_DISCREPANCY_CACHE_KEY =
+  "wmksolve:report-cache:wm-invoice-discrepancy";
+
+type WMInvoiceDiscrepancyCache = {
+  rows: DiscrepancyRow[];
+};
 
 type DiscrepancyRow = {
   month: string;
@@ -326,8 +334,8 @@ export default function WMInvoiceDiscrepancyView() {
     if (error) throw error;
   };
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (hasCachedData = false) => {
+    if (!hasCachedData) setLoading(true);
 
     let wmData: WMRow[] = [];
     let ksolveData: KsolveRow[] = [];
@@ -484,11 +492,26 @@ export default function WMInvoiceDiscrepancyView() {
     });
 
     setRows(merged);
+    writeBrowserCache<WMInvoiceDiscrepancyCache>(
+      WM_INVOICE_DISCREPANCY_CACHE_KEY,
+      {
+        rows: merged,
+      }
+    );
     setLoading(false);
   };
 
   useEffect(() => {
-    load();
+    const cached = readBrowserCache<WMInvoiceDiscrepancyCache>(
+      WM_INVOICE_DISCREPANCY_CACHE_KEY
+    );
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setLoading(false);
+    }
+
+    load(Boolean(cached));
   }, []);
 
   const monthOptions = useMemo(() => {

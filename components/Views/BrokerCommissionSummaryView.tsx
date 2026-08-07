@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 import { RotateCw } from "lucide-react";
 
 type RetailerName =
@@ -66,6 +67,14 @@ type LocationRow = {
 type BrokerCommissionStatusRow = {
   month: string | null;
   status: BrokerageStatus | null;
+};
+
+const BROKER_SUMMARY_CACHE_KEY = "wmksolve:report-cache:broker-commission-summary:v2";
+
+type BrokerSummaryCache = {
+  rows: DatasetRow[];
+  velocityRows: VelocityRow[];
+  monthStatuses: Record<string, BrokerageStatus>;
 };
 
 type DetailLine = {
@@ -236,6 +245,15 @@ function getFirstTwoWords(value: string) {
     .join(" ");
 }
 
+function stripLocationSuffix(rawCustomer: string) {
+  const dashIndex = rawCustomer.indexOf(" - ");
+  return dashIndex !== -1 ? rawCustomer.slice(0, dashIndex) : rawCustomer;
+}
+
+function getCustomerLocationKey(rawCustomer: string) {
+  return normalizeText(stripLocationSuffix(rawCustomer));
+}
+
 function directRetailerFromCustomer(custName: string): RetailerName {
   const customer = normalizeText(custName);
 
@@ -328,6 +346,15 @@ function inferRetailer(
 
   const directRetailer = directRetailerFromCustomer(custName);
   if (directRetailer) return directRetailer;
+
+  const exactCustomerKey = getCustomerLocationKey(trimmedCustomer);
+  const exactLocationMatch = locations.find(
+    (loc) => getCustomerLocationKey(loc.customer) === exactCustomerKey,
+  );
+
+  if (exactLocationMatch) {
+    return categorizeRetailerName(exactLocationMatch.retailer);
+  }
 
   const firstTwoCustomer = getFirstTwoWords(trimmedCustomer);
   if (!firstTwoCustomer) return "";
@@ -631,8 +658,8 @@ export default function BrokerCommissionSummaryView() {
     }
   }, [transferAllocations]);
 
-  const load = useCallback(async (isManualRefresh = false) => {
-    if (isManualRefresh) {
+  const load = useCallback(async (isManualRefresh = false, hasCachedData = false) => {
+    if (isManualRefresh || hasCachedData) {
       setRefreshing(true);
     } else {
       setLoading(true);
@@ -800,15 +827,20 @@ export default function BrokerCommissionSummaryView() {
       month: normalizeMonthLabel(row.month ?? ""),
     }));
 
+    const nextMonthStatuses = Object.fromEntries(
+      statusData
+        .filter((row) => row.month && row.status)
+        .map((row) => [row.month as string, row.status as BrokerageStatus])
+    );
+
     setRows(hydratedRows);
     setVelocityRows(normalizedVelocityRows);
-    setMonthStatuses(
-      Object.fromEntries(
-        statusData
-          .filter((row) => row.month && row.status)
-          .map((row) => [row.month as string, row.status as BrokerageStatus])
-      )
-    );
+    setMonthStatuses(nextMonthStatuses);
+    writeBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY, {
+      rows: hydratedRows,
+      velocityRows: normalizedVelocityRows,
+      monthStatuses: nextMonthStatuses,
+    });
 
     const months = Array.from(
       new Set(hydratedRows.map((r) => r.month).filter(Boolean))
@@ -827,7 +859,27 @@ export default function BrokerCommissionSummaryView() {
   }, []);
 
   useEffect(() => {
-    load();
+    const cached = readBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY);
+
+    if (cached) {
+      const cachedRows = cached.rows || [];
+
+      setRows(cachedRows);
+      setVelocityRows(cached.velocityRows || []);
+      setMonthStatuses(cached.monthStatuses || {});
+      setLoading(false);
+      setExpandedMonths((prev) => {
+        const next = { ...prev };
+        Array.from(new Set(cachedRows.map((r) => r.month).filter(Boolean))).forEach(
+          (month) => {
+            if (!(month in next)) next[month] = false;
+          }
+        );
+        return next;
+      });
+    }
+
+    load(false, Boolean(cached));
   }, [load]);
 
   const monthOptions = useMemo(() => {

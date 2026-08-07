@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type TabKey = "analytics" | "velocity" | "pullout";
 type FillRateSubTabKey = "retailer" | "area";
@@ -46,6 +47,13 @@ type LocationRow = {
   region?: unknown;
   dc?: unknown;
   distribution_center?: unknown;
+};
+
+const KEHE_DASHBOARD_CACHE_KEY = "wmksolve:report-cache:kehe-dashboard";
+
+type KeheDashboardCache = {
+  rows: VelocityRow[];
+  locations: LocationRow[];
 };
 
 type LocationDcEntry = {
@@ -2776,8 +2784,16 @@ export default function KeheDashboardView() {
   );
 
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
+    const cached = readBrowserCache<KeheDashboardCache>(KEHE_DASHBOARD_CACHE_KEY);
+
+    if (cached) {
+      setRows(cached.rows || []);
+      setLocations(cached.locations || []);
+      setLoading(false);
+    }
+
+    const load = async (hasCachedData = false) => {
+      if (!hasCachedData) setLoading(true);
       setLoadError("");
       try {
         const pageSize = 1000;
@@ -2796,6 +2812,7 @@ export default function KeheDashboardView() {
         }
         setRows(all);
 
+        let nextLocations: LocationRow[] = cached?.locations || [];
         try {
           let locationFrom = 0;
           let allLocations: LocationRow[] = [];
@@ -2810,11 +2827,16 @@ export default function KeheDashboardView() {
             if (batch.length < pageSize) break;
             locationFrom += pageSize;
           }
-          setLocations(allLocations);
+          nextLocations = allLocations;
+          setLocations(nextLocations);
         } catch (locationError) {
           console.error("Failed to load location DC mappings:", locationError);
-          setLocations([]);
+          if (!hasCachedData) setLocations([]);
         }
+        writeBrowserCache<KeheDashboardCache>(KEHE_DASHBOARD_CACHE_KEY, {
+          rows: all,
+          locations: nextLocations,
+        });
       } catch (err: unknown) {
         setLoadError(
           err instanceof Error ? err.message : "Failed to load KEHE velocity data.",
@@ -2823,7 +2845,7 @@ export default function KeheDashboardView() {
         setLoading(false);
       }
     };
-    load();
+    load(Boolean(cached));
   }, []);
 
   const locationDcLookup = useMemo<LocationDcLookup>(() => {
