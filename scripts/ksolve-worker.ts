@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { chromium, type Page } from "playwright";
 import { runKsolveAutomation } from "../lib/automation/ksolve-download";
 
 function toIsoDate(date: Date) {
@@ -109,6 +109,116 @@ async function validateKsolveCookieSession(cookieHeader: string) {
   return false;
 }
 
+async function getBrowserTokenCandidates(page: Page) {
+  return page.evaluate(async () => {
+    const tokens: string[] = [];
+    const tokenHint = /auth|bearer|token|access|credential|session/i;
+    const jwtRegex = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+    function addToken(raw: unknown, hint = "") {
+      if (typeof raw !== "string") return;
+
+      const cleaned = raw.trim();
+      if (cleaned.length < 20) return;
+      if (!jwtRegex.test(cleaned) && !tokenHint.test(hint) && !/^eyJ/.test(cleaned)) {
+        return;
+      }
+
+      if (!tokens.includes(cleaned)) tokens.push(cleaned);
+    }
+
+    function walk(value: unknown, hint = "", depth = 0) {
+      if (depth > 5 || value === null || value === undefined) return;
+
+      if (typeof value === "string") {
+        addToken(value, hint);
+
+        if (/^[\[{]/.test(value.trim())) {
+          try {
+            walk(JSON.parse(value), hint, depth + 1);
+          } catch {
+            // Ignore non-JSON storage values.
+          }
+        }
+
+        return;
+      }
+
+      if (typeof value !== "object") return;
+
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => walk(item, `${hint}.${index}`, depth + 1));
+        return;
+      }
+
+      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        walk(child, hint ? `${hint}.${key}` : key, depth + 1);
+      }
+    }
+
+    for (const store of [window.localStorage, window.sessionStorage]) {
+      for (let index = 0; index < store.length; index += 1) {
+        const key = store.key(index) || "";
+        walk(store.getItem(key), key);
+      }
+    }
+
+    async function readRequest<T>(request: IDBRequest<T>) {
+      return new Promise<T>((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    async function readStore(db: IDBDatabase, storeName: string) {
+      try {
+        const transaction = db.transaction(storeName, "readonly");
+        const store = transaction.objectStore(storeName);
+        const valuesRequest = store.getAll();
+        const keysRequest = store.getAllKeys();
+
+        const [values, keys] = await Promise.all([
+          readRequest(valuesRequest).catch(() => []),
+          readRequest(keysRequest).catch(() => []),
+        ]);
+
+        values.forEach((value, index) => {
+          walk(value, `${db.name}.${storeName}.${String(keys[index] || index)}`);
+        });
+      } catch {
+        // Ignore stores that cannot be read.
+      }
+    }
+
+    if ("databases" in indexedDB) {
+      const databases = await indexedDB.databases().catch(() => []);
+
+      for (const database of databases.slice(0, 20)) {
+        if (!database.name) continue;
+
+        const db = await new Promise<IDBDatabase | null>((resolve) => {
+          const request = indexedDB.open(database.name || "");
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => resolve(null);
+          request.onblocked = () => resolve(null);
+        });
+
+        if (!db) continue;
+
+        for (const storeName of Array.from(db.objectStoreNames)) {
+          await readStore(db, storeName);
+          if (tokens.length >= 50) break;
+        }
+
+        db.close();
+        if (tokens.length >= 50) break;
+      }
+    }
+
+    return tokens.slice(0, 50);
+  });
+}
+
 async function loginAndGetKsolveAuth() {
   const username = process.env.KSOLVE_USERNAME;
   const password = process.env.KSOLVE_PASSWORD;
@@ -214,30 +324,14 @@ async function loginAndGetKsolveAuth() {
       throw new Error("Login succeeded, but no KeHE cookies were captured.");
     }
 
-    const storageTokens = await page.evaluate(() => {
-      const tokens: string[] = [];
-      const stores = [window.localStorage, window.sessionStorage];
-      const jwtRegex = /[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
-
-      for (const store of stores) {
-        for (let index = 0; index < store.length; index += 1) {
-          const key = store.key(index);
-          const value = key ? store.getItem(key) || "" : "";
-          const matches = value.match(jwtRegex) || [];
-
-          for (const match of matches) {
-            if (!tokens.includes(match)) tokens.push(match);
-          }
-        }
-      }
-
-      return tokens;
-    });
+    const storageTokens = await getBrowserTokenCandidates(page);
 
     const bearerCandidates: string[] = [];
     addUniqueToken(bearerCandidates, ksolveBearerToken);
     for (const token of storageTokens) addUniqueToken(bearerCandidates, token);
     addUniqueToken(bearerCandidates, fallbackBearerToken);
+
+    console.log(`K-Solve auth candidates captured: ${bearerCandidates.length}.`);
 
     let validatedBearerToken = "";
 
