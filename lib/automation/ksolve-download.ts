@@ -823,8 +823,42 @@ async function upsertInvoiceRows(rows: KsolveSearchRow[]) {
   if (rows.length === 0) return;
 
   const supabase = getSupabaseClient();
+  const rowsByInvoiceNumber = new Map<string, KsolveSearchRow>();
+  let duplicateCount = 0;
 
-  const invoiceRows = rows.map((row) => ({
+  for (const row of rows) {
+    const invoiceNumber = String(row.InvoiceNumber || "").trim();
+    const key = invoiceNumber || getSearchRowKey(row);
+    const current = rowsByInvoiceNumber.get(key);
+
+    if (!current) {
+      rowsByInvoiceNumber.set(key, row);
+      continue;
+    }
+
+    duplicateCount += 1;
+
+    const currentScore =
+      (current.HasDocuments ? 4 : 0) +
+      (current.DocumentUrl ? 2 : 0) +
+      (Number(current.InvoiceAmount || 0) !== 0 ? 1 : 0);
+    const nextScore =
+      (row.HasDocuments ? 4 : 0) +
+      (row.DocumentUrl ? 2 : 0) +
+      (Number(row.InvoiceAmount || 0) !== 0 ? 1 : 0);
+
+    if (nextScore > currentScore) {
+      rowsByInvoiceNumber.set(key, row);
+    }
+  }
+
+  if (duplicateCount > 0) {
+    console.log(
+      `Collapsed ${duplicateCount} duplicate K-Solve invoice row(s) before Supabase upsert.`
+    );
+  }
+
+  const invoiceRows = Array.from(rowsByInvoiceNumber.values()).map((row) => ({
     month: getMonthLabel(row.CheckDate),
     check_date: formatDisplayDate(row.CheckDate),
     check_number: row.CheckNumber ? String(row.CheckNumber) : "",
