@@ -64,20 +64,59 @@ function addUniqueToken(tokens: string[], token: string | undefined | null) {
   }
 }
 
-async function validateKsolveToken(token: string, cookieHeader: string) {
+function getKsolveValidationHeaders({
+  cookieHeader,
+  token,
+  capturedHeaders = {},
+}: {
+  cookieHeader: string;
+  token?: string;
+  capturedHeaders?: Record<string, string>;
+}) {
+  const headers: Record<string, string> = {
+    accept: "application/json, text/plain, */*",
+    cookie: cookieHeader,
+    origin: "https://connect.kehe.com",
+    referer: "https://connect.kehe.com/ksolve/",
+    "user-agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
+  };
+
+  for (const [key, value] of Object.entries(capturedHeaders)) {
+    if (value) headers[key.toLowerCase()] = value;
+  }
+
+  headers.cookie = cookieHeader;
+
+  if (token) {
+    headers.authorization = `bearer ${token}`;
+  }
+
+  const xsrfToken = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => /^x(?:srf|csrf)-token=/i.test(part))
+    ?.split("=")
+    .slice(1)
+    .join("=");
+
+  if (xsrfToken && !headers["x-xsrf-token"]) {
+    headers["x-xsrf-token"] = decodeURIComponent(xsrfToken);
+  }
+
+  return headers;
+}
+
+async function validateKsolveToken(
+  token: string,
+  cookieHeader: string,
+  capturedHeaders: Record<string, string>
+) {
   const response = await fetch(
     "https://connect.kehe.com/ksolve/services/api/ksolve/list/dcs",
     {
       method: "GET",
-      headers: {
-        accept: "application/json, text/plain, */*",
-        authorization: `Bearer ${token}`,
-        cookie: cookieHeader,
-        origin: "https://connect.kehe.com",
-        referer: "https://connect.kehe.com/ksolve/",
-        "user-agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
-      },
+      headers: getKsolveValidationHeaders({ cookieHeader, token, capturedHeaders }),
     }
   );
 
@@ -87,19 +126,15 @@ async function validateKsolveToken(token: string, cookieHeader: string) {
   return false;
 }
 
-async function validateKsolveCookieSession(cookieHeader: string) {
+async function validateKsolveCookieSession(
+  cookieHeader: string,
+  capturedHeaders: Record<string, string>
+) {
   const response = await fetch(
     "https://connect.kehe.com/ksolve/services/api/ksolve/list/dcs",
     {
       method: "GET",
-      headers: {
-        accept: "application/json, text/plain, */*",
-        cookie: cookieHeader,
-        origin: "https://connect.kehe.com",
-        referer: "https://connect.kehe.com/ksolve/",
-        "user-agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
-      },
+      headers: getKsolveValidationHeaders({ cookieHeader, capturedHeaders }),
     }
   );
 
@@ -223,6 +258,73 @@ async function getBrowserTokenCandidates(page: Page) {
   return (await page.evaluate(browserTokenScript)) as string[];
 }
 
+async function getKsolvePageDiagnostics(page: Page) {
+  return page.evaluate(() => {
+    const text = document.body?.innerText?.toLowerCase() || "";
+    return {
+      url: window.location.href,
+      title: document.title || "",
+      textLength: text.length,
+      hasAccessDenied: /access\s*denied|not\s*authorized|authorization\s+has\s+been\s+denied/.test(text),
+      hasLogin: /log\s*in|login|sign\s*in/.test(text),
+      hasMfa: /multi-factor|mfa|verification|verify\s+your|authenticator/.test(text),
+      hasKsolveText: /k-?solve|invoice|deduction/.test(text),
+    };
+  });
+}
+
+async function probeKsolveInBrowser(page: Page) {
+  return page.evaluate(async () => {
+    try {
+      const response = await fetch("/ksolve/services/api/ksolve/list/dcs", {
+        method: "GET",
+        credentials: "include",
+        headers: {
+          accept: "application/json, text/plain, */*",
+        },
+      });
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        contentType: response.headers.get("content-type") || "",
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        status: 0,
+        contentType: "",
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      };
+    }
+  });
+}
+
+function getCapturedKsolveHeaders(headers: Record<string, string>) {
+  const captured: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(headers)) {
+    const headerName = key.toLowerCase();
+    if (!value) continue;
+    if (
+      headerName === "accept" ||
+      headerName === "accept-language" ||
+      headerName === "authorization" ||
+      headerName === "origin" ||
+      headerName === "referer" ||
+      headerName === "user-agent" ||
+      headerName === "cookie" ||
+      headerName.startsWith("sec-ch-") ||
+      headerName.startsWith("sec-fetch-") ||
+      headerName.startsWith("x-")
+    ) {
+      captured[headerName] = value;
+    }
+  }
+
+  return captured;
+}
+
 async function loginAndGetKsolveAuth() {
   const username = process.env.KSOLVE_USERNAME;
   const password = process.env.KSOLVE_PASSWORD;
@@ -240,17 +342,27 @@ async function loginAndGetKsolveAuth() {
 
   let ksolveBearerToken = "";
   let fallbackBearerToken = "";
+  let capturedKsolveHeaders: Record<string, string> = {};
+  const ksolveApiEvents: string[] = [];
 
   page.on("request", (request) => {
     const token = extractBearerToken(request.headers()["authorization"]);
 
-    if (!token) return;
-
     if (request.url().includes("/ksolve/services/api/")) {
-      ksolveBearerToken = token;
-    } else {
+      capturedKsolveHeaders = getCapturedKsolveHeaders(request.headers());
+      if (token) ksolveBearerToken = token;
+    } else if (token) {
       fallbackBearerToken = token;
     }
+  });
+
+  page.on("response", (response) => {
+    const url = response.url();
+    if (!url.includes("/ksolve/services/api/")) return;
+
+    const pathname = new URL(url).pathname.replace("/ksolve/services/api", "");
+    ksolveApiEvents.push(`${response.status()} ${pathname}`);
+    if (ksolveApiEvents.length > 10) ksolveApiEvents.shift();
   });
 
   try {
@@ -318,6 +430,10 @@ async function loginAndGetKsolveAuth() {
     await page.waitForTimeout(5000);
 
     const cookies = await context.cookies();
+    const cookieNames = cookies
+      .filter((cookie) => cookie.domain.includes("kehe.com"))
+      .map((cookie) => cookie.name)
+      .sort();
 
     const cookieHeader = cookies
       .filter((cookie) => cookie.domain.includes("kehe.com"))
@@ -329,18 +445,39 @@ async function loginAndGetKsolveAuth() {
     }
 
     const storageTokens = await getBrowserTokenCandidates(page);
+    const pageDiagnostics = await getKsolvePageDiagnostics(page);
+    const browserProbe = await probeKsolveInBrowser(page);
 
     const bearerCandidates: string[] = [];
     addUniqueToken(bearerCandidates, ksolveBearerToken);
     for (const token of storageTokens) addUniqueToken(bearerCandidates, token);
     addUniqueToken(bearerCandidates, fallbackBearerToken);
 
+    console.log(
+      `K-Solve page diagnostics: ${JSON.stringify(pageDiagnostics)}`
+    );
+    console.log(
+      `K-Solve browser probe: ${JSON.stringify(browserProbe)}`
+    );
+    console.log(
+      `K-Solve API events: ${ksolveApiEvents.length ? ksolveApiEvents.join(", ") : "none"}`
+    );
+    console.log(
+      `KeHE cookie names captured: ${cookieNames.length ? cookieNames.join(", ") : "none"}`
+    );
+    console.log(
+      `Captured K-Solve header names: ${
+        Object.keys(capturedKsolveHeaders).length
+          ? Object.keys(capturedKsolveHeaders).sort().join(", ")
+          : "none"
+      }`
+    );
     console.log(`K-Solve auth candidates captured: ${bearerCandidates.length}.`);
 
     let validatedBearerToken = "";
 
     for (const token of bearerCandidates) {
-      if (await validateKsolveToken(token, cookieHeader)) {
+      if (await validateKsolveToken(token, cookieHeader, capturedKsolveHeaders)) {
         validatedBearerToken = token;
         break;
       }
@@ -348,7 +485,7 @@ async function loginAndGetKsolveAuth() {
 
     const hasCookieSession = validatedBearerToken
       ? false
-      : await validateKsolveCookieSession(cookieHeader);
+      : await validateKsolveCookieSession(cookieHeader, capturedKsolveHeaders);
 
     if (!validatedBearerToken && !hasCookieSession) {
       throw new Error(
@@ -362,6 +499,12 @@ async function loginAndGetKsolveAuth() {
       process.env.KSOLVE_BEARER_TOKEN = validatedBearerToken;
     } else {
       delete process.env.KSOLVE_BEARER_TOKEN;
+    }
+
+    if (Object.keys(capturedKsolveHeaders).length) {
+      process.env.KSOLVE_CAPTURED_HEADERS = JSON.stringify(capturedKsolveHeaders);
+    } else {
+      delete process.env.KSOLVE_CAPTURED_HEADERS;
     }
 
     process.env.KSOLVE_COOKIE = cookieHeader;

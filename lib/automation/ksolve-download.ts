@@ -173,9 +173,50 @@ function getKsolveHeaders() {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
   };
 
+  const capturedHeaders = process.env.KSOLVE_CAPTURED_HEADERS?.trim();
+  if (capturedHeaders) {
+    try {
+      const parsedHeaders = JSON.parse(capturedHeaders) as Record<string, string>;
+      for (const [key, value] of Object.entries(parsedHeaders)) {
+        const headerName = key.toLowerCase();
+        if (!value) continue;
+        if (
+          headerName === "accept" ||
+          headerName === "accept-language" ||
+          headerName === "authorization" ||
+          headerName === "origin" ||
+          headerName === "referer" ||
+          headerName === "user-agent" ||
+          headerName === "cookie" ||
+          headerName.startsWith("sec-ch-") ||
+          headerName.startsWith("sec-fetch-") ||
+          headerName.startsWith("x-")
+        ) {
+          headers[headerName] = value;
+        }
+      }
+    } catch {
+      console.warn("Ignoring invalid KSOLVE_CAPTURED_HEADERS value.");
+    }
+  }
+
+  headers["content-type"] = "application/json;charset=UTF-8";
+
   const bearerToken = process.env.KSOLVE_BEARER_TOKEN?.trim();
   if (bearerToken) {
-    headers.authorization = `Bearer ${bearerToken}`;
+    headers.authorization = `bearer ${bearerToken}`;
+  }
+
+  const xsrfToken = (process.env.KSOLVE_COOKIE || "")
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => /^x(?:srf|csrf)-token=/i.test(part))
+    ?.split("=")
+    .slice(1)
+    .join("=");
+
+  if (xsrfToken && !headers["x-xsrf-token"]) {
+    headers["x-xsrf-token"] = decodeURIComponent(xsrfToken);
   }
 
   return headers;
