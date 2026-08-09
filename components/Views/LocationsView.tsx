@@ -15,6 +15,7 @@ import {
   Download,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 import * as XLSX from "xlsx";
 
 interface Location {
@@ -33,9 +34,20 @@ type UploadRow = {
   dc: string;
 };
 
+const LOCATIONS_CACHE_KEY = "wmksolve:report-cache:locations:v1";
+
+type LocationsCache = {
+  locations: Location[];
+};
+
 export default function LocationsView() {
-  const [locations, setLocations] = useState<Location[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<LocationsCache | null>(() =>
+    readBrowserCache<LocationsCache>(LOCATIONS_CACHE_KEY)
+  );
+  const [locations, setLocations] = useState<Location[]>(
+    () => startupCache?.locations || []
+  );
+  const [loading, setLoading] = useState(() => !startupCache);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -53,8 +65,8 @@ export default function LocationsView() {
   const [uploadPreview, setUploadPreview] = useState<UploadRow[]>([]);
   const [uploadFileName, setUploadFileName] = useState("");
 
-  const fetchLocations = async () => {
-    setLoading(true);
+  const fetchLocations = async (hasCachedData = false) => {
+    if (!hasCachedData) setLoading(true);
 
     try {
       const pageSize = 1000;
@@ -78,17 +90,24 @@ export default function LocationsView() {
       }
 
       setLocations(allRows);
+      writeBrowserCache<LocationsCache>(LOCATIONS_CACHE_KEY, {
+        locations: allRows,
+      });
     } catch (error) {
       console.error("Error fetching locations:", error);
-      setLocations([]);
+      if (!hasCachedData) setLocations([]);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchLocations();
-  }, []);
+    const refreshTimer = window.setTimeout(() => {
+      void fetchLocations(Boolean(startupCache));
+    }, 0);
+
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const filteredLocations = useMemo(() => {
     const query = search.trim().toLowerCase();

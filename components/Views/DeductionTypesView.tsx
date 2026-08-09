@@ -5,6 +5,7 @@ import { Plus, RefreshCw, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type DeductionTypeRow = {
   id: string;
@@ -13,9 +14,18 @@ type DeductionTypeRow = {
   created_at?: string;
 };
 
+const DEDUCTION_TYPES_CACHE_KEY = "wmksolve:report-cache:deduction-types:v1";
+
+type DeductionTypesCache = {
+  rows: DeductionTypeRow[];
+};
+
 export default function DeductionTypesView() {
-  const [rows, setRows] = useState<DeductionTypeRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<DeductionTypesCache | null>(() =>
+    readBrowserCache<DeductionTypesCache>(DEDUCTION_TYPES_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<DeductionTypeRow[]>(() => startupCache?.rows || []);
+  const [loading, setLoading] = useState(() => !startupCache);
   const [error, setError] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
@@ -42,7 +52,11 @@ export default function DeductionTypesView() {
 
       if (error) throw error;
 
-      setRows(data || []);
+      const nextRows = data || [];
+      setRows(nextRows);
+      writeBrowserCache<DeductionTypesCache>(DEDUCTION_TYPES_CACHE_KEY, {
+        rows: nextRows,
+      });
     } catch (err: any) {
       setError(err.message || "Failed to load deduction types.");
     } finally {
@@ -52,8 +66,12 @@ export default function DeductionTypesView() {
   };
 
   useEffect(() => {
-    loadRows();
-  }, []);
+    const refreshTimer = window.setTimeout(() => {
+      void loadRows(Boolean(startupCache));
+    }, 0);
+
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   useEffect(() => {
     const channel = supabase

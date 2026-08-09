@@ -846,9 +846,14 @@ export default function TonyDashboardView() {
   const [analyticsFrom, setAnalyticsFrom] = useState(getPastMonthsInputValue(3));
   const [analyticsTo, setAnalyticsTo] = useState(getLastMonthInputValue());
 
-  const [rows, setRows] = useState<TonyVelocityRow[]>([]);
-  const [locations, setLocations] = useState<TonyLocation[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [startupCache] = useState<TonyDashboardCache | null>(() =>
+    readBrowserCache<TonyDashboardCache>(TONY_DASHBOARD_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<TonyVelocityRow[]>(() => startupCache?.rows || []);
+  const [locations, setLocations] = useState<TonyLocation[]>(
+    () => startupCache?.locations || []
+  );
+  const [loading, setLoading] = useState(() => !startupCache);
   const [uploadingVelocity, setUploadingVelocity] = useState(false);
   const [uploadingLocations, setUploadingLocations] = useState(false);
   const [error, setError] = useState("");
@@ -931,16 +936,12 @@ export default function TonyDashboardView() {
     finally { setLoading(false); }
   };
   useEffect(() => {
-    const cached = readBrowserCache<TonyDashboardCache>(TONY_DASHBOARD_CACHE_KEY);
+    const refreshTimer = window.setTimeout(() => {
+      void loadData(Boolean(startupCache));
+    }, 0);
 
-    if (cached) {
-      setRows(cached.rows || []);
-      setLocations(cached.locations || []);
-      setLoading(false);
-    }
-
-    loadData(Boolean(cached));
-  }, []);
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(""), 3500); return () => window.clearTimeout(timer); }, [notice]);
 
   const locationMap = useMemo(() => {

@@ -349,8 +349,11 @@ async function fetchAllTonyWires() {
 export default function TonyInvoicesView() {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const [rows, setRows] = useState<TonyInvoiceWire[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<TonyInvoicesCache | null>(() =>
+    readBrowserCache<TonyInvoicesCache>(TONY_INVOICES_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<TonyInvoiceWire[]>(() => startupCache?.rows || []);
+  const [loading, setLoading] = useState(() => !startupCache);
   const [loadError, setLoadError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [savingTypeId, setSavingTypeId] = useState<number | null>(null);
@@ -389,15 +392,12 @@ export default function TonyInvoicesView() {
   };
 
   useEffect(() => {
-    const cached = readBrowserCache<TonyInvoicesCache>(TONY_INVOICES_CACHE_KEY);
+    const refreshTimer = window.setTimeout(() => {
+      void loadRows(Boolean(startupCache));
+    }, 0);
 
-    if (cached) {
-      setRows(cached.rows || []);
-      setLoading(false);
-    }
-
-    loadRows(Boolean(cached));
-  }, []);
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const sortedRows = useMemo(() => {
     return [...rows].sort((a, b) => {

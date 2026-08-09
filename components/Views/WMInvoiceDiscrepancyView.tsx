@@ -310,9 +310,12 @@ async function fetchAllClaimRows(): Promise<ClaimRow[]> {
 }
 
 export default function WMInvoiceDiscrepancyView() {
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<WMInvoiceDiscrepancyCache | null>(() =>
+    readBrowserCache<WMInvoiceDiscrepancyCache>(WM_INVOICE_DISCREPANCY_CACHE_KEY)
+  );
+  const [loading, setLoading] = useState(() => !startupCache);
   const [savingInvoice, setSavingInvoice] = useState<string | null>(null);
-  const [rows, setRows] = useState<DiscrepancyRow[]>([]);
+  const [rows, setRows] = useState<DiscrepancyRow[]>(() => startupCache?.rows || []);
   const [search, setSearch] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("All Months");
   const [selectedClaimStatus, setSelectedClaimStatus] = useState("All Claim Statuses");
@@ -502,17 +505,12 @@ export default function WMInvoiceDiscrepancyView() {
   };
 
   useEffect(() => {
-    const cached = readBrowserCache<WMInvoiceDiscrepancyCache>(
-      WM_INVOICE_DISCREPANCY_CACHE_KEY
-    );
+    const refreshTimer = window.setTimeout(() => {
+      void load(Boolean(startupCache));
+    }, 0);
 
-    if (cached) {
-      setRows(cached.rows || []);
-      setLoading(false);
-    }
-
-    load(Boolean(cached));
-  }, []);
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const monthOptions = useMemo(() => {
     return [

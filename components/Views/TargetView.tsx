@@ -323,8 +323,11 @@ function rowMatchesSearch(row: TargetInvoiceRow, searchTerm: string) {
 export default function TargetView() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [rows, setRows] = useState<TargetInvoiceRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<TargetInvoicesCache | null>(() =>
+    readBrowserCache<TargetInvoicesCache>(TARGET_INVOICES_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<TargetInvoiceRow[]>(() => startupCache?.rows || []);
+  const [loading, setLoading] = useState(() => !startupCache);
   const [uploading, setUploading] = useState(false);
 
   const [selectedReason, setSelectedReason] = useState("all");
@@ -355,15 +358,12 @@ export default function TargetView() {
   };
 
   useEffect(() => {
-    const cached = readBrowserCache<TargetInvoicesCache>(TARGET_INVOICES_CACHE_KEY);
+    const refreshTimer = window.setTimeout(() => {
+      void loadRows(Boolean(startupCache));
+    }, 0);
 
-    if (cached) {
-      setRows(cached.rows || []);
-      setLoading(false);
-    }
-
-    loadRows(Boolean(cached));
-  }, []);
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const existingCheckKeys = useMemo(() => {
     return new Set(

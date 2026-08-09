@@ -465,12 +465,25 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveInvoiceRow[]> {
 }
 
 export default function AccountingSummaryView() {
-  const [invoiceRows, setInvoiceRows] = useState<InvoiceSummaryRow[]>([]);
-  const [targetRows, setTargetRows] = useState<TargetInvoiceRow[]>([]);
-  const [wegmansRows, setWegmansRows] = useState<WegmansInvoiceRow[]>([]);
-  const [tonyRows, setTonyRows] = useState<TonyInvoiceWireRow[]>([]);
-  const [brokerRows, setBrokerRows] = useState<BrokerCommissionRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<AccountingSummaryCache | null>(() =>
+    readBrowserCache<AccountingSummaryCache>(ACCOUNTING_SUMMARY_CACHE_KEY)
+  );
+  const [invoiceRows, setInvoiceRows] = useState<InvoiceSummaryRow[]>(
+    () => startupCache?.invoiceRows || []
+  );
+  const [targetRows, setTargetRows] = useState<TargetInvoiceRow[]>(
+    () => startupCache?.targetRows || []
+  );
+  const [wegmansRows, setWegmansRows] = useState<WegmansInvoiceRow[]>(
+    () => startupCache?.wegmansRows || []
+  );
+  const [tonyRows, setTonyRows] = useState<TonyInvoiceWireRow[]>(
+    () => startupCache?.tonyRows || []
+  );
+  const [brokerRows, setBrokerRows] = useState<BrokerCommissionRow[]>(
+    () => startupCache?.brokerRows || []
+  );
+  const [loading, setLoading] = useState(() => !startupCache);
 
   const [viewMode, setViewMode] = useState<ViewMode>("accounting");
   const [retailer, setRetailer] = useState<Retailer>("all");
@@ -493,19 +506,6 @@ export default function AccountingSummaryView() {
   ];
 
   useEffect(() => {
-    const cached = readBrowserCache<AccountingSummaryCache>(
-      ACCOUNTING_SUMMARY_CACHE_KEY
-    );
-
-    if (cached) {
-      setInvoiceRows(cached.invoiceRows || []);
-      setTargetRows(cached.targetRows || []);
-      setWegmansRows(cached.wegmansRows || []);
-      setTonyRows(cached.tonyRows || []);
-      setBrokerRows(cached.brokerRows || []);
-      setLoading(false);
-    }
-
     const loadData = async (hasCachedData = false) => {
       if (!hasCachedData) setLoading(true);
 
@@ -680,8 +680,12 @@ export default function AccountingSummaryView() {
       }
     };
 
-    loadData(Boolean(cached));
-  }, []);
+    const refreshTimer = window.setTimeout(() => {
+      void loadData(Boolean(startupCache));
+    }, 0);
+
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const filteredInvoiceRows = useMemo(() => {
     if (retailer === "all") return invoiceRows;

@@ -2234,9 +2234,12 @@ export default function InvoicesView({
   canReprocess?: boolean;
   isAdmin?: boolean;
 }) {
-  const [rows, setRows] = useState<InvoiceRecord[]>([]);
-  const [uploads, setUploads] = useState<UploadRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<KsolveInvoicesCache | null>(() =>
+    readBrowserCache<KsolveInvoicesCache>(KSOLVE_INVOICES_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<InvoiceRecord[]>(() => startupCache?.rows || []);
+  const [uploads, setUploads] = useState<UploadRecord[]>(() => startupCache?.uploads || []);
+  const [loading, setLoading] = useState(() => !startupCache);
   const [reprocessing, setReprocessing] = useState(false);
   const [reprocessModalOpen, setReprocessModalOpen] = useState(false);
   const [reprocessFrom, setReprocessFrom] = useState("");
@@ -2306,28 +2309,22 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
   };
 
   useEffect(() => {
-    const cached = readBrowserCache<KsolveInvoicesCache>(KSOLVE_INVOICES_CACHE_KEY);
-
-    if (cached) {
-      setRows(cached.rows || []);
-      setUploads(cached.uploads || []);
-      setLoading(false);
-    }
-
     supabase.auth.getSession().then(({ data: { session } }) => {
       console.log("Auth session:", session?.user?.email ?? "NO SESSION");
       if (!session) {
         showToast("You are not logged in. Please sign in.", "error");
         return;
       }
-      loadData(Boolean(cached));
+      window.setTimeout(() => {
+        void loadData(Boolean(startupCache));
+      }, 0);
     });
     fetchDeductionTypes().then(setDeductionTypes);
     fetchProductLookup().then((map) => {
       setExistingDescriptions(Array.from(new Set(Array.from(map.values()).filter(Boolean))).sort());
     });
     return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
-  }, []);
+  }, [startupCache]);
 
   useEffect(() => {
     if (invoiceUploadSignal > 0 && invoiceUploadSignal !== lastInvRef.current) {

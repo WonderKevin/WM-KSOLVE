@@ -295,8 +295,11 @@ export default function UnfiInvoicesView() {
   const currentMonth = new Date().getMonth() + 1;
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const [rows, setRows] = useState<UnfiInvoiceRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<UnfiInvoicesCache | null>(() =>
+    readBrowserCache<UnfiInvoicesCache>(UNFI_INVOICES_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<UnfiInvoiceRow[]>(() => startupCache?.rows || []);
+  const [loading, setLoading] = useState(() => !startupCache);
   const [loadError, setLoadError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [showUploadBox, setShowUploadBox] = useState(false);
@@ -329,15 +332,12 @@ export default function UnfiInvoicesView() {
   };
 
   useEffect(() => {
-    const cached = readBrowserCache<UnfiInvoicesCache>(UNFI_INVOICES_CACHE_KEY);
+    const refreshTimer = window.setTimeout(() => {
+      void loadRows(Boolean(startupCache));
+    }, 0);
 
-    if (cached) {
-      setRows(cached.rows || []);
-      setLoading(false);
-    }
-
-    loadRows(Boolean(cached));
-  }, []);
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const sortedRows = useMemo(() => {
     return [...rows].sort((a, b) => {

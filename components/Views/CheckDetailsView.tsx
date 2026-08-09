@@ -171,8 +171,11 @@ function getWegmansCheckAmounts(rows: WegmansInvoiceRow[]) {
 }
 
 export default function CheckDetailsView() {
-  const [rows, setRows] = useState<InvoiceRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<CheckDetailsCache | null>(() =>
+    readBrowserCache<CheckDetailsCache>(CHECK_DETAILS_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<InvoiceRecord[]>(() => startupCache?.rows || []);
+  const [loading, setLoading] = useState(() => !startupCache);
 
   const [retailer, setRetailer] = useState<Retailer>("all");
   const [searchTerm, setSearchTerm] = useState("");
@@ -181,13 +184,6 @@ export default function CheckDetailsView() {
   const [openTypes, setOpenTypes] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    const cached = readBrowserCache<CheckDetailsCache>(CHECK_DETAILS_CACHE_KEY);
-
-    if (cached) {
-      setRows(cached.rows || []);
-      setLoading(false);
-    }
-
     const loadData = async (hasCachedData = false) => {
       try {
         if (!hasCachedData) setLoading(true);
@@ -349,8 +345,12 @@ export default function CheckDetailsView() {
       }
     };
 
-    loadData(Boolean(cached));
-  }, []);
+    const refreshTimer = window.setTimeout(() => {
+      void loadData(Boolean(startupCache));
+    }, 0);
+
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const retailerFilteredRows = useMemo(() => {
     if (retailer === "all") return rows;

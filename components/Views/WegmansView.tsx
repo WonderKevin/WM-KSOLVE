@@ -244,8 +244,11 @@ async function fetchAllWegmansRows() {
 export default function WegmansView() {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const [rows, setRows] = useState<WegmansInvoiceRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<WegmansInvoicesCache | null>(() =>
+    readBrowserCache<WegmansInvoicesCache>(WEGMANS_INVOICES_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<WegmansInvoiceRow[]>(() => startupCache?.rows || []);
+  const [loading, setLoading] = useState(() => !startupCache);
   const [loadError, setLoadError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [search, setSearch] = useState("");
@@ -275,17 +278,12 @@ export default function WegmansView() {
   };
 
   useEffect(() => {
-    const cached = readBrowserCache<WegmansInvoicesCache>(
-      WEGMANS_INVOICES_CACHE_KEY
-    );
+    const refreshTimer = window.setTimeout(() => {
+      void loadRows(Boolean(startupCache));
+    }, 0);
 
-    if (cached) {
-      setRows(cached.rows || []);
-      setLoading(false);
-    }
-
-    loadRows(Boolean(cached));
-  }, []);
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const sortedRows = useMemo(() => {
     return [...rows].sort((a, b) => {

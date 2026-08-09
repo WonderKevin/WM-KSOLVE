@@ -2763,9 +2763,14 @@ export default function KeheDashboardView() {
   );
   const [pulloutSearchQuery, setPulloutSearchQuery] = useState("");
 
-  const [rows, setRows] = useState<VelocityRow[]>([]);
-  const [locations, setLocations] = useState<LocationRow[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [startupCache] = useState<KeheDashboardCache | null>(() =>
+    readBrowserCache<KeheDashboardCache>(KEHE_DASHBOARD_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<VelocityRow[]>(() => startupCache?.rows || []);
+  const [locations, setLocations] = useState<LocationRow[]>(
+    () => startupCache?.locations || []
+  );
+  const [loading, setLoading] = useState(() => !startupCache);
   const [loadError, setLoadError] = useState("");
 
   // analytics filters / clickable summary cards
@@ -2784,14 +2789,6 @@ export default function KeheDashboardView() {
   );
 
   useEffect(() => {
-    const cached = readBrowserCache<KeheDashboardCache>(KEHE_DASHBOARD_CACHE_KEY);
-
-    if (cached) {
-      setRows(cached.rows || []);
-      setLocations(cached.locations || []);
-      setLoading(false);
-    }
-
     const load = async (hasCachedData = false) => {
       if (!hasCachedData) setLoading(true);
       setLoadError("");
@@ -2812,7 +2809,7 @@ export default function KeheDashboardView() {
         }
         setRows(all);
 
-        let nextLocations: LocationRow[] = cached?.locations || [];
+        let nextLocations: LocationRow[] = startupCache?.locations || [];
         try {
           let locationFrom = 0;
           let allLocations: LocationRow[] = [];
@@ -2845,8 +2842,12 @@ export default function KeheDashboardView() {
         setLoading(false);
       }
     };
-    load(Boolean(cached));
-  }, []);
+    const refreshTimer = window.setTimeout(() => {
+      void load(Boolean(startupCache));
+    }, 0);
+
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const locationDcLookup = useMemo<LocationDcLookup>(() => {
     const exact = new Map<string, string>();

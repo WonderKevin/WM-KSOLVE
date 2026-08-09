@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type ProductItem = {
   id: string;
@@ -15,9 +16,18 @@ type ProductItem = {
   created_at: string;
 };
 
+const PRODUCT_LIST_CACHE_KEY = "wmksolve:report-cache:product-list:v1";
+
+type ProductListCache = {
+  items: ProductItem[];
+};
+
 export default function ProductListView() {
-  const [items, setItems] = useState<ProductItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<ProductListCache | null>(() =>
+    readBrowserCache<ProductListCache>(PRODUCT_LIST_CACHE_KEY)
+  );
+  const [items, setItems] = useState<ProductItem[]>(() => startupCache?.items || []);
+  const [loading, setLoading] = useState(() => !startupCache);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -32,17 +42,26 @@ export default function ProductListView() {
 
   const isEditMode = !!editingItemId;
 
-  const fetchItems = async () => {
-    setLoading(true);
+  const fetchItems = async (hasCachedData = false) => {
+    if (!hasCachedData) setLoading(true);
     const { data, error } = await supabase
       .from("product_list")
       .select("*")
       .order("item_description", { ascending: true });
-    if (!error && data) setItems(data);
+    if (!error && data) {
+      setItems(data);
+      writeBrowserCache<ProductListCache>(PRODUCT_LIST_CACHE_KEY, { items: data });
+    }
     setLoading(false);
   };
 
-  useEffect(() => { fetchItems(); }, []);
+  useEffect(() => {
+    const refreshTimer = window.setTimeout(() => {
+      void fetchItems(Boolean(startupCache));
+    }, 0);
+
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const filteredItems = useMemo(() => {
     const keyword = search.trim().toLowerCase();

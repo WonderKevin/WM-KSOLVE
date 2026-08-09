@@ -608,8 +608,11 @@ function getMissingLocations(
 }
 
 export default function KeHeVelocityView() {
-  const [rows, setRows] = useState<VelocityRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<KeheVelocityCache | null>(() =>
+    readBrowserCache<KeheVelocityCache>(KEHE_VELOCITY_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<VelocityRow[]>(() => startupCache?.rows || []);
+  const [loading, setLoading] = useState(() => !startupCache);
   const [uploading, setUploading] = useState(false);
 
   const [monthInput, setMonthInput] = useState("2");
@@ -666,15 +669,12 @@ export default function KeHeVelocityView() {
   };
 
   useEffect(() => {
-    const cached = readBrowserCache<KeheVelocityCache>(KEHE_VELOCITY_CACHE_KEY);
+    const refreshTimer = window.setTimeout(() => {
+      void loadRows(Boolean(startupCache));
+    }, 0);
 
-    if (cached) {
-      setRows(cached.rows || []);
-      setLoading(false);
-    }
-
-    loadRows(Boolean(cached));
-  }, []);
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   useEffect(() => {
     fetchAllLocations()

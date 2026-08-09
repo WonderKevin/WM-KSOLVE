@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type BrokerageStatus = "" | "Invoice Confirmed" | "Bill Paid";
 
@@ -184,12 +185,22 @@ type TargetBrokerCommissionViewProps = {
   subtitle?: string;
 };
 
+const TARGET_BROKER_COMMISSION_CACHE_KEY =
+  "wmksolve:report-cache:target-broker-commission:v1";
+
+type TargetBrokerCommissionCache = {
+  rows: TargetInvoiceRow[];
+};
+
 export default function TargetBrokerCommissionView({
   title = "Target Brokerage Commission",
   subtitle = "Target brokerage summary by month and reason code description.",
 }: TargetBrokerCommissionViewProps) {
-  const [rows, setRows] = useState<TargetInvoiceRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [startupCache] = useState<TargetBrokerCommissionCache | null>(() =>
+    readBrowserCache<TargetBrokerCommissionCache>(TARGET_BROKER_COMMISSION_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<TargetInvoiceRow[]>(() => startupCache?.rows || []);
+  const [loading, setLoading] = useState(() => !startupCache);
   const [savingStatusKey, setSavingStatusKey] = useState<string | null>(null);
   const [savingInvoiceKey, setSavingInvoiceKey] = useState<string | null>(null);
 
@@ -201,8 +212,8 @@ export default function TargetBrokerCommissionView({
     Record<string, boolean>
   >({});
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (hasCachedData = false) => {
+    if (!hasCachedData) setLoading(true);
 
     try {
       const { data, error } = await supabase
@@ -215,7 +226,12 @@ export default function TargetBrokerCommissionView({
 
       if (error) throw error;
 
-      setRows((data || []) as TargetInvoiceRow[]);
+      const nextRows = (data || []) as TargetInvoiceRow[];
+      setRows(nextRows);
+      writeBrowserCache<TargetBrokerCommissionCache>(
+        TARGET_BROKER_COMMISSION_CACHE_KEY,
+        { rows: nextRows }
+      );
     } catch (error) {
       console.error("Target broker commission load error:", error);
     } finally {
@@ -224,8 +240,12 @@ export default function TargetBrokerCommissionView({
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    const refreshTimer = window.setTimeout(() => {
+      void loadData(Boolean(startupCache));
+    }, 0);
+
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   const monthGroups = useMemo(() => groupRowsByMonth(rows), [rows]);
 

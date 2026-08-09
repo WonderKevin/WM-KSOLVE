@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FileSpreadsheet, Upload } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type TonyVelocityRow = {
   id?: string;
@@ -33,6 +34,12 @@ type MissingLocation = {
 };
 
 const PAGE_SIZE = 1000;
+const TONY_VELOCITY_CACHE_KEY = "wmksolve:report-cache:tony-velocity:v1";
+
+type TonyVelocityCache = {
+  rows: TonyVelocityRow[];
+  locations: TonyLocation[];
+};
 
 const MONTHS = [
   "January",
@@ -352,9 +359,14 @@ export default function TonyVelocityView() {
   const velocityInputRef = useRef<HTMLInputElement>(null);
   const locationInputRef = useRef<HTMLInputElement>(null);
 
-  const [rows, setRows] = useState<TonyVelocityRow[]>([]);
-  const [locations, setLocations] = useState<TonyLocation[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [startupCache] = useState<TonyVelocityCache | null>(() =>
+    readBrowserCache<TonyVelocityCache>(TONY_VELOCITY_CACHE_KEY)
+  );
+  const [rows, setRows] = useState<TonyVelocityRow[]>(() => startupCache?.rows || []);
+  const [locations, setLocations] = useState<TonyLocation[]>(
+    () => startupCache?.locations || []
+  );
+  const [loading, setLoading] = useState(() => !startupCache);
   const [uploadingVelocity, setUploadingVelocity] = useState(false);
   const [uploadingLocations, setUploadingLocations] = useState(false);
   const [error, setError] = useState("");
@@ -385,8 +397,8 @@ export default function TonyVelocityView() {
   const [manualCustomer, setManualCustomer] = useState("");
   const [manualLocation, setManualLocation] = useState("");
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (hasCachedData = false) => {
+    if (!hasCachedData) setLoading(true);
     setError("");
 
     try {
@@ -397,6 +409,10 @@ export default function TonyVelocityView() {
 
       setRows(velocityData);
       setLocations(locationData);
+      writeBrowserCache<TonyVelocityCache>(TONY_VELOCITY_CACHE_KEY, {
+        rows: velocityData,
+        locations: locationData,
+      });
     } catch (err: any) {
       setError(err?.message || "Failed to load Tony velocity data.");
     } finally {
@@ -405,8 +421,12 @@ export default function TonyVelocityView() {
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    const refreshTimer = window.setTimeout(() => {
+      void loadData(Boolean(startupCache));
+    }, 0);
+
+    return () => window.clearTimeout(refreshTimer);
+  }, [startupCache]);
 
   useEffect(() => {
     if (!notice) return;
@@ -942,7 +962,7 @@ export default function TonyVelocityView() {
 
           <button
             type="button"
-            onClick={loadData}
+            onClick={() => void loadData()}
             className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
             Refresh
