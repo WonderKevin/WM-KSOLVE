@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Filter,
   MoreHorizontal,
+  RefreshCw,
   Search,
   X,
 } from "lucide-react";
@@ -71,6 +72,11 @@ const EDITABLE_RETAILERS = [
 const PAGE_SIZE = 1000;
 const WRITE_BATCH_SIZE = 500;
 const BROKER_DATA_SETS_CACHE_KEY = "wmksolve:report-cache:broker-data-sets:v3";
+const BROKER_DATA_SETS_CACHE_FALLBACK_KEYS = [
+  BROKER_DATA_SETS_CACHE_KEY,
+  "wmksolve:report-cache:broker-data-sets:v2",
+  "wmksolve:report-cache:broker-data-sets:v1",
+] as const;
 
 type BrokerDataSetsCache = {
   rows: Row[];
@@ -82,6 +88,15 @@ type RetailerOverridePayload = {
   retailer: string;
   updated_at: string;
 };
+
+function readBrokerDataSetsSnapshot() {
+  for (const cacheKey of BROKER_DATA_SETS_CACHE_FALLBACK_KEYS) {
+    const cached = readBrowserCache<BrokerDataSetsCache>(cacheKey);
+    if (cached?.rows?.length) return cached;
+  }
+
+  return null;
+}
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -545,7 +560,7 @@ async function upsertRetailerOverrides(payload: RetailerOverridePayload[]) {
 
 export default function BrokerCommissionDataSetsView() {
   const [startupCache] = useState<BrokerDataSetsCache | null>(() =>
-    readBrowserCache<BrokerDataSetsCache>(BROKER_DATA_SETS_CACHE_KEY)
+    readBrokerDataSetsSnapshot()
   );
   const [rows, setRows] = useState<Row[]>(() => startupCache?.rows || []);
   const [loading, setLoading] = useState(() => !startupCache);
@@ -747,8 +762,10 @@ export default function BrokerCommissionDataSetsView() {
   };
 
   useEffect(() => {
+    if (startupCache?.rows?.length) return;
+
     const refreshTimer = window.setTimeout(() => {
-      void loadData(Boolean(startupCache));
+      void loadData(false);
     }, 0);
 
     return () => window.clearTimeout(refreshTimer);
@@ -1159,6 +1176,17 @@ export default function BrokerCommissionDataSetsView() {
             disabled={!data.length}
           >
             Export to Excel
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="rounded-2xl"
+            onClick={() => void loadData(true)}
+            title="Refresh Data Sets snapshot"
+          >
+            <RefreshCw className="h-4 w-4" />
           </Button>
 
           <div className="relative" ref={notifRef}>
