@@ -44,9 +44,8 @@ function toUtcCron(day: string, time: string) {
     throw new Error("Invalid schedule time.");
   }
 
-  // Eastern Time approximation.
-  // During daylight saving time: ET = UTC-4.
-  // Example: Saturday 1:00 AM ET = Saturday 5:00 AM UTC.
+  // Eastern daylight time approximation. GitHub cron runs in UTC.
+  // Example: Monday 1:00 AM ET = Monday 5:00 AM UTC.
   const utcHourRaw = localHour + 4;
   const utcHour = utcHourRaw % 24;
   const dayOffset = utcHourRaw >= 24 ? 1 : 0;
@@ -85,7 +84,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install dependencies
         run: npm ci
@@ -103,6 +102,9 @@ jobs:
           KSOLVE_PASSWORD: \${{ secrets.KSOLVE_PASSWORD }}
           KSOLVE_INCLUDE_INVOICE_SUMMARY: "${includeInvoiceSummary}"
           KSOLVE_INCLUDE_INVOICE_FILES: "${includeInvoiceFiles}"
+          KSOLVE_FETCH_TIMEOUT_MS: "60000"
+          KSOLVE_FETCH_RETRIES: "5"
+          KSOLVE_RETRY_DELAY_MS: "10000"
 `;
 }
 
