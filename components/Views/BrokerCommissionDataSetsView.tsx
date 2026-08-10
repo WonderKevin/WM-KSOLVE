@@ -14,6 +14,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
 import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
+import {
+  readSharedReportSnapshot,
+  writeSharedReportSnapshot,
+} from "@/lib/report-snapshots";
 import * as XLSX from "xlsx";
 
 type Row = {
@@ -71,6 +75,7 @@ const EDITABLE_RETAILERS = [
 
 const PAGE_SIZE = 1000;
 const WRITE_BATCH_SIZE = 500;
+const BROKER_DATA_SETS_REPORT_KEY = "broker-data-sets";
 const BROKER_DATA_SETS_CACHE_KEY = "wmksolve:report-cache:broker-data-sets:v3";
 const BROKER_DATA_SETS_CACHE_FALLBACK_KEYS = [
   BROKER_DATA_SETS_CACHE_KEY,
@@ -753,22 +758,52 @@ export default function BrokerCommissionDataSetsView() {
       nextMissingInvoices = missing.sort((a, b) => a.localeCompare(b));
       setMissingInvoices(nextMissingInvoices);
     }
-    writeBrowserCache<BrokerDataSetsCache>(BROKER_DATA_SETS_CACHE_KEY, {
+    const snapshot: BrokerDataSetsCache = {
       rows: nextRows,
       missingInvoices: nextMissingInvoices,
-    });
+    };
+
+    writeBrowserCache<BrokerDataSetsCache>(BROKER_DATA_SETS_CACHE_KEY, snapshot);
+    void writeSharedReportSnapshot<BrokerDataSetsCache>(
+      BROKER_DATA_SETS_REPORT_KEY,
+      snapshot,
+      1,
+    );
 
     setLoading(false);
   };
 
   useEffect(() => {
-    if (startupCache?.rows?.length) return;
+    let cancelled = false;
 
-    const refreshTimer = window.setTimeout(() => {
-      void loadData(false);
-    }, 0);
+    const hydrateFromSnapshot = async () => {
+      const sharedSnapshot = await readSharedReportSnapshot<BrokerDataSetsCache>(
+        BROKER_DATA_SETS_REPORT_KEY,
+      );
 
-    return () => window.clearTimeout(refreshTimer);
+      if (cancelled) return;
+
+      if (sharedSnapshot?.rows?.length) {
+        setRows(sharedSnapshot.rows);
+        setMissingInvoices(sharedSnapshot.missingInvoices || []);
+        setLoading(false);
+        writeBrowserCache<BrokerDataSetsCache>(
+          BROKER_DATA_SETS_CACHE_KEY,
+          sharedSnapshot,
+        );
+        return;
+      }
+
+      if (startupCache?.rows?.length) return;
+
+      await loadData(false);
+    };
+
+    void hydrateFromSnapshot();
+
+    return () => {
+      cancelled = true;
+    };
   }, [startupCache]);
 
   useEffect(() => {
