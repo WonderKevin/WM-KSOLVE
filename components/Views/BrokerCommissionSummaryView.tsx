@@ -1,10 +1,17 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  MoreHorizontal,
+  Pencil,
+  RotateCw,
+  X,
+} from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
-import { RotateCw } from "lucide-react";
 
 type RetailerName =
   | "Fresh Thyme"
@@ -81,6 +88,7 @@ type DetailLine = {
   label: string;
   amount: number;
   kind: "invoice-summary" | "invoice-detail" | "deduction";
+  invoice?: string;
   children?: DetailLine[];
 };
 
@@ -125,7 +133,14 @@ type MonthSummary = {
 
 const INFRA_HP_CASE_RATE = 35.68;
 const PAGE_SIZE = 1000;
+const WRITE_BATCH_SIZE = 500;
 const TRANSFER_ALLOCATIONS_STORAGE_KEY = "broker-commission-transfer-allocations";
+const EDITABLE_RETAILERS: Array<Exclude<RetailerName, "">> = [
+  "Kroger",
+  "Fresh Thyme",
+  "INFRA & Others",
+  "HEB",
+];
 const STATUS_OPTIONS: Array<{ value: BrokerageStatus; label: string }> = [
   { value: "", label: "Select Status" },
   { value: "Invoice Confirmed", label: "Invoice Confirmed" },
@@ -526,6 +541,19 @@ async function fetchAllRetailerOverrides(): Promise<RetailerOverrideRow[]> {
   return allRows;
 }
 
+async function upsertRetailerOverrides(
+  payload: Array<{ dataset_id: string; retailer: string; updated_at: string }>
+) {
+  for (let index = 0; index < payload.length; index += WRITE_BATCH_SIZE) {
+    const batch = payload.slice(index, index + WRITE_BATCH_SIZE);
+    const { error } = await supabase
+      .from("retailer_overrides")
+      .upsert(batch, { onConflict: "dataset_id" });
+
+    if (error) throw error;
+  }
+}
+
 async function fetchAllLocations(): Promise<LocationRow[]> {
   let allRows: LocationRow[] = [];
   let from = 0;
@@ -663,6 +691,13 @@ export default function BrokerCommissionSummaryView() {
     null
   );
   const [draftAllocationInvoices, setDraftAllocationInvoices] = useState<string[]>([]);
+  const [invoiceActionMenuKey, setInvoiceActionMenuKey] = useState<string | null>(null);
+  const [editingInvoiceKey, setEditingInvoiceKey] = useState<string | null>(null);
+  const [editingInvoiceRetailer, setEditingInvoiceRetailer] =
+    useState<Exclude<RetailerName, "">>("Kroger");
+  const [savingInvoiceRetailerKey, setSavingInvoiceRetailerKey] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     try {
@@ -1106,6 +1141,7 @@ export default function BrokerCommissionSummaryView() {
             label: `WM Invoice ${invoice}`,
             amount,
             kind: "invoice-detail",
+            invoice,
           },
         ],
       });
@@ -1276,6 +1312,87 @@ export default function BrokerCommissionSummaryView() {
     }));
     setAllocationModal(null);
     setDraftAllocationInvoices([]);
+  };
+
+  const openInvoiceRetailerEdit = ({
+    key,
+    currentRetailer,
+  }: {
+    key: string;
+    currentRetailer: RetailerName;
+  }) => {
+    setEditingInvoiceKey(key);
+    setEditingInvoiceRetailer(currentRetailer || "Kroger");
+    setInvoiceActionMenuKey(null);
+  };
+
+  const cancelInvoiceRetailerEdit = () => {
+    setEditingInvoiceKey(null);
+    setEditingInvoiceRetailer("Kroger");
+  };
+
+  const saveWmInvoiceRetailer = async ({
+    key,
+    month,
+    invoice,
+    retailer,
+  }: {
+    key: string;
+    month: string;
+    invoice: string;
+    retailer: Exclude<RetailerName, "">;
+  }) => {
+    const invoiceNorm = normalizeInvoice(invoice);
+    if (!invoiceNorm || !retailer) return;
+
+    const targetRows = rows.filter(
+      (row) =>
+        row.month === month &&
+        normalizeInvoice(row.invoice) === invoiceNorm &&
+        isWmInvoiceType(row.type)
+    );
+
+    if (!targetRows.length) {
+      alert(`No WM Invoice rows found for ${invoiceNorm}.`);
+      return;
+    }
+
+    setSavingInvoiceRetailerKey(key);
+
+    try {
+      const updatedAt = new Date().toISOString();
+      await upsertRetailerOverrides(
+        targetRows.map((row) => ({
+          dataset_id: row.id,
+          retailer,
+          updated_at: updatedAt,
+        }))
+      );
+
+      const targetRowIds = new Set(targetRows.map((row) => row.id));
+      setRows((prev) => {
+        const nextRows = prev.map((row) =>
+          targetRowIds.has(row.id) ? { ...row, retailer } : row
+        );
+
+        writeBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY, {
+          rows: nextRows,
+          velocityRows,
+          monthStatuses,
+        });
+
+        return nextRows;
+      });
+
+      cancelInvoiceRetailerEdit();
+      await load(true, true);
+    } catch (error) {
+      console.error("Failed to update WM Invoice retailer:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      alert(`Failed to update retailer: ${message}`);
+    } finally {
+      setSavingInvoiceRetailerKey(null);
+    }
   };
 
   const updateMonthStatus = async (month: string, status: BrokerageStatus) => {
@@ -1558,21 +1675,112 @@ export default function BrokerCommissionSummaryView() {
                                       </td>
                                     </tr>
 
-                                    {detail.children?.map((child, childIdx) =>
-                                      rowExpanded ? (
+                                    {detail.children?.map((child, childIdx) => {
+                                      if (!rowExpanded) return null;
+
+                                      const childKey = `${key}-child-${child.invoice ?? childIdx}`;
+                                      const isActionOpen = invoiceActionMenuKey === childKey;
+                                      const isEditingRetailer = editingInvoiceKey === childKey;
+                                      const isSavingRetailer =
+                                        savingInvoiceRetailerKey === childKey;
+
+                                      return (
                                         <tr
-                                          key={`${key}-child-${childIdx}`}
+                                          key={childKey}
                                           className="border-t bg-slate-50/50"
                                         >
                                           <td className="px-4 py-3 pl-10 text-slate-700">
-                                            {child.label}
+                                            <div className="flex items-center gap-2">
+                                              <span>{child.label}</span>
+                                              {child.invoice && (
+                                                <div className="relative">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                      setInvoiceActionMenuKey((current) =>
+                                                        current === childKey ? null : childKey
+                                                      )
+                                                    }
+                                                    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-500 hover:bg-white hover:text-slate-900"
+                                                    title="Invoice actions"
+                                                  >
+                                                    <MoreHorizontal className="h-4 w-4" />
+                                                  </button>
+                                                  {isActionOpen && (
+                                                    <div className="absolute left-0 top-full z-30 mt-1 w-40 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+                                                      <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                          openInvoiceRetailerEdit({
+                                                            key: childKey,
+                                                            currentRetailer: block.retailer,
+                                                          })
+                                                        }
+                                                        className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                                                      >
+                                                        <Pencil className="h-4 w-4" />
+                                                        Edit retailer
+                                                      </button>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              )}
+                                            </div>
+
+                                            {isEditingRetailer && child.invoice && (
+                                              <div className="mt-3 flex flex-wrap items-center gap-2">
+                                                <select
+                                                  value={editingInvoiceRetailer}
+                                                  onChange={(event) =>
+                                                    setEditingInvoiceRetailer(
+                                                      event.target.value as Exclude<
+                                                        RetailerName,
+                                                        ""
+                                                      >
+                                                    )
+                                                  }
+                                                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+                                                >
+                                                  {EDITABLE_RETAILERS.map((retailer) => (
+                                                    <option key={retailer} value={retailer}>
+                                                      {retailer}
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                                <button
+                                                  type="button"
+                                                  disabled={isSavingRetailer}
+                                                  onClick={() =>
+                                                    saveWmInvoiceRetailer({
+                                                      key: childKey,
+                                                      month: monthSummary.month,
+                                                      invoice: child.invoice || "",
+                                                      retailer: editingInvoiceRetailer,
+                                                    })
+                                                  }
+                                                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
+                                                  title="Save retailer"
+                                                >
+                                                  <Check className="h-4 w-4" />
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  disabled={isSavingRetailer}
+                                                  onClick={cancelInvoiceRetailerEdit}
+                                                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                                                  title="Cancel"
+                                                >
+                                                  <X className="h-4 w-4" />
+                                                </button>
+                                              </div>
+                                            )}
                                           </td>
                                           <td className="px-4 py-3 text-right font-medium text-slate-700">
                                             {formatMoney(child.amount)}
                                           </td>
                                         </tr>
-                                      ) : null
-                                    )}
+                                      );
+                                    })}
                                   </React.Fragment>
                                 );
                               }
