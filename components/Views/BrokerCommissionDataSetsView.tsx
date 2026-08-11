@@ -791,10 +791,16 @@ export default function BrokerCommissionDataSetsView() {
           BROKER_DATA_SETS_CACHE_KEY,
           sharedSnapshot,
         );
+        // Keep the instant snapshot, then reconcile with live Supabase so manual edits are not hidden.
+        void loadData(true);
         return;
       }
 
-      if (startupCache?.rows?.length) return;
+      if (startupCache?.rows?.length) {
+        setLoading(false);
+        void loadData(true);
+        return;
+      }
 
       await loadData(false);
     };
@@ -1022,7 +1028,7 @@ export default function BrokerCommissionDataSetsView() {
     );
     setSavingRowId(null);
     cancelEditing();
-    await loadData();
+    await loadData(true);
   };
 
   const openBulkEdit = () => {
@@ -1069,7 +1075,7 @@ export default function BrokerCommissionDataSetsView() {
     setSelectedRowIds([]);
     setBulkRetailerChoice("Fresh Thyme");
     setBulkCustomRetailer("");
-    await loadData();
+    await loadData(true);
   };
 
   return (
