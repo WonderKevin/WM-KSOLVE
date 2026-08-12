@@ -47,6 +47,7 @@ type InvoiceRecord = {
 };
 
 const KSOLVE_INVOICES_CACHE_KEY = "wmksolve:report-cache:ksolve-invoices";
+const PAGE_SIZE = 1000;
 
 type KsolveInvoicesCache = {
   rows: InvoiceRecord[];
@@ -110,6 +111,54 @@ type PendingUnknownDeduction = {
   matchedInvoiceNumber: string;
   existingUpload: UploadRecord | null;
 };
+
+async function fetchAllInvoiceRecords(): Promise<InvoiceRecord[]> {
+  let allRows: InvoiceRecord[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("invoices")
+      .select("*")
+      .order("check_date", { ascending: false, nullsFirst: false })
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as InvoiceRecord[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
+async function fetchAllUploadRecords(): Promise<UploadRecord[]> {
+  let allRows: UploadRecord[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("uploads")
+      .select("*")
+      .order("created_at", { ascending: false, nullsFirst: false })
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as UploadRecord[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+
+  return allRows;
+}
 
 type UpcEntry = {
   upc: string;
@@ -2287,14 +2336,10 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
   const loadData = async (hasCachedData = false) => {
     try {
       if (!hasCachedData) setLoading(true);
-      const [{ data: id, error: ie }, { data: ud, error: ue }] = await Promise.all([
-        supabase.from("invoices").select("*").order("check_date", { ascending: false }),
-        supabase.from("uploads").select("*"),
+      const [nextRows, nextUploads] = await Promise.all([
+        fetchAllInvoiceRecords(),
+        fetchAllUploadRecords(),
       ]);
-      if (ie) throw ie;
-      if (ue) throw ue;
-      const nextRows = (id || []) as InvoiceRecord[];
-      const nextUploads = (ud || []) as UploadRecord[];
       setRows(nextRows);
       setUploads(nextUploads);
       writeBrowserCache<KsolveInvoicesCache>(KSOLVE_INVOICES_CACHE_KEY, {
@@ -2484,7 +2529,19 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
       const exSet = new Set((ex || []).map((i) => i.invoice_number).filter(Boolean));
       const newRows = mappedRows.filter((r) => !exSet.has(r.invoice_number));
 
-      if (!newRows.length) { showToast("All invoices already exist.", "info"); return; }
+      if (!newRows.length) {
+        const existingInvoices = mappedRows
+          .map((row) => row.invoice_number)
+          .filter(Boolean)
+          .join(", ");
+        showToast(
+          existingInvoices
+            ? `All invoices already exist: ${existingInvoices}.`
+            : "All invoices already exist.",
+          "info"
+        );
+        return;
+      }
 
       const { error: ie } = await supabase.from("invoices").upsert(newRows, { onConflict: "invoice_number", ignoreDuplicates: true });
       if (ie) throw ie;
