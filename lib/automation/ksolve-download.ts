@@ -262,6 +262,14 @@ function isSupportingDocument(document: KsolveDocument) {
   return document.DocumentType?.toLowerCase().trim() === "supporting document";
 }
 
+const KEHE_NEW_ITEM_SETUP_TYPE = "KeHE New Item Setup Fee";
+
+function isNewItemSetupText(raw: string) {
+  return /new\s+item\s+(?:setup|set\s*[-\u2010-\u2015]?\s*up|allowances?)(?:\s+fee)?/i.test(
+    raw
+  );
+}
+
 function normalizeType(raw: string) {
   const c = String(raw || "").replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -278,15 +286,10 @@ function normalizeType(raw: string) {
   }
   if (/fresh\s+thyme\s+ppf/i.test(c)) return "Pass Thru Deduction";
   if (/kroger\s+disc/i.test(c) || /kroger\s+discount/i.test(c)) return "Pass Thru Deduction";
-  if (/new\s+item\s+setup\s+fee/i.test(c) || /new\s+item\s+set\s*up\s+fee/i.test(c)) {
-    return "New Item Setup Fee";
-  }
-  if (/new\s+item\s+setup/i.test(c) || /new\s+item\s+set\s*up/i.test(c)) {
-    return "New Item Setup";
-  }
+  if (isNewItemSetupText(c)) return KEHE_NEW_ITEM_SETUP_TYPE;
   if (/intro\s+allowance\s+audit/i.test(c)) return "Intro Allowance Audit";
   if (/introductory\s+fee/i.test(c)) return "Introductory Fee";
-  if (/wm\s+invoice/i.test(c) || /wonder\s+monday/i.test(c)) return "WM Invoice";
+  if (/wm\s+invoice/i.test(c)) return "WM Invoice";
 
   return String(raw || "").replace(/\s+/g, " ").trim() || "Unknown";
 }
@@ -465,6 +468,7 @@ const KNOWN_DEDUCTION_TYPES = new Set([
   "Pass Thru Deduction",
   "New Item Setup Fee",
   "New Item Setup",
+  KEHE_NEW_ITEM_SETUP_TYPE,
   "Intro Allowance Audit",
   "Introductory Fee",
   "WM Invoice",
@@ -560,7 +564,10 @@ function getInvoiceType(row: KsolveSearchRow) {
   const invoiceNumber = String(row.InvoiceNumber || "").toUpperCase();
 
   if (row.ChargeTypeCode === "PV") return "WM Invoice";
-  if (row.DocumentUrl) return "WM Invoice";
+
+  if (invoiceNumber.startsWith("AB")) {
+    return KEHE_NEW_ITEM_SETUP_TYPE;
+  }
 
   if (invoiceNumber.startsWith("CN")) {
     return "Customer Spoils Allowance";
@@ -578,6 +585,8 @@ function getInvoiceType(row: KsolveSearchRow) {
   ) {
     return "Pass Thru Deduction";
   }
+
+  if (row.DocumentUrl && /^\d+$/.test(invoiceNumber)) return "WM Invoice";
 
   return "Unknown";
 }

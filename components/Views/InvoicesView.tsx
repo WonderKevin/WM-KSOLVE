@@ -177,6 +177,13 @@ type NewUpcModal = {
 };
 
 const DOCUMENT_BUCKET = "ksolve-documents";
+const KEHE_NEW_ITEM_SETUP_TYPE = "KeHE New Item Setup Fee";
+
+function isNewItemSetupText(raw: string) {
+  return /new\s+item\s+(?:setup|set\s*[-\u2010-\u2015]?\s*up|allowances?)(?:\s+fee)?/i.test(
+    raw
+  );
+}
 
 function normalizeType(raw: string) {
   const c = raw.replace(/\s+/g, " ").trim().toLowerCase();
@@ -188,11 +195,10 @@ function normalizeType(raw: string) {
   if (/pass\s+thru\s+deduction/i.test(c) || /pass\s+through\s+deduction/i.test(c)) return "Pass Thru Deduction";
   if (/fresh\s+thyme\s+ppf/i.test(c)) return "Pass Thru Deduction";
   if (/kroger\s+disc/i.test(c) || /kroger\s+discount/i.test(c)) return "Pass Thru Deduction";
-  if (/new\s+item\s+setup\s+fee/i.test(c) || /new\s+item\s+set\s*up\s+fee/i.test(c)) return "New Item Setup Fee";
-  if (/new\s+item\s+setup/i.test(c) || /new\s+item\s+set\s*up/i.test(c)) return "New Item Setup";
+  if (isNewItemSetupText(c)) return KEHE_NEW_ITEM_SETUP_TYPE;
   if (/intro\s+allowance\s+audit/i.test(c)) return "Intro Allowance Audit";
   if (/introductory\s+fee/i.test(c)) return "Introductory Fee";
-  if (/wm\s+invoice/i.test(c) || /wonder\s+monday/i.test(c)) return "WM Invoice";
+  if (/wm\s+invoice/i.test(c)) return "WM Invoice";
   return raw.replace(/\s+/g, " ").trim() || "Unknown";
 }
 
@@ -202,6 +208,7 @@ const KNOWN_DEDUCTION_TYPES = new Set([
   "Pass Thru Deduction",
   "New Item Setup Fee",
   "New Item Setup",
+  KEHE_NEW_ITEM_SETUP_TYPE,
   "Intro Allowance Audit",
   "Introductory Fee",
   "WM Invoice",
@@ -499,6 +506,7 @@ function parseMetadataFromText(text: string) {
   // ── Category detection ──────────────────────────────────────────────────────
   if (isCustomerSpoilageNatural) category = "Customer Spoils Allowance";
   else if (isDollarPromotion) category = "$1 Promotion";
+  else if (isNewItemSetupText(lower)) category = KEHE_NEW_ITEM_SETUP_TYPE;
   else if (isStrictWMInvoice || isWMInvoicePdf) category = "WM Invoice";
   else if (isFreshThymePpf || isFreshThymeSas || isKrogerDisc) category = "Pass Thru Deduction";
   else {
@@ -512,11 +520,12 @@ function parseMetadataFromText(text: string) {
       { p: /fresh\s+thyme\s+ppf/i, v: "Pass Thru Deduction" },
       { p: /kroger\s+disc/i, v: "Pass Thru Deduction" },
       { p: /kroger\s+discount/i, v: "Pass Thru Deduction" },
-      { p: /new\s+item\s+setup\s+fee/i, v: "New Item Setup Fee" },
-      { p: /new\s+item\s+setup/i, v: "New Item Setup" },
+      {
+        p: /new\s+item\s+(?:setup|set\s*[-\u2010-\u2015]?\s*up|allowances?)(?:\s+fee)?/i,
+        v: KEHE_NEW_ITEM_SETUP_TYPE,
+      },
       { p: /intro\s+allowance\s+audit/i, v: "Intro Allowance Audit" },
       { p: /introductory\s+fee/i, v: "Introductory Fee" },
-      { p: /wonder\s+monday/i, v: "WM Invoice" },
     ];
     for (const { p, v } of matchers) {
       if (p.test(lower)) { category = v; break; }
