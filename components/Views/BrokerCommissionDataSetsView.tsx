@@ -226,12 +226,29 @@ function getSignificantWords(raw: string): string[] {
     .filter((w) => w.length >= 4 && !/^\d+$/.test(w));
 }
 
+function isHebText(raw: string): boolean {
+  const normalized = normalizeText(raw);
+  if (!normalized) return false;
+
+  const compact = normalized.replace(/\s+/g, "");
+  return (
+    normalized === "HEB" ||
+    normalized.startsWith("HEB ") ||
+    normalized.includes(" HEB ") ||
+    normalized === "H E B" ||
+    normalized.startsWith("H E B ") ||
+    normalized.includes(" H E B ") ||
+    compact.startsWith("HEB")
+  );
+}
+
 function categorizeRetailerName(rawRetailer: string): string {
   const retailer = normalizeText(rawRetailer);
   if (!retailer) return "";
   if (retailer.includes("KROGER") || retailer === "KRO" || retailer.startsWith("KRO ")) return "Kroger";
   if (retailer.includes("FRESH THYME")) return "Fresh Thyme";
-  if (retailer === "HEB" || retailer.includes(" HEB ")) return "HEB";
+  if (isHebText(retailer)) return "HEB";
+  if (retailer.includes("CENTRAL MARKET")) return "HEB";
   return "INFRA & Others";
 }
 
@@ -279,7 +296,8 @@ function directRetailerFromCustomer(custName: string): string {
     return "Fresh Thyme";
   }
 
-  if (customer === "HEB" || customer.startsWith("HEB ")) return "HEB";
+  if (isHebText(customer)) return "HEB";
+  if (customer.includes("CENTRAL MARKET")) return "HEB";
 
   return "";
 }
@@ -335,12 +353,12 @@ function findRetailer(
 
   if (/^DC\s*\d+$/i.test(trimmedCustomer)) return "";
 
+  const directRetailer = directRetailerFromCustomer(trimmedCustomer);
+  if (directRetailer) return directRetailer;
+
   const exactKey = getCustomerLocationKey(trimmedCustomer);
   const exactMatch = index.exactCustomerMap.get(exactKey);
   if (exactMatch) return categorizeRetailerName(exactMatch.retailer);
-
-  const directRetailer = directRetailerFromCustomer(trimmedCustomer);
-  if (directRetailer) return directRetailer;
 
   const twoKey = getFirstNWordsKey(trimmedCustomer, 2);
   const twoMatch = index.twoWordMap.get(twoKey);

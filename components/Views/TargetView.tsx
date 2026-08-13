@@ -12,6 +12,7 @@ import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 type TargetInvoiceRow = {
   id?: number;
   month: string | null;
+  type: string | null;
   check_date: string | null;
   check_number: string | null;
   doc_header_text: string | null;
@@ -25,14 +26,40 @@ type TargetInvoiceRow = {
   retailer: "target";
 };
 
+type DeductionTypeRecord = {
+  id?: string;
+  document_type: string | null;
+  deduction_type: string | null;
+};
+
 type ParsedTargetFile = {
   fileName: string;
   checkDate: string | null;
   checkNumber: string | null;
   rows: TargetInvoiceRow[];
+  unmappedDocumentTypes: string[];
 };
 
 const TARGET_INVOICES_CACHE_KEY = "wmksolve:report-cache:target-invoices";
+
+const DEFAULT_TARGET_DEDUCTION_TYPES: DeductionTypeRecord[] = [
+  {
+    document_type: "Vendor Income Funding",
+    deduction_type: "Target's TPR Funding",
+  },
+  {
+    document_type: "WM Invoice",
+    deduction_type: "Target's WM Invoice",
+  },
+  {
+    document_type: "P.O. SHIPPED EARLY/LATE",
+    deduction_type: "Target's Distribution (MCB) Allowances",
+  },
+  {
+    document_type: "Assessorial Charges",
+    deduction_type: "Target's Distribution (MCB) Allowances",
+  },
+];
 
 type TargetInvoicesCache = {
   rows: TargetInvoiceRow[];
@@ -62,6 +89,13 @@ function clean(value: unknown) {
 
 function normalizeHeader(value: unknown) {
   return clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeLookupValue(value: unknown) {
+  return clean(value)
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 function parseDate(value: unknown) {
@@ -97,16 +131,32 @@ function monthFromDate(value: string | null) {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return null;
 
-  return date.toLocaleDateString("en-US", {
+  return `${date.toLocaleDateString("en-US", {
     month: "long",
-    year: "numeric",
-  });
+  })} '${String(date.getFullYear()).slice(-2)}`;
+}
+
+function formatMonthLabel(month: string | null | undefined) {
+  const value = clean(month);
+  if (!value) return null;
+
+  const apostropheMatch = value.match(/^([A-Za-z]+)\s+'?(\d{2})$/);
+  if (apostropheMatch) return `${apostropheMatch[1]} '${apostropheMatch[2]}`;
+
+  const longYearMatch = value.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (longYearMatch) return `${longYearMatch[1]} '${longYearMatch[2].slice(-2)}`;
+
+  return value;
 }
 
 function monthSortValue(month: string | null) {
   if (!month) return 0;
 
-  const date = new Date(`1 ${month}`);
+  const value = formatMonthLabel(month) || "";
+  const match = value.match(/^([A-Za-z]+)\s+'?(\d{2})$/);
+  const date = match
+    ? new Date(`1 ${match[1]} 20${match[2]}`)
+    : new Date(`1 ${month}`);
   if (Number.isNaN(date.getTime())) return 0;
 
   return date.getFullYear() * 100 + date.getMonth() + 1;
@@ -143,6 +193,55 @@ function resolveReasonDescription(docHeaderText: string | null) {
     .find((item) => doc.startsWith(item.prefix.toUpperCase()));
 
   return match?.description || "";
+}
+
+function buildDeductionTypeLookup(records: DeductionTypeRecord[]) {
+  const map = new Map<string, string>();
+
+  for (const record of [...DEFAULT_TARGET_DEDUCTION_TYPES, ...records]) {
+    const documentType = normalizeLookupValue(record.document_type);
+    const deductionType = clean(record.deduction_type);
+
+    if (documentType && deductionType) map.set(documentType, deductionType);
+  }
+
+  return map;
+}
+
+function resolveTargetType(
+  documentType: string | null | undefined,
+  lookup: Map<string, string>
+) {
+  const normalizedDocumentType = normalizeLookupValue(documentType);
+  if (!normalizedDocumentType) return "";
+
+  const exact = lookup.get(normalizedDocumentType);
+  if (exact) return exact;
+
+  for (const [mappedDocumentType, deductionType] of lookup.entries()) {
+    if (
+      mappedDocumentType.includes(normalizedDocumentType) ||
+      normalizedDocumentType.includes(mappedDocumentType)
+    ) {
+      return deductionType;
+    }
+  }
+
+  return "";
+}
+
+async function fetchDeductionTypes() {
+  const { data, error } = await supabase
+    .from("deduction_types")
+    .select("id, document_type, deduction_type")
+    .order("document_type", { ascending: true });
+
+  if (error) {
+    console.warn("Failed to load deduction type mappings for Target upload:", error);
+    return DEFAULT_TARGET_DEDUCTION_TYPES;
+  }
+
+  return (data || []) as DeductionTypeRecord[];
 }
 
 function parseDelimitedTargetFile(text: string) {
@@ -206,7 +305,10 @@ function findMetadataValue(rows: unknown[][], label: string) {
   return "";
 }
 
-async function parseTargetFile(file: File): Promise<ParsedTargetFile> {
+async function parseTargetFile(
+  file: File,
+  deductionTypeLookup: Map<string, string>
+): Promise<ParsedTargetFile> {
   const rawRows = await parseTargetWorkbook(file);
 
   const checkNumber = clean(findMetadataValue(rawRows, "Check Number")) || null;
@@ -231,18 +333,26 @@ async function parseTargetFile(file: File): Promise<ParsedTargetFile> {
   const withholdingIndex = getHeaderIndex(headers, ["Withholding Tax Amount"]);
   const netIndex = getHeaderIndex(headers, ["Net Amount"]);
 
+  const unmappedDocumentTypes = new Set<string>();
   const rows: TargetInvoiceRow[] = rawRows
     .slice(headerRowIndex + 1)
     .filter((row) => row.some((cell) => clean(cell) !== ""))
     .map((row): TargetInvoiceRow => {
       const docHeaderText = clean(getValue(row, docHeaderIndex)) || null;
+      const reasonCodeDescription = resolveReasonDescription(docHeaderText);
+      const mappedType = resolveTargetType(reasonCodeDescription, deductionTypeLookup);
+
+      if (reasonCodeDescription && !mappedType) {
+        unmappedDocumentTypes.add(reasonCodeDescription);
+      }
 
       return {
         month,
+        type: mappedType || null,
         check_date: checkDate,
         check_number: checkNumber,
         doc_header_text: docHeaderText,
-        reason_code_description: resolveReasonDescription(docHeaderText),
+        reason_code_description: reasonCodeDescription,
         sap_doc_number: clean(getValue(row, sapDocIndex)) || null,
         doc_date: parseDate(getValue(row, docDateIndex)),
         gross_amount: toNumber(getValue(row, grossIndex)),
@@ -269,6 +379,9 @@ async function parseTargetFile(file: File): Promise<ParsedTargetFile> {
     checkDate,
     checkNumber,
     rows,
+    unmappedDocumentTypes: Array.from(unmappedDocumentTypes).sort((a, b) =>
+      a.localeCompare(b)
+    ),
   };
 }
 
@@ -299,6 +412,7 @@ function rowMatchesSearch(row: TargetInvoiceRow, searchTerm: string) {
 
   const searchableText = [
     row.month,
+    row.type,
     row.check_date,
     row.check_number,
     row.doc_header_text,
@@ -329,9 +443,11 @@ export default function TargetView() {
   const [rows, setRows] = useState<TargetInvoiceRow[]>(() => startupCache?.rows || []);
   const [loading, setLoading] = useState(() => !startupCache);
   const [uploading, setUploading] = useState(false);
+  const [unmappedDocumentTypes, setUnmappedDocumentTypes] = useState<string[]>([]);
 
   const [selectedReason, setSelectedReason] = useState("all");
   const [selectedMonth, setSelectedMonth] = useState("all");
+  const [selectedType, setSelectedType] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
 
   const loadRows = async (hasCachedData = false) => {
@@ -345,7 +461,11 @@ export default function TargetView() {
 
       if (error) throw error;
 
-      const nextRows = (data || []) as TargetInvoiceRow[];
+      const nextRows = ((data || []) as TargetInvoiceRow[]).map((row) => ({
+        ...row,
+        month: formatMonthLabel(row.month),
+        type: row.type || null,
+      }));
       setRows(nextRows);
       writeBrowserCache<TargetInvoicesCache>(TARGET_INVOICES_CACHE_KEY, {
         rows: nextRows,
@@ -374,8 +494,16 @@ export default function TargetView() {
   }, [rows]);
 
   const monthOptions = useMemo(() => {
-    return Array.from(new Set(rows.map((row) => row.month).filter(Boolean)))
+    return Array.from(
+      new Set(rows.map((row) => formatMonthLabel(row.month)).filter(Boolean))
+    )
       .sort((a, b) => monthSortValue(b) - monthSortValue(a)) as string[];
+  }, [rows]);
+
+  const typeOptions = useMemo(() => {
+    return Array.from(
+      new Set(rows.map((row) => row.type || "Unmapped").filter(Boolean))
+    ).sort((a, b) => a.localeCompare(b));
   }, [rows]);
 
   const reasonOptions = useMemo(() => {
@@ -404,29 +532,39 @@ export default function TargetView() {
         selectedReason === "all" || reason === selectedReason;
 
       const matchesMonth =
-        selectedMonth === "all" || row.month === selectedMonth;
+        selectedMonth === "all" || formatMonthLabel(row.month) === selectedMonth;
+
+      const rowType = row.type || "Unmapped";
+      const matchesType = selectedType === "all" || rowType === selectedType;
 
       const matchesSearch = rowMatchesSearch(row, searchTerm);
 
-      return matchesReason && matchesMonth && matchesSearch;
+      return matchesReason && matchesMonth && matchesType && matchesSearch;
     });
-  }, [rows, selectedReason, selectedMonth, searchTerm]);
+  }, [rows, selectedReason, selectedMonth, selectedType, searchTerm]);
 
   const handleUpload = async (files: FileList) => {
     setUploading(true);
 
     try {
       const parsedFiles: ParsedTargetFile[] = [];
+      const deductionTypes = await fetchDeductionTypes();
+      const deductionTypeLookup = buildDeductionTypeLookup(deductionTypes);
 
       for (const file of Array.from(files)) {
-        parsedFiles.push(await parseTargetFile(file));
+        parsedFiles.push(await parseTargetFile(file, deductionTypeLookup));
       }
 
       let uploadedCount = 0;
       let skippedCount = 0;
       let replacedCount = 0;
+      const uploadUnmappedTypes = new Set<string>();
 
       for (const parsedFile of parsedFiles) {
+        for (const unmappedType of parsedFile.unmappedDocumentTypes) {
+          uploadUnmappedTypes.add(unmappedType);
+        }
+
         const checkKey =
           parsedFile.checkDate && parsedFile.checkNumber
             ? `${parsedFile.checkDate}__${parsedFile.checkNumber}`
@@ -465,9 +603,19 @@ export default function TargetView() {
       }
 
       await loadRows();
+      const nextUnmappedTypes = Array.from(uploadUnmappedTypes).sort((a, b) =>
+        a.localeCompare(b)
+      );
+      setUnmappedDocumentTypes(nextUnmappedTypes);
+
+      const unmappedMessage = nextUnmappedTypes.length
+        ? `\n\nUnmapped document types:\n${nextUnmappedTypes
+            .map((item) => `- ${item}`)
+            .join("\n")}\n\nAdd these under Database > Deduction Type Mapping.`
+        : "";
 
       alert(
-        `Upload complete.\n\nUploaded rows: ${uploadedCount}\nReplaced rows: ${replacedCount}\nSkipped rows: ${skippedCount}`
+        `Upload complete.\n\nUploaded rows: ${uploadedCount}\nReplaced rows: ${replacedCount}\nSkipped rows: ${skippedCount}${unmappedMessage}`
       );
     } catch (error) {
       console.error(error);
@@ -547,6 +695,24 @@ export default function TargetView() {
 
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-slate-500">
+                  Type
+                </label>
+                <select
+                  value={selectedType}
+                  onChange={(event) => setSelectedType(event.target.value)}
+                  className="min-w-[260px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="all">All</option>
+                  {typeOptions.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-slate-500">
                   Reason Code Description
                 </label>
                 <select
@@ -593,6 +759,19 @@ export default function TargetView() {
         </CardContent>
       </Card>
 
+      {unmappedDocumentTypes.length > 0 && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <div className="font-semibold">
+            Target upload has unmapped document types.
+          </div>
+          <div className="mt-1">
+            Add these under Database &gt; Deduction Type Mapping:
+            {" "}
+            {unmappedDocumentTypes.join(", ")}
+          </div>
+        </div>
+      )}
+
       <Card className="rounded-3xl border border-slate-200 bg-white shadow-sm">
         <CardContent className="space-y-5 pt-6">
           {loading ? (
@@ -605,6 +784,7 @@ export default function TargetView() {
                 <thead className="sticky top-0 z-20 bg-slate-100 shadow-sm">
                   <tr>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Month</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Type</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Check Date</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Check Number</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Doc.Header Text</th>
@@ -622,7 +802,7 @@ export default function TargetView() {
                   {filteredRows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={11}
+                        colSpan={12}
                         className="px-4 py-6 text-center text-sm text-slate-500"
                       >
                         No Target invoices found.
@@ -632,7 +812,12 @@ export default function TargetView() {
 
                   {filteredRows.map((row) => (
                     <tr key={row.id} className="border-t border-slate-200">
-                      <td className="whitespace-nowrap px-4 py-3">{row.month}</td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        {formatMonthLabel(row.month)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        {row.type || "Unmapped"}
+                      </td>
                       <td className="whitespace-nowrap px-4 py-3">{row.check_date}</td>
                       <td className="whitespace-nowrap px-4 py-3">{row.check_number}</td>
                       <td className="whitespace-nowrap px-4 py-3">{row.doc_header_text}</td>
@@ -659,7 +844,7 @@ export default function TargetView() {
 
                   {filteredRows.length > 0 && (
                     <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
-                      <td className="px-4 py-3" colSpan={7}>
+                      <td className="px-4 py-3" colSpan={8}>
                         Total
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right">

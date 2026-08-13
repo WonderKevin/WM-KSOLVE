@@ -8,7 +8,20 @@ import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
 import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
-type Retailer = "all" | "kehe" | "target" | "unfi" | "wegmans" | "tony";
+type Retailer = "all" | "kehe" | "target" | "unfi" | "heb" | "wegmans" | "tony";
+
+type KeheInvoiceRow = {
+  id: number;
+  month: string | null;
+  check_date: string | null;
+  check_number: string | null;
+  check_amt: number | null;
+  invoice_number: string | null;
+  invoice_amt: number | null;
+  dc_name: string | null;
+  status: string | null;
+  type: string | null;
+};
 
 type InvoiceRecord = {
   id: string;
@@ -27,6 +40,7 @@ type InvoiceRecord = {
 type TargetInvoiceRow = {
   id: number;
   month: string | null;
+  type: string | null;
   check_date: string | null;
   check_number: string | null;
   doc_header_text: string | null;
@@ -48,6 +62,20 @@ type WegmansInvoiceRow = {
   inv_number: string | null;
   chargeback: number | null;
   type: string | null;
+};
+
+type HebInvoiceRow = {
+  id: number;
+  month: string | null;
+  type: string | null;
+  check_number: string | null;
+  check_date: string | null;
+  check_amount: number | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  net_amount: number | null;
+  memo_code: string | null;
+  explanation: string | null;
 };
 
 type TonyInvoiceDetailRow = {
@@ -80,6 +108,7 @@ type TonyInvoiceWireRow = {
 };
 
 const CHECK_DETAILS_CACHE_KEY = "wmksolve:report-cache:check-details";
+const WEGMANS_EDLC_TYPE = "Wegmans' EDLC Allowance";
 
 type CheckDetailsCache = {
   rows: InvoiceRecord[];
@@ -99,6 +128,7 @@ const retailerOptions: Array<{ value: Retailer; label: string }> = [
   { value: "kehe", label: "KeHE" },
   { value: "target", label: "Target" },
   { value: "unfi", label: "UNFI" },
+  { value: "heb", label: "HEB" },
   { value: "wegmans", label: "Wegmans" },
   { value: "tony", label: "Tony's" },
 ];
@@ -116,9 +146,26 @@ function retailerLabel(value: Retailer) {
   if (value === "kehe") return "KeHE";
   if (value === "target") return "Target";
   if (value === "unfi") return "UNFI";
+  if (value === "heb") return "HEB";
   if (value === "wegmans") return "Wegmans";
   if (value === "tony") return "Tony's";
   return "All";
+}
+
+function displayWegmansType(value: string | null | undefined) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+  if (
+    normalized === "wegmanschargeback" ||
+    normalized === "wegmanchargeback"
+  ) {
+    return WEGMANS_EDLC_TYPE;
+  }
+
+  return String(value ?? "").trim() || WEGMANS_EDLC_TYPE;
 }
 
 function groupByCheck(rows: InvoiceRecord[]): CheckGroup[] {
@@ -188,7 +235,7 @@ export default function CheckDetailsView() {
       try {
         if (!hasCachedData) setLoading(true);
 
-        const [keheRes, targetRes, wegmansRes, tonyRes] = await Promise.all([
+        const [keheRes, targetRes, hebRes, wegmansRes, tonyRes] = await Promise.all([
           supabase
             .from("invoices")
             .select(
@@ -199,8 +246,14 @@ export default function CheckDetailsView() {
 
           supabase
             .from("target_invoices")
+            .select("*")
+            .order("check_date", { ascending: false })
+            .order("check_number", { ascending: false }),
+
+          supabase
+            .from("heb_invoices")
             .select(
-              "id, month, check_date, check_number, doc_header_text, reason_code_description, sap_doc_number, doc_date, gross_amount, cash_discount, withholding_tax_amount, net_amount"
+              "id, month, type, check_number, check_date, check_amount, invoice_number, invoice_date, net_amount, memo_code, explanation"
             )
             .order("check_date", { ascending: false })
             .order("check_number", { ascending: false }),
@@ -224,6 +277,9 @@ export default function CheckDetailsView() {
 
         if (keheRes.error) throw keheRes.error;
         if (targetRes.error) throw targetRes.error;
+        if (hebRes.error) {
+          console.error("HEB check details query error:", hebRes.error);
+        }
         if (wegmansRes.error) {
           console.error("Wegmans check details query error:", wegmansRes.error);
         }
@@ -231,8 +287,9 @@ export default function CheckDetailsView() {
           console.error("Tony check details query error:", tonyRes.error);
         }
 
-        const keheRows: InvoiceRecord[] = ((keheRes.data || []) as any[]).map(
-          (row) => ({
+        const keheRows: InvoiceRecord[] = (
+          (keheRes.data || []) as KeheInvoiceRow[]
+        ).map((row) => ({
             id: `kehe-${row.id}`,
             month: row.month,
             check_date: row.check_date,
@@ -244,8 +301,7 @@ export default function CheckDetailsView() {
             status: row.status,
             type: row.type,
             retailer: "kehe",
-          })
-        );
+          }));
 
         const rawTargetRows = (targetRes.data || []) as TargetInvoiceRow[];
         const targetCheckAmounts = getTargetCheckAmounts(rawTargetRows);
@@ -263,10 +319,26 @@ export default function CheckDetailsView() {
             invoice_amt: row.net_amount,
             dc_name: row.doc_header_text,
             status: row.doc_date,
-            type: row.reason_code_description || "Unknown",
+            type: row.type || row.reason_code_description || "Unknown",
             retailer: "target",
           };
         });
+
+        const hebRows: InvoiceRecord[] = hebRes.error
+          ? []
+          : ((hebRes.data || []) as HebInvoiceRow[]).map((row) => ({
+              id: `heb-${row.id}`,
+              month: row.month,
+              check_date: row.check_date,
+              check_number: row.check_number,
+              check_amt: row.check_amount,
+              invoice_number: row.invoice_number,
+              invoice_amt: row.net_amount,
+              dc_name: row.explanation,
+              status: row.memo_code,
+              type: row.type || "HEB EDLC Allowances",
+              retailer: "heb",
+            }));
 
         const rawWegmansRows = (wegmansRes.data || []) as WegmansInvoiceRow[];
         const wegmansCheckAmounts = getWegmansCheckAmounts(rawWegmansRows);
@@ -286,7 +358,7 @@ export default function CheckDetailsView() {
                 invoice_amt: -Math.abs(Number(row.chargeback || 0)),
                 dc_name: row.description,
                 status: "Wegman",
-                type: row.type || "Wegman's Chargeback",
+                type: displayWegmansType(row.type),
                 retailer: "wegmans",
               };
             });
@@ -333,7 +405,13 @@ export default function CheckDetailsView() {
                 })
             );
 
-        const nextRows = [...keheRows, ...targetRows, ...wegmansRows, ...tonyRows];
+        const nextRows = [
+          ...keheRows,
+          ...targetRows,
+          ...hebRows,
+          ...wegmansRows,
+          ...tonyRows,
+        ];
         setRows(nextRows);
         writeBrowserCache<CheckDetailsCache>(CHECK_DETAILS_CACHE_KEY, {
           rows: nextRows,

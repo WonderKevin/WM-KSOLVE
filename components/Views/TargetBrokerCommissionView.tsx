@@ -12,6 +12,7 @@ type BrokerageStatus = "" | "Invoice Confirmed" | "Bill Paid";
 type TargetInvoiceRow = {
   id: number;
   month: string | null;
+  type: string | null;
   check_date: string | null;
   check_number: string | null;
   doc_header_text: string | null;
@@ -57,7 +58,11 @@ function normalizeReason(value: string | null | undefined) {
 }
 
 function isWMInvoice(reason: string | null | undefined) {
-  return normalizeReason(reason) === "wminvoice";
+  return normalizeReason(reason).includes("wminvoice");
+}
+
+function getTargetLineType(row: TargetInvoiceRow) {
+  return row.type || row.reason_code_description || "Unknown";
 }
 
 function monthSortValue(month: string | null | undefined) {
@@ -72,14 +77,14 @@ function monthSortValue(month: string | null | undefined) {
 
 function getTotals(rows: TargetInvoiceRow[]) {
   const wmInvoiceTotal = round2(
-    rows
-      .filter((row) => isWMInvoice(row.reason_code_description))
+      rows
+      .filter((row) => isWMInvoice(getTargetLineType(row)))
       .reduce((sum, row) => sum + Number(row.net_amount || 0), 0)
   );
 
   const deductions = round2(
     rows
-      .filter((row) => !isWMInvoice(row.reason_code_description))
+      .filter((row) => !isWMInvoice(getTargetLineType(row)))
       .reduce((sum, row) => sum + Number(row.net_amount || 0), 0)
   );
 
@@ -121,7 +126,7 @@ function groupRowsByReason(rows: TargetInvoiceRow[]): ReasonGroup[] {
   const map = new Map<string, TargetInvoiceRow[]>();
 
   for (const row of rows) {
-    const reason = row.reason_code_description || "Unknown";
+    const reason = getTargetLineType(row);
 
     if (!map.has(reason)) {
       map.set(reason, []);
@@ -218,9 +223,7 @@ export default function TargetBrokerCommissionView({
     try {
       const { data, error } = await supabase
         .from("target_invoices")
-        .select(
-          "id, month, check_date, check_number, doc_header_text, reason_code_description, sap_doc_number, doc_date, gross_amount, cash_discount, withholding_tax_amount, net_amount, brokerage_status, brokerage_invoice_number"
-        )
+        .select("*")
         .order("check_date", { ascending: false })
         .order("check_number", { ascending: false });
 

@@ -59,6 +59,19 @@ type ParsedTonyInvoiceFile = {
 
 const PAGE_SIZE = 1000;
 const TONY_INVOICES_CACHE_KEY = "wmksolve:report-cache:tony-invoices";
+const STANDARD_TONY_INVOICE_TYPES = [
+  "EDLC Allowances",
+  "Ad Fees",
+  "Distribution (MCB) Allowances",
+  "Customer Spoils Allowance",
+  "Introduction Allowances",
+  "TPR Funding",
+  "Scan Allowance",
+  "Promo & Placement Funds",
+  "Slotting Fees",
+  "Display Fees",
+  "New Item Setup Fee",
+] as const;
 
 type TonyInvoicesCache = {
   rows: TonyInvoiceWire[];
@@ -466,7 +479,7 @@ export default function TonyInvoicesView() {
   }, [rows]);
 
   const typeOptions = useMemo(() => {
-    const options = new Set<string>();
+    const options = new Set<string>(STANDARD_TONY_INVOICE_TYPES);
 
     for (const row of rows) {
       for (const detail of row.details || []) {

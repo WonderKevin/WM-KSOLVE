@@ -1,14 +1,14 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Filter } from "lucide-react";
+import { ChevronDown, ChevronRight, Filter } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
 import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
-type Retailer = "all" | "kehe" | "target" | "unfi" | "wegmans" | "tony";
+type Retailer = "all" | "kehe" | "target" | "unfi" | "heb" | "wegmans" | "tony";
 type ViewMode = "accounting" | "discrepancy";
 
 type InvoiceSummaryRow = {
@@ -22,6 +22,7 @@ type InvoiceSummaryRow = {
 type TargetInvoiceRow = {
   id: number;
   month: string | null;
+  type: string | null;
   check_date: string | null;
   check_number: string | null;
   doc_header_text: string | null;
@@ -44,6 +45,19 @@ type WegmansInvoiceRow = {
   inv_number: string | null;
   chargeback: number | null;
   type: string | null;
+  retailer?: Retailer;
+};
+
+type HebInvoiceRow = {
+  id: number;
+  month: string | null;
+  type: string | null;
+  check_number: string | null;
+  check_date: string | null;
+  check_amount: number | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  net_amount: number | null;
   retailer?: Retailer;
 };
 
@@ -101,6 +115,22 @@ type BrokerCommissionRow = BrokerCommissionDbRow & {
   derivedMonthKey: string;
 };
 
+type SourceRetailer = Exclude<Retailer, "all">;
+
+type SummaryRetailerRow = {
+  retailer: SourceRetailer;
+  label: string;
+  monthlyValues: Record<string, number>;
+  total: number;
+};
+
+type SummaryTypeRow = {
+  typeName: string;
+  monthlyValues: Record<string, number>;
+  total: number;
+  retailerRows: SummaryRetailerRow[];
+};
+
 type MonthOption = {
   key: string;
   label: string;
@@ -109,10 +139,44 @@ type MonthOption = {
 
 const PAGE_SIZE = 1000;
 const ACCOUNTING_SUMMARY_CACHE_KEY = "wmksolve:report-cache:accounting-summary";
+const WEGMANS_EDLC_TYPE = "Wegmans' EDLC Allowance";
+const STANDARD_ACCOUNTING_TYPES = [
+  "WM Invoice",
+  "EDLC Allowances",
+  "Ad Fees",
+  "Distribution (MCB) Allowances",
+  "Customer Spoils Allowance",
+  "Introduction Allowances",
+  "TPR Funding",
+  "Scan Allowance",
+  "Promo & Placement Funds",
+  "Slotting Fees",
+  "Display Fees",
+  "New Item Setup Fee",
+] as const;
+
+const RETAILER_POSSESSIVE_LABELS: Record<SourceRetailer, string> = {
+  kehe: "KeHE's",
+  target: "Target's",
+  unfi: "UNFI's",
+  heb: "HEB",
+  wegmans: "Wegmans'",
+  tony: "Tony's",
+};
+
+const RETAILER_SORT_ORDER: SourceRetailer[] = [
+  "kehe",
+  "target",
+  "unfi",
+  "heb",
+  "wegmans",
+  "tony",
+];
 
 type AccountingSummaryCache = {
   invoiceRows: InvoiceSummaryRow[];
   targetRows: TargetInvoiceRow[];
+  hebRows: HebInvoiceRow[];
   wegmansRows: WegmansInvoiceRow[];
   tonyRows: TonyInvoiceWireRow[];
   brokerRows: BrokerCommissionRow[];
@@ -258,6 +322,70 @@ function normalizeType(value: string | null | undefined) {
   return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function getStandardAccountingType(value: string | null | undefined) {
+  const cleaned = normalizeType(value).replace(/\u00a0/g, " ");
+  const compact = cleaned.replace(/[^a-z0-9$]/g, "");
+
+  if (!compact) return "";
+
+  if (compact.includes("wminvoice")) return "WM Invoice";
+
+  if (
+    compact.includes("wegmanschargeback") ||
+    compact.includes("wegmanchargeback")
+  ) {
+    return "EDLC Allowances";
+  }
+
+  if (
+    compact.includes("promoandplacement") ||
+    compact.includes("promoplacement") ||
+    compact.includes("ppf")
+  ) {
+    return "Promo & Placement Funds";
+  }
+
+  if (compact.includes("newitemsetup")) return "New Item Setup Fee";
+  if (compact.includes("customerspoil")) return "Customer Spoils Allowance";
+  if (compact.includes("intro")) return "Introduction Allowances";
+  if (compact.includes("edlc")) return "EDLC Allowances";
+  if (compact.includes("scanfunding") || compact.includes("scanallowance")) return "Scan Allowance";
+  if (compact.includes("slotting") || compact.includes("slotfee")) return "Slotting Fees";
+  if (compact.includes("display")) return "Display Fees";
+  if (compact.includes("adfee") || compact.includes("advertising")) return "Ad Fees";
+  if (
+    compact.includes("mcb") ||
+    compact.includes("distribution") ||
+    compact.includes("distributor") ||
+    compact.includes("passthrudeduction") ||
+    compact.includes("passthroughdeduction")
+  ) {
+    return "Distribution (MCB) Allowances";
+  }
+  if (
+    compact.includes("tpr") ||
+    compact.includes("$1promotion") ||
+    compact.includes("1promotion") ||
+    compact.includes("onedollarpromotion")
+  ) {
+    return "TPR Funding";
+  }
+
+  return "";
+}
+
+function getRetailerTypeLabel(retailer: SourceRetailer, typeName: string) {
+  if (retailer === "wegmans" && typeName === "EDLC Allowances") {
+    return WEGMANS_EDLC_TYPE;
+  }
+
+  if (retailer === "heb") {
+    return `HEB ${typeName}`;
+  }
+
+  return `${RETAILER_POSSESSIVE_LABELS[retailer]} ${typeName}`;
+}
+
 function normalizeDiscrepancyType(value: string | null | undefined) {
   const cleaned = String(value || "")
     .trim()
@@ -332,14 +460,15 @@ function getRetailerMonthlyTotalLabel(retailer: Retailer) {
   if (retailer === "kehe") return "KeHE Monthly Summary Total";
   if (retailer === "target") return "Target Monthly Summary Total";
   if (retailer === "unfi") return "UNFI Monthly Summary Total";
+  if (retailer === "heb") return "HEB Monthly Summary Total";
   if (retailer === "wegmans") return "Wegmans Monthly Summary Total";
   if (retailer === "tony") return "Tony's Monthly Summary Total";
 
   return "Monthly Summary Total";
 }
 
-function getAccountingFirstColumnLabel(retailer: Retailer) {
-  return retailer === "target" ? "Reason Code Description" : "Type";
+function getAccountingFirstColumnLabel() {
+  return "Type";
 }
 
 function applyAmountBasedDiscrepancy(
@@ -474,6 +603,9 @@ export default function AccountingSummaryView() {
   const [targetRows, setTargetRows] = useState<TargetInvoiceRow[]>(
     () => startupCache?.targetRows || []
   );
+  const [hebRows, setHebRows] = useState<HebInvoiceRow[]>(
+    () => startupCache?.hebRows || []
+  );
   const [wegmansRows, setWegmansRows] = useState<WegmansInvoiceRow[]>(
     () => startupCache?.wegmansRows || []
   );
@@ -487,6 +619,9 @@ export default function AccountingSummaryView() {
 
   const [viewMode, setViewMode] = useState<ViewMode>("accounting");
   const [retailer, setRetailer] = useState<Retailer>("all");
+  const [expandedSummaryTypes, setExpandedSummaryTypes] = useState<Set<string>>(
+    () => new Set()
+  );
 
   const [fromMonth, setFromMonth] = useState("");
   const [toMonth, setToMonth] = useState("");
@@ -501,6 +636,7 @@ export default function AccountingSummaryView() {
     { value: "kehe", label: "KeHE" },
     { value: "target", label: "Target" },
     { value: "unfi", label: "UNFI" },
+    { value: "heb", label: "HEB" },
     { value: "wegmans", label: "Wegmans" },
     { value: "tony", label: "Tony's" },
   ];
@@ -515,6 +651,7 @@ export default function AccountingSummaryView() {
           rawBrokerRows,
           ksolveWmRows,
           rawTargetRes,
+          rawHebRes,
           rawWegmansRes,
           rawTonyRes,
         ] =
@@ -530,8 +667,13 @@ export default function AccountingSummaryView() {
 
             supabase
               .from("target_invoices")
+              .select("*")
+              .order("check_date", { ascending: false }),
+
+            supabase
+              .from("heb_invoices")
               .select(
-                "id, month, check_date, check_number, doc_header_text, reason_code_description, sap_doc_number, doc_date, gross_amount, cash_discount, withholding_tax_amount, net_amount"
+                "id, month, type, check_number, check_date, check_amount, invoice_number, invoice_date, net_amount"
               )
               .order("check_date", { ascending: false }),
 
@@ -552,6 +694,7 @@ export default function AccountingSummaryView() {
 
         let nextInvoiceRows: InvoiceSummaryRow[] = [];
         let nextTargetRows: TargetInvoiceRow[] = [];
+        let nextHebRows: HebInvoiceRow[] = [];
         let nextWegmansRows: WegmansInvoiceRow[] = [];
         let nextTonyRows: TonyInvoiceWireRow[] = [];
         let nextBrokerRows: BrokerCommissionRow[] = [];
@@ -578,6 +721,19 @@ export default function AccountingSummaryView() {
             })
           );
           setTargetRows(nextTargetRows);
+        }
+
+        if (rawHebRes.error) {
+          console.error("HEB invoice query error:", rawHebRes.error);
+          setHebRows([]);
+        } else {
+          nextHebRows = ((rawHebRes.data || []) as HebInvoiceRow[]).map(
+            (row) => ({
+              ...row,
+              retailer: "heb",
+            })
+          );
+          setHebRows(nextHebRows);
         }
 
         if (rawWegmansRes.error) {
@@ -669,6 +825,7 @@ export default function AccountingSummaryView() {
         writeBrowserCache<AccountingSummaryCache>(ACCOUNTING_SUMMARY_CACHE_KEY, {
           invoiceRows: nextInvoiceRows,
           targetRows: nextTargetRows,
+          hebRows: nextHebRows,
           wegmansRows: nextWegmansRows,
           tonyRows: nextTonyRows,
           brokerRows: nextBrokerRows,
@@ -698,6 +855,12 @@ export default function AccountingSummaryView() {
 
     return targetRows.filter((row) => row.retailer === retailer);
   }, [targetRows, retailer]);
+
+  const filteredHebRows = useMemo(() => {
+    if (retailer === "all") return hebRows;
+
+    return hebRows.filter((row) => row.retailer === retailer);
+  }, [hebRows, retailer]);
 
   const filteredWegmansRows = useMemo(() => {
     if (retailer === "all") return wegmansRows;
@@ -752,6 +915,22 @@ export default function AccountingSummaryView() {
       }
     }
 
+    for (const row of filteredHebRows) {
+      const date = parseUsDate(row.check_date);
+
+      if (!date) continue;
+
+      const key = monthKeyFromDate(date);
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          label: monthLabelFromDate(date),
+          sortValue: date.getFullYear() * 100 + date.getMonth() + 1,
+        });
+      }
+    }
+
     for (const row of filteredWegmansRows) {
       const date = parseUsDate(row.run_date);
 
@@ -788,6 +967,7 @@ export default function AccountingSummaryView() {
   }, [
     filteredInvoiceRows,
     filteredTargetRows,
+    filteredHebRows,
     filteredWegmansRows,
     filteredTonyRows,
   ]);
@@ -894,6 +1074,39 @@ export default function AccountingSummaryView() {
     const monthKeys = filteredMonthOptions.map((m) => m.key);
     const monthKeySet = new Set(monthKeys);
     const typeMonthTotals = new Map<string, Record<string, number>>();
+    const retailerTypeMonthTotals = new Map<
+      string,
+      Map<SourceRetailer, Record<string, number>>
+    >();
+
+    const addAmount = (
+      rawTypeName: string | null | undefined,
+      sourceRetailer: SourceRetailer,
+      monthKey: string,
+      amount: number
+    ) => {
+      const typeName = getStandardAccountingType(rawTypeName);
+
+      if (!typeName || !monthKeySet.has(monthKey)) return;
+
+      if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
+
+      const typeTotals = typeMonthTotals.get(typeName)!;
+      typeTotals[monthKey] = (typeTotals[monthKey] || 0) + amount;
+
+      if (!retailerTypeMonthTotals.has(typeName)) {
+        retailerTypeMonthTotals.set(typeName, new Map());
+      }
+
+      const retailerTotals = retailerTypeMonthTotals.get(typeName)!;
+
+      if (!retailerTotals.has(sourceRetailer)) {
+        retailerTotals.set(sourceRetailer, {});
+      }
+
+      const monthlyValues = retailerTotals.get(sourceRetailer)!;
+      monthlyValues[monthKey] = (monthlyValues[monthKey] || 0) + amount;
+    };
 
     if (retailer === "all" || retailer === "kehe") {
       for (const row of filteredInvoiceRows) {
@@ -903,15 +1116,9 @@ export default function AccountingSummaryView() {
 
         const monthKey = monthKeyFromDate(date);
 
-        if (!monthKeySet.has(monthKey)) continue;
-
-        const typeName = row.type?.trim() || "Unknown";
         const amount = Number(row.invoice_amt || 0);
 
-        if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
-
-        const current = typeMonthTotals.get(typeName)!;
-        current[monthKey] = (current[monthKey] || 0) + amount;
+        addAmount(row.type, "kehe", monthKey, amount);
       }
     }
 
@@ -923,15 +1130,22 @@ export default function AccountingSummaryView() {
 
         const monthKey = monthKeyFromDate(date);
 
-        if (!monthKeySet.has(monthKey)) continue;
-
-        const typeName = row.reason_code_description?.trim() || "Unknown";
         const amount = Number(row.net_amount || 0);
 
-        if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
+        addAmount(row.type || row.reason_code_description, "target", monthKey, amount);
+      }
+    }
 
-        const current = typeMonthTotals.get(typeName)!;
-        current[monthKey] = (current[monthKey] || 0) + amount;
+    if (retailer === "all" || retailer === "heb") {
+      for (const row of filteredHebRows) {
+        const date = parseUsDate(row.check_date);
+
+        if (!date) continue;
+
+        const monthKey = monthKeyFromDate(date);
+        const amount = Number(row.net_amount || 0);
+
+        addAmount(row.type, "heb", monthKey, amount);
       }
     }
 
@@ -943,15 +1157,9 @@ export default function AccountingSummaryView() {
 
         const monthKey = monthKeyFromDate(date);
 
-        if (!monthKeySet.has(monthKey)) continue;
-
-        const typeName = row.type?.trim() || "Wegman's Chargeback";
         const amount = -Math.abs(Number(row.chargeback || 0));
 
-        if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
-
-        const current = typeMonthTotals.get(typeName)!;
-        current[monthKey] = (current[monthKey] || 0) + amount;
+        addAmount(row.type, "wegmans", monthKey, amount);
       }
     }
 
@@ -979,24 +1187,15 @@ export default function AccountingSummaryView() {
               ];
 
           for (const allocation of allocations) {
-            const typeName = allocation.typeName;
             const amount = allocation.amount;
 
-            if (!typeMonthTotals.has(typeName)) typeMonthTotals.set(typeName, {});
-
-            const current = typeMonthTotals.get(typeName)!;
-            current[monthKey] = (current[monthKey] || 0) + amount;
+            addAmount(allocation.typeName, "tony", monthKey, amount);
           }
         }
       }
     }
 
-    const orderedTypes =
-      retailer === "target"
-        ? Array.from(typeMonthTotals.keys()).sort((a, b) => a.localeCompare(b))
-        : sortTypesWithWMFirst(Array.from(typeMonthTotals.keys()));
-
-    const typeRows = orderedTypes.map((typeName) => {
+    const typeRows: SummaryTypeRow[] = STANDARD_ACCOUNTING_TYPES.flatMap((typeName) => {
       const monthlyValues = typeMonthTotals.get(typeName) || {};
 
       const total = monthKeys.reduce(
@@ -1004,11 +1203,39 @@ export default function AccountingSummaryView() {
         0
       );
 
-      return {
-        typeName,
-        monthlyValues,
-        total,
-      };
+      if (retailer !== "all" && Math.abs(total) < 0.005) return [];
+
+      const retailerTotals = retailerTypeMonthTotals.get(typeName) || new Map();
+      const retailerRows = RETAILER_SORT_ORDER.flatMap((sourceRetailer) => {
+        const sourceValues = retailerTotals.get(sourceRetailer) || {};
+        const sourceTotal = monthKeys.reduce(
+          (sum, key) => sum + (sourceValues[key] || 0),
+          0
+        );
+
+        if (Math.abs(sourceTotal) < 0.005) return [];
+
+        return [
+          {
+            retailer: sourceRetailer,
+            label: getRetailerTypeLabel(sourceRetailer, typeName),
+            monthlyValues: sourceValues,
+            total: sourceTotal,
+          },
+        ];
+      });
+
+      return [
+        {
+          typeName:
+            retailer === "all"
+              ? typeName
+              : getRetailerTypeLabel(retailer as SourceRetailer, typeName),
+          monthlyValues,
+          total,
+          retailerRows,
+        },
+      ];
     });
 
     const monthlyTotals: Record<string, number> = {};
@@ -1032,6 +1259,7 @@ export default function AccountingSummaryView() {
   }, [
     filteredInvoiceRows,
     filteredTargetRows,
+    filteredHebRows,
     filteredWegmansRows,
     filteredTonyRows,
     filteredMonthOptions,
@@ -1157,6 +1385,20 @@ export default function AccountingSummaryView() {
     if (!discrepancyMonth) return;
 
     setAppliedDiscrepancyMonth(discrepancyMonth);
+  };
+
+  const toggleSummaryType = (typeName: string) => {
+    setExpandedSummaryTypes((prev) => {
+      const next = new Set(prev);
+
+      if (next.has(typeName)) {
+        next.delete(typeName);
+      } else {
+        next.add(typeName);
+      }
+
+      return next;
+    });
   };
 
   return (
@@ -1301,7 +1543,7 @@ export default function AccountingSummaryView() {
                 <thead className="bg-slate-100">
                   <tr>
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">
-                      {getAccountingFirstColumnLabel(retailer)}
+                      {getAccountingFirstColumnLabel()}
                     </th>
 
                     {filteredMonthOptions.map((m) => (
@@ -1320,26 +1562,90 @@ export default function AccountingSummaryView() {
                 </thead>
 
                 <tbody>
-                  {summary.typeRows.map((row) => (
-                    <tr key={row.typeName} className="border-t border-slate-200">
-                      <td className="px-4 py-3 font-medium text-slate-900">
-                        {row.typeName}
-                      </td>
+                  {summary.typeRows.map((row) => {
+                    const canExpand =
+                      retailer === "all" && row.retailerRows.length > 0;
+                    const isExpanded = expandedSummaryTypes.has(row.typeName);
 
-                      {filteredMonthOptions.map((m) => (
-                        <td
-                          key={m.key}
-                          className="px-4 py-3 text-right text-slate-700"
-                        >
-                          {formatCurrency(row.monthlyValues[m.key] || 0)}
-                        </td>
-                      ))}
+                    return (
+                      <React.Fragment key={row.typeName}>
+                        <tr className="border-t border-slate-200">
+                          <td className="px-4 py-3 font-medium text-slate-900">
+                            <div className="flex items-center gap-2">
+                              {retailer === "all" && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    canExpand && toggleSummaryType(row.typeName)
+                                  }
+                                  disabled={!canExpand}
+                                  className={`inline-flex h-7 w-7 items-center justify-center rounded-full border transition ${
+                                    canExpand
+                                      ? "border-slate-200 text-slate-600 hover:bg-slate-50"
+                                      : "border-transparent text-slate-300"
+                                  }`}
+                                  aria-label={
+                                    isExpanded
+                                      ? `Collapse ${row.typeName}`
+                                      : `Expand ${row.typeName}`
+                                  }
+                                >
+                                  {isExpanded ? (
+                                    <ChevronDown className="h-4 w-4" />
+                                  ) : (
+                                    <ChevronRight className="h-4 w-4" />
+                                  )}
+                                </button>
+                              )}
 
-                      <td className="px-4 py-3 text-right font-semibold text-slate-900">
-                        {formatCurrency(row.total)}
-                      </td>
-                    </tr>
-                  ))}
+                              <span>{row.typeName}</span>
+                            </div>
+                          </td>
+
+                          {filteredMonthOptions.map((m) => (
+                            <td
+                              key={m.key}
+                              className="px-4 py-3 text-right text-slate-700"
+                            >
+                              {formatCurrency(row.monthlyValues[m.key] || 0)}
+                            </td>
+                          ))}
+
+                          <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                            {formatCurrency(row.total)}
+                          </td>
+                        </tr>
+
+                        {retailer === "all" &&
+                          isExpanded &&
+                          row.retailerRows.map((retailerRow) => (
+                            <tr
+                              key={`${row.typeName}-${retailerRow.retailer}`}
+                              className="border-t border-slate-100 bg-slate-50/70"
+                            >
+                              <td className="px-4 py-3 pl-14 text-sm font-medium text-slate-600">
+                                {retailerRow.label}
+                              </td>
+
+                              {filteredMonthOptions.map((m) => (
+                                <td
+                                  key={m.key}
+                                  className="px-4 py-3 text-right text-sm text-slate-600"
+                                >
+                                  {formatCurrency(
+                                    retailerRow.monthlyValues[m.key] || 0
+                                  )}
+                                </td>
+                              ))}
+
+                              <td className="px-4 py-3 text-right text-sm font-semibold text-slate-700">
+                                {formatCurrency(retailerRow.total)}
+                              </td>
+                            </tr>
+                          ))}
+                      </React.Fragment>
+                    );
+                  })}
 
                   <tr className="border-t-2 border-slate-300 bg-slate-50">
                     <td className="px-4 py-3 font-semibold text-slate-900">

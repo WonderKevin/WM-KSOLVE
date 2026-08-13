@@ -27,7 +27,8 @@ type WegmansInvoiceRow = {
 };
 
 const VENDOR = "Wegman";
-const CHARGEBACK_TYPE = "Wegman's Chargeback";
+const WEGMANS_EDLC_TYPE = "Wegmans' EDLC Allowance";
+const CHARGEBACK_TYPE = WEGMANS_EDLC_TYPE;
 const PAGE_SIZE = 1000;
 const WEGMANS_INVOICES_CACHE_KEY = "wmksolve:report-cache:wegmans-invoices";
 
@@ -37,6 +38,19 @@ type WegmansInvoicesCache = {
 
 function clean(value: unknown) {
   return String(value ?? "").replace(/\u0000/g, "").trim();
+}
+
+function displayWegmansType(value: string | null | undefined) {
+  const normalized = clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  if (
+    normalized === "wegmanschargeback" ||
+    normalized === "wegmanchargeback"
+  ) {
+    return WEGMANS_EDLC_TYPE;
+  }
+
+  return clean(value) || WEGMANS_EDLC_TYPE;
 }
 
 function normalizeHeader(value: unknown) {
@@ -416,7 +430,7 @@ export default function WegmansView() {
       Description: row.description,
       "Inv#": row.inv_number,
       Chargeback: row.chargeback,
-      Type: row.type,
+      Type: displayWegmansType(row.type),
       "Source File Name": row.source_file_name,
     }));
 
@@ -569,7 +583,7 @@ export default function WegmansView() {
                       <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">
                         {formatCurrency(row.chargeback)}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.type}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{displayWegmansType(row.type)}</td>
                     </tr>
                   ))}
                 </tbody>

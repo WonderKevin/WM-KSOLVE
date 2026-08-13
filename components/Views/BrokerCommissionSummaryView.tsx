@@ -273,6 +273,22 @@ function getCustomerLocationKey(rawCustomer: string) {
   return normalizeText(stripLocationSuffix(rawCustomer));
 }
 
+function isHebText(raw: string): boolean {
+  const normalized = normalizeText(raw);
+  if (!normalized) return false;
+
+  const compact = normalized.replace(/\s+/g, "");
+  return (
+    normalized === "HEB" ||
+    normalized.startsWith("HEB ") ||
+    normalized.includes(" HEB ") ||
+    normalized === "H E B" ||
+    normalized.startsWith("H E B ") ||
+    normalized.includes(" H E B ") ||
+    compact.startsWith("HEB")
+  );
+}
+
 function directRetailerFromCustomer(custName: string): RetailerName {
   const customer = normalizeText(custName);
 
@@ -324,7 +340,10 @@ function directRetailerFromCustomer(custName: string): RetailerName {
     return "Fresh Thyme";
   }
 
-  if (customer === "HEB" || customer.startsWith("HEB ")) {
+  if (isHebText(customer)) {
+    return "HEB";
+  }
+  if (customer.includes("CENTRAL MARKET")) {
     return "HEB";
   }
 
@@ -337,7 +356,8 @@ function categorizeRetailerName(rawRetailer: string): RetailerName {
   if (!retailer) return "";
   if (retailer.includes("KROGER") || retailer === "KRO") return "Kroger";
   if (retailer.includes("FRESH THYME")) return "Fresh Thyme";
-  if (retailer === "HEB" || retailer.includes(" HEB ")) return "HEB";
+  if (isHebText(retailer)) return "HEB";
+  if (retailer.includes("CENTRAL MARKET")) return "HEB";
 
   return "INFRA & Others";
 }

@@ -25,6 +25,7 @@ type UserPermissionRow = {
   can_view_database_ksolve_invoices: boolean;
   can_view_database_target_invoices: boolean;
   can_view_database_unfi_invoices: boolean;
+  can_view_database_heb_invoices: boolean;
   can_view_database_wegmans: boolean;
   can_view_database_kehe_velocity: boolean;
   can_view_database_tony_velocity: boolean;
@@ -76,6 +77,7 @@ const PERMISSION_GROUPS: Array<{
       "can_view_database_ksolve_invoices",
       "can_view_database_target_invoices",
       "can_view_database_unfi_invoices",
+      "can_view_database_heb_invoices",
       "can_view_database_wegmans",
       "can_view_database_kehe_velocity",
       "can_view_database_tony_velocity",
@@ -111,6 +113,7 @@ const LABEL_MAP: Record<string, string> = {
   can_view_database_ksolve_invoices: "Ksolve Invoices",
   can_view_database_target_invoices: "Target Invoices",
   can_view_database_unfi_invoices: "UNFI Invoices",
+  can_view_database_heb_invoices: "HEB Invoices",
   can_view_database_wegmans: "Wegmans",
   can_view_database_kehe_velocity: "KeHe Velocity",
   can_view_database_tony_velocity: "Tony's Velocity",
@@ -141,6 +144,7 @@ const DEFAULT_PERMISSION_VALUES = {
   can_view_database_ksolve_invoices: false,
   can_view_database_target_invoices: false,
   can_view_database_unfi_invoices: false,
+  can_view_database_heb_invoices: false,
   can_view_database_wegmans: false,
   can_view_database_kehe_velocity: false,
   can_view_database_tony_velocity: false,
@@ -296,8 +300,8 @@ export default function UserAccountView() {
 
       setNewEmail("");
       await loadRows();
-    } catch (error: any) {
-      alert(error.message || "Failed to add user.");
+    } catch (error: unknown) {
+      alert(error instanceof Error ? error.message : "Failed to add user.");
     } finally {
       setAdding(false);
     }

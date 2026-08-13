@@ -7,7 +7,7 @@ create table if not exists public.wegmans_invoices (
   description text not null default '',
   inv_number text not null default '',
   chargeback numeric,
-  type text not null default 'Wegman''s Chargeback',
+  type text not null default 'Wegmans'' EDLC Allowance',
   source_file_name text not null default '',
   line_number integer not null default 0,
   created_at timestamptz not null default now()
