@@ -352,7 +352,7 @@ export default function WMKsolveApp() {
         : null,
       permissions.can_view_accounting_wm_invoice_discrepancy
         ? {
-            label: "WM Invoice Discrepancy",
+            label: "WM Dispute",
             key: "accounting-wm-invoice-discrepancy",
           }
         : null,

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { FileSpreadsheet, Search, X } from "lucide-react";
+import { FileSpreadsheet, Plus, Search, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
 import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
@@ -21,6 +21,7 @@ type KsolveRow = {
   check_number: string | null;
   invoice_number: string | null;
   invoice_amt: number | null;
+  type: string | null;
 };
 
 type ClaimRow = {
@@ -37,12 +38,36 @@ type ClaimRow = {
 };
 
 type ClaimStatus = "No Action" | "Needs Review" | "Submitted" | "Follow Up" | "Recovered" | "Rejected";
+type DisputeViewMode = "wm" | "other";
+type OtherDisputeStatus = "Open" | "Needs Review" | "Submitted" | "Resolved" | "Rejected";
 
 const WM_INVOICE_DISCREPANCY_CACHE_KEY =
   "wmksolve:report-cache:wm-invoice-discrepancy";
 
 type WMInvoiceDiscrepancyCache = {
   rows: DiscrepancyRow[];
+  otherRows?: OtherDisputeRow[];
+};
+
+type OtherDisputeRow = {
+  id: string;
+  date: string | null;
+  dispute: string;
+  location: string;
+  amount: number | null;
+  status: string;
+  remarks: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type OtherDisputeDraft = {
+  date: string;
+  dispute: string;
+  location: string;
+  amount: string;
+  status: OtherDisputeStatus;
+  remarks: string;
 };
 
 type DiscrepancyRow = {
@@ -75,6 +100,13 @@ const CLAIM_STATUS_OPTIONS: ClaimStatus[] = [
   "Submitted",
   "Follow Up",
   "Recovered",
+  "Rejected",
+];
+const OTHER_DISPUTE_STATUS_OPTIONS: OtherDisputeStatus[] = [
+  "Open",
+  "Needs Review",
+  "Submitted",
+  "Resolved",
   "Rejected",
 ];
 
@@ -138,6 +170,17 @@ function todayIsoDate() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function getEmptyOtherDisputeDraft(): OtherDisputeDraft {
+  return {
+    date: todayIsoDate(),
+    dispute: "",
+    location: "",
+    amount: "",
+    status: "Open",
+    remarks: "",
+  };
+}
+
 function formatMonthFromDate(value: string | null | undefined) {
   const parsed = parseLocalDate(value);
   if (!parsed) return "";
@@ -188,6 +231,10 @@ function normalizeClaimStatus(value: string | null | undefined, fallback: ClaimS
   if (raw === "Not Submitted") return fallback === "No Action" ? "No Action" : "Needs Review";
   if (raw === "Resolved") return "Recovered";
   return CLAIM_STATUS_OPTIONS.includes(raw as ClaimStatus) ? (raw as ClaimStatus) : fallback;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function parseMonthOrder(value: string) {
@@ -269,7 +316,6 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveRow[]> {
     const { data, error } = await supabase
       .from("invoices")
       .select("month, check_date, check_number, invoice_number, invoice_amt, type")
-      .eq("type", "WM Invoice")
       .order("check_date", { ascending: false, nullsFirst: false })
       .order("invoice_number", { ascending: false, nullsFirst: false })
       .range(from, from + PAGE_SIZE - 1);
@@ -277,6 +323,31 @@ async function fetchAllKsolveInvoiceRows(): Promise<KsolveRow[]> {
     if (error) throw error;
 
     const batch = (data ?? []) as KsolveRow[];
+    allRows = allRows.concat(batch);
+
+    if (batch.length < PAGE_SIZE) keepGoing = false;
+    else from += PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
+async function fetchAllOtherDisputeRows(): Promise<OtherDisputeRow[]> {
+  let allRows: OtherDisputeRow[] = [];
+  let from = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    const { data, error } = await supabase
+      .from("wm_other_disputes")
+      .select("id, date, dispute, location, amount, status, remarks, created_at, updated_at")
+      .order("date", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false, nullsFirst: false })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as OtherDisputeRow[];
     allRows = allRows.concat(batch);
 
     if (batch.length < PAGE_SIZE) keepGoing = false;
@@ -315,7 +386,14 @@ export default function WMInvoiceDiscrepancyView() {
   );
   const [loading, setLoading] = useState(() => !startupCache);
   const [savingInvoice, setSavingInvoice] = useState<string | null>(null);
+  const [savingOtherDispute, setSavingOtherDispute] = useState(false);
   const [rows, setRows] = useState<DiscrepancyRow[]>(() => startupCache?.rows || []);
+  const [otherRows, setOtherRows] = useState<OtherDisputeRow[]>(() => startupCache?.otherRows || []);
+  const [viewMode, setViewMode] = useState<DisputeViewMode>("wm");
+  const [showOtherForm, setShowOtherForm] = useState(false);
+  const [otherDraft, setOtherDraft] = useState<OtherDisputeDraft>(() =>
+    getEmptyOtherDisputeDraft(),
+  );
   const [search, setSearch] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("All Months");
   const [selectedClaimStatus, setSelectedClaimStatus] = useState("All Claim Statuses");
@@ -343,6 +421,7 @@ export default function WMInvoiceDiscrepancyView() {
     let wmData: WMRow[] = [];
     let ksolveData: KsolveRow[] = [];
     let claimData: ClaimRow[] = [];
+    let otherDisputeData: OtherDisputeRow[] = [];
 
     try {
       wmData = await fetchAllWmDatasetRows();
@@ -360,6 +439,12 @@ export default function WMInvoiceDiscrepancyView() {
       claimData = await fetchAllClaimRows();
     } catch (error) {
       console.error("Failed to load WM invoice claims:", error);
+    }
+
+    try {
+      otherDisputeData = await fetchAllOtherDisputeRows();
+    } catch (error) {
+      console.error("Failed to load other dispute rows:", error);
     }
 
     const claimByInvoice = new Map<string, ClaimRow>();
@@ -415,12 +500,16 @@ export default function WMInvoiceDiscrepancyView() {
         checkNo: string;
         invoice: string;
         ksolveAmount: number;
+        type: string;
       }
     >();
+
+    const wmInvoiceKeys = new Set(wmByInvoice.keys());
 
     for (const row of ksolveData) {
       const invoice = normalizeInvoice(row.invoice_number);
       if (!invoice) continue;
+      if (!wmInvoiceKeys.has(invoice) && !isWmInvoiceType(row.type ?? "")) continue;
 
       const current = ksolveByInvoice.get(invoice);
 
@@ -434,9 +523,13 @@ export default function WMInvoiceDiscrepancyView() {
           checkNo: row.check_number ?? "",
           invoice,
           ksolveAmount: Number(row.invoice_amt ?? 0),
+          type: row.type ?? "",
         });
       } else {
         current.ksolveAmount += Number(row.invoice_amt ?? 0);
+        if (!current.checkNo && row.check_number) current.checkNo = row.check_number;
+        if (!current.checkDate && row.check_date) current.checkDate = formatDisplayDate(row.check_date);
+        if (!current.type && row.type) current.type = row.type;
       }
     }
 
@@ -454,7 +547,7 @@ export default function WMInvoiceDiscrepancyView() {
       const discrepancy = ksolveAmount - wmAmount;
       const percentage = wmAmount !== 0 ? (discrepancy / wmAmount) * 100 : 0;
 
-      const checkDate = wm?.checkDate || ks?.checkDate || "";
+      const checkDate = ks?.checkDate || wm?.checkDate || "";
       const invoiceDate = wm?.invoiceDate || "";
       const discountTerms = getDiscountTermsStatus(checkDate, invoiceDate);
       const daysToPay = getDaysToPay(checkDate, invoiceDate);
@@ -465,12 +558,12 @@ export default function WMInvoiceDiscrepancyView() {
       const recoveredAmount = claimStatus === "Recovered" ? claimAmount : Number(claim?.recovered_amount ?? 0);
 
       return {
-        month: wm?.month || ks?.month || "",
+        month: ks?.month || wm?.month || "",
         invoiceDate,
         checkDate,
         checkNo: ks?.checkNo || "",
         invoice,
-        type: wm?.type || "WM Invoice",
+        type: ks?.type || wm?.type || "WM Invoice",
         ksolveAmount,
         wmAmount,
         discrepancy,
@@ -495,10 +588,12 @@ export default function WMInvoiceDiscrepancyView() {
     });
 
     setRows(merged);
+    setOtherRows(otherDisputeData);
     writeBrowserCache<WMInvoiceDiscrepancyCache>(
       WM_INVOICE_DISCREPANCY_CACHE_KEY,
       {
         rows: merged,
+        otherRows: otherDisputeData,
       }
     );
     setLoading(false);
@@ -556,6 +651,27 @@ export default function WMInvoiceDiscrepancyView() {
     });
   }, [rows, search, selectedMonth, selectedClaimStatus]);
 
+  const filteredOtherRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return otherRows.filter((row) => {
+      if (!q) return true;
+
+      const haystack = [
+        row.date,
+        row.dispute,
+        row.location,
+        row.amount ?? "",
+        row.status,
+        row.remarks ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(q);
+    });
+  }, [otherRows, search]);
+
   const totals = useMemo(() => {
     return filteredRows.reduce(
       (acc, row) => {
@@ -583,6 +699,10 @@ export default function WMInvoiceDiscrepancyView() {
       },
     );
   }, [filteredRows]);
+
+  const otherDisputeTotal = useMemo(() => {
+    return filteredOtherRows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+  }, [filteredOtherRows]);
 
   const setRowClaimValues = (invoice: string, patch: Partial<DiscrepancyRow>) => {
     setRows((prev) =>
@@ -636,8 +756,8 @@ export default function WMInvoiceDiscrepancyView() {
       setSavingInvoice(invoice);
       await upsertClaim(invoice, patch);
       setRowClaimValues(invoice, rowPatch);
-    } catch (error: any) {
-      alert(error?.message || "Failed to save claim status.");
+    } catch (error) {
+      alert(getErrorMessage(error, "Failed to save claim status."));
     } finally {
       setSavingInvoice(null);
     }
@@ -657,14 +777,84 @@ export default function WMInvoiceDiscrepancyView() {
         notes: notes || null,
       });
       setRowClaimValues(invoice, { notes });
-    } catch (error: any) {
-      alert(error?.message || "Failed to save notes.");
+    } catch (error) {
+      alert(getErrorMessage(error, "Failed to save notes."));
     } finally {
       setSavingInvoice(null);
     }
   };
 
+  const saveOtherDispute = async () => {
+    const dispute = otherDraft.dispute.trim();
+    if (!dispute) {
+      alert("Enter a dispute.");
+      return;
+    }
+
+    const amount = Number(String(otherDraft.amount || "0").replace(/[$,]/g, ""));
+    if (!Number.isFinite(amount)) {
+      alert("Enter a valid amount.");
+      return;
+    }
+
+    const payload = {
+      date: otherDraft.date || null,
+      dispute,
+      location: otherDraft.location.trim(),
+      amount,
+      status: otherDraft.status,
+      remarks: otherDraft.remarks.trim() || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    try {
+      setSavingOtherDispute(true);
+      const { data, error } = await supabase
+        .from("wm_other_disputes")
+        .insert(payload)
+        .select("id, date, dispute, location, amount, status, remarks, created_at, updated_at")
+        .single();
+
+      if (error) throw error;
+
+      const nextRows = data ? [data as OtherDisputeRow, ...otherRows] : otherRows;
+      setOtherRows(nextRows);
+      writeBrowserCache<WMInvoiceDiscrepancyCache>(WM_INVOICE_DISCREPANCY_CACHE_KEY, {
+        rows,
+        otherRows: nextRows,
+      });
+      setOtherDraft(getEmptyOtherDisputeDraft());
+      setShowOtherForm(false);
+    } catch (error) {
+      const message = getErrorMessage(error, "");
+      if (message.toLowerCase().includes("wm_other_disputes")) {
+        alert("The wm_other_disputes table is not available yet. Run supabase/wm_other_disputes.sql in Supabase, then try again.");
+      } else {
+        alert(message || "Failed to save other dispute.");
+      }
+    } finally {
+      setSavingOtherDispute(false);
+    }
+  };
+
   const exportToExcel = () => {
+    if (viewMode === "other") {
+      const exportRows = filteredOtherRows.map((row) => ({
+        Date: formatDisplayDate(row.date),
+        Dispute: row.dispute,
+        Location: row.location,
+        Amount: row.amount ?? 0,
+        Status: row.status,
+        Remarks: row.remarks ?? "",
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(exportRows);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Other Disputes");
+      XLSX.writeFile(workbook, "wm-other-disputes.xlsx");
+      return;
+    }
+
     const exportRows = filteredRows.map((row) => ({
       Month: formatMonthShort(row.month),
       "Check Date": row.checkDate,
@@ -695,8 +885,42 @@ export default function WMInvoiceDiscrepancyView() {
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">WM Dispute</h2>
+          <p className="text-sm text-slate-500">
+            Review WM invoice discrepancies and capture other dispute items.
+          </p>
+        </div>
+        <div className="inline-flex rounded-2xl bg-slate-100 p-1">
+          <button
+            type="button"
+            onClick={() => setViewMode("wm")}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              viewMode === "wm"
+                ? "bg-slate-950 text-white shadow-sm"
+                : "text-slate-600 hover:bg-white hover:text-slate-900"
+            }`}
+          >
+            WM Invoice Discrepancy
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("other")}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              viewMode === "other"
+                ? "bg-slate-950 text-white shadow-sm"
+                : "text-slate-600 hover:bg-white hover:text-slate-900"
+            }`}
+          >
+            Other Dispute
+          </button>
+        </div>
+      </div>
+
       <div className="sticky top-[116px] z-20 rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85">
-        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[repeat(8,minmax(0,1fr))_80px]">
+        {viewMode === "wm" ? (
+          <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[repeat(8,minmax(0,1fr))_80px]">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-xs text-slate-500">Ksolve Amount</div>
             <div className="mt-1 text-lg font-semibold text-slate-900">
@@ -764,23 +988,61 @@ export default function WMInvoiceDiscrepancyView() {
           <button
             type="button"
             onClick={exportToExcel}
-            disabled={filteredRows.length === 0}
+            disabled={viewMode === "wm" ? filteredRows.length === 0 : filteredOtherRows.length === 0}
             className="flex min-h-[72px] w-full items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             title="Export to Excel"
             aria-label="Export to Excel"
           >
             <FileSpreadsheet className="h-5 w-5" />
           </button>
-        </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_1fr_80px]">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-xs text-slate-500">Other Disputes</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">
+                {filteredOtherRows.length.toLocaleString("en-US")}
+              </div>
+            </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-[1.8fr_220px_240px]">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-xs text-slate-500">Total Amount</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">
+                {formatMoney(otherDisputeTotal)}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={exportToExcel}
+              disabled={filteredOtherRows.length === 0}
+              className="flex min-h-[72px] w-full items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Export to Excel"
+              aria-label="Export to Excel"
+            >
+              <FileSpreadsheet className="h-5 w-5" />
+            </button>
+          </div>
+        )}
+
+        <div
+          className={`mt-4 grid grid-cols-1 gap-3 ${
+            viewMode === "wm"
+              ? "xl:grid-cols-[1.8fr_220px_240px]"
+              : "xl:grid-cols-[1fr_180px]"
+          }`}
+        >
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search month, invoice date, check date, check #, invoice, type, claim status..."
+              placeholder={
+                viewMode === "wm"
+                  ? "Search month, invoice date, check date, check #, invoice, type, claim status..."
+                  : "Search date, dispute, location, status, remarks..."
+              }
               className="h-12 w-full rounded-2xl border border-slate-200 bg-white py-2 pl-10 pr-10 text-sm outline-none transition focus:border-slate-300"
             />
             {search && (
@@ -795,35 +1057,97 @@ export default function WMInvoiceDiscrepancyView() {
             )}
           </div>
 
-          <select
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
-          >
-            {monthOptions.map((month) => (
-              <option key={month} value={month}>
-                {month === "All Months" ? month : formatMonthShort(month)}
-              </option>
-            ))}
-          </select>
+          {viewMode === "wm" ? (
+            <>
+              <select
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+              >
+                {monthOptions.map((month) => (
+                  <option key={month} value={month}>
+                    {month === "All Months" ? month : formatMonthShort(month)}
+                  </option>
+                ))}
+              </select>
 
-          <select
-            value={selectedClaimStatus}
-            onChange={(e) => setSelectedClaimStatus(e.target.value)}
-            className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
-          >
-            <option value="All Claim Statuses">All Claim Statuses</option>
-            {CLAIM_STATUS_OPTIONS.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </select>
+              <select
+                value={selectedClaimStatus}
+                onChange={(e) => setSelectedClaimStatus(e.target.value)}
+                className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+              >
+                <option value="All Claim Statuses">All Claim Statuses</option>
+                {CLAIM_STATUS_OPTIONS.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowOtherForm(true)}
+              className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800"
+            >
+              <Plus className="h-4 w-4" />
+              Add
+            </button>
+          )}
         </div>
       </div>
 
       <div className="w-full overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-        {loading ? (
+        {viewMode === "other" ? (
+          loading ? (
+            <div className="p-6 text-sm text-slate-500">Loading other dispute data...</div>
+          ) : filteredOtherRows.length === 0 ? (
+            <div className="p-6 text-sm text-slate-500">No other dispute rows found.</div>
+          ) : (
+            <div className="w-full overflow-x-auto">
+              <table className="w-full min-w-[1000px] text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    {["Date", "Dispute", "Location", "Amount", "Status", "Remarks"].map((header) => (
+                      <th
+                        key={header}
+                        className={`whitespace-nowrap px-4 py-3 font-semibold text-slate-700 ${
+                          header === "Amount" ? "text-right" : "text-left"
+                        }`}
+                      >
+                        {header}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredOtherRows.map((row) => (
+                    <tr key={row.id} className="border-t border-slate-100">
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                        {formatDisplayDate(row.date) || "-"}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">
+                        {row.dispute || "-"}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                        {row.location || "-"}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-slate-900">
+                        {formatMoney(Number(row.amount ?? 0))}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                        {row.status || "-"}
+                      </td>
+                      <td className="min-w-[320px] px-4 py-3 text-slate-700">
+                        {row.remarks || "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : loading ? (
           <div className="p-6 text-sm text-slate-500">Loading discrepancy data...</div>
         ) : filteredRows.length === 0 ? (
           <div className="p-6 text-sm text-slate-500">
@@ -961,6 +1285,128 @@ export default function WMInvoiceDiscrepancyView() {
           </div>
         )}
       </div>
+
+      {showOtherForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+          <div className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Add Other Dispute</h3>
+                <p className="text-sm text-slate-500">
+                  Enter the dispute details and save them to the shared app data.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowOtherForm(false);
+                  setOtherDraft(getEmptyOtherDisputeDraft());
+                }}
+                className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                title="Close"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+              <label className="space-y-1 text-sm">
+                <span className="font-medium text-slate-700">Date</span>
+                <input
+                  type="date"
+                  value={otherDraft.date}
+                  onChange={(e) => setOtherDraft((prev) => ({ ...prev, date: e.target.value }))}
+                  className="h-11 w-full rounded-2xl border border-slate-200 px-3 outline-none transition focus:border-slate-300"
+                />
+              </label>
+
+              <label className="space-y-1 text-sm">
+                <span className="font-medium text-slate-700">Status</span>
+                <select
+                  value={otherDraft.status}
+                  onChange={(e) =>
+                    setOtherDraft((prev) => ({
+                      ...prev,
+                      status: e.target.value as OtherDisputeStatus,
+                    }))
+                  }
+                  className="h-11 w-full rounded-2xl border border-slate-200 px-3 outline-none transition focus:border-slate-300"
+                >
+                  {OTHER_DISPUTE_STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1 text-sm">
+                <span className="font-medium text-slate-700">Dispute</span>
+                <input
+                  type="text"
+                  value={otherDraft.dispute}
+                  onChange={(e) => setOtherDraft((prev) => ({ ...prev, dispute: e.target.value }))}
+                  className="h-11 w-full rounded-2xl border border-slate-200 px-3 outline-none transition focus:border-slate-300"
+                />
+              </label>
+
+              <label className="space-y-1 text-sm">
+                <span className="font-medium text-slate-700">Location</span>
+                <input
+                  type="text"
+                  value={otherDraft.location}
+                  onChange={(e) => setOtherDraft((prev) => ({ ...prev, location: e.target.value }))}
+                  className="h-11 w-full rounded-2xl border border-slate-200 px-3 outline-none transition focus:border-slate-300"
+                />
+              </label>
+
+              <label className="space-y-1 text-sm md:col-span-2">
+                <span className="font-medium text-slate-700">Amount</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={otherDraft.amount}
+                  onChange={(e) => setOtherDraft((prev) => ({ ...prev, amount: e.target.value }))}
+                  placeholder="0.00"
+                  className="h-11 w-full rounded-2xl border border-slate-200 px-3 outline-none transition focus:border-slate-300"
+                />
+              </label>
+
+              <label className="space-y-1 text-sm md:col-span-2">
+                <span className="font-medium text-slate-700">Remarks</span>
+                <textarea
+                  value={otherDraft.remarks}
+                  onChange={(e) => setOtherDraft((prev) => ({ ...prev, remarks: e.target.value }))}
+                  rows={4}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 outline-none transition focus:border-slate-300"
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowOtherForm(false);
+                  setOtherDraft(getEmptyOtherDisputeDraft());
+                }}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveOtherDispute}
+                disabled={savingOtherDispute}
+                className="rounded-2xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingOtherDispute ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

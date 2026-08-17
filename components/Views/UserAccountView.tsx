@@ -108,7 +108,7 @@ const LABEL_MAP: Record<string, string> = {
 
   can_view_accounting_summary: "Summary",
   can_view_accounting_check_details: "Check Details",
-  can_view_accounting_wm_invoice_discrepancy: "WM Invoice Discrepancy",
+  can_view_accounting_wm_invoice_discrepancy: "WM Dispute",
 
   can_view_database_ksolve_invoices: "Ksolve Invoices",
   can_view_database_target_invoices: "Target Invoices",
