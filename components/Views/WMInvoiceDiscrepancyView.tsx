@@ -69,6 +69,7 @@ type OtherDisputeDraft = {
   status: OtherDisputeStatus;
   remarks: string;
 };
+type OtherDisputeUpdate = Partial<Pick<OtherDisputeRow, "status" | "remarks">>;
 
 type DiscrepancyRow = {
   month: string;
@@ -387,6 +388,7 @@ export default function WMInvoiceDiscrepancyView() {
   const [loading, setLoading] = useState(() => !startupCache);
   const [savingInvoice, setSavingInvoice] = useState<string | null>(null);
   const [savingOtherDispute, setSavingOtherDispute] = useState(false);
+  const [savingOtherDisputeId, setSavingOtherDisputeId] = useState<string | null>(null);
   const [rows, setRows] = useState<DiscrepancyRow[]>(() => startupCache?.rows || []);
   const [otherRows, setOtherRows] = useState<OtherDisputeRow[]>(() => startupCache?.otherRows || []);
   const [viewMode, setViewMode] = useState<DisputeViewMode>("wm");
@@ -784,6 +786,54 @@ export default function WMInvoiceDiscrepancyView() {
     }
   };
 
+  const setOtherDisputeValues = (id: string, patch: OtherDisputeUpdate) => {
+    setOtherRows((prev) => {
+      const nextRows = prev.map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              ...patch,
+            }
+          : row,
+      );
+
+      writeBrowserCache<WMInvoiceDiscrepancyCache>(WM_INVOICE_DISCREPANCY_CACHE_KEY, {
+        rows,
+        otherRows: nextRows,
+      });
+
+      return nextRows;
+    });
+  };
+
+  const updateOtherDispute = async (id: string, patch: OtherDisputeUpdate) => {
+    if (!id) return;
+
+    const payload = {
+      ...patch,
+      ...(Object.prototype.hasOwnProperty.call(patch, "remarks")
+        ? { remarks: patch.remarks?.trim() || null }
+        : {}),
+      updated_at: new Date().toISOString(),
+    };
+
+    try {
+      setSavingOtherDisputeId(id);
+      const { error } = await supabase
+        .from("wm_other_disputes")
+        .update(payload)
+        .eq("id", id);
+
+      if (error) throw error;
+      setOtherDisputeValues(id, payload);
+    } catch (error) {
+      alert(getErrorMessage(error, "Failed to save other dispute."));
+      void load(true);
+    } finally {
+      setSavingOtherDisputeId(null);
+    }
+  };
+
   const saveOtherDispute = async () => {
     const dispute = otherDraft.dispute.trim();
     if (!dispute) {
@@ -1136,10 +1186,41 @@ export default function WMInvoiceDiscrepancyView() {
                         {formatMoney(Number(row.amount ?? 0))}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">
-                        {row.status || "-"}
+                        <select
+                          value={row.status || "Open"}
+                          onChange={(e) =>
+                            void updateOtherDispute(row.id, {
+                              status: e.target.value,
+                            })
+                          }
+                          disabled={savingOtherDisputeId === row.id}
+                          className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none transition focus:border-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {OTHER_DISPUTE_STATUS_OPTIONS.map((status) => (
+                            <option key={status} value={status}>
+                              {status}
+                            </option>
+                          ))}
+                        </select>
                       </td>
-                      <td className="min-w-[320px] px-4 py-3 text-slate-700">
-                        {row.remarks || "-"}
+                      <td className="min-w-[360px] px-4 py-3 text-slate-700">
+                        <textarea
+                          value={row.remarks || ""}
+                          onChange={(e) =>
+                            setOtherDisputeValues(row.id, {
+                              remarks: e.target.value,
+                            })
+                          }
+                          onBlur={(e) =>
+                            void updateOtherDispute(row.id, {
+                              remarks: e.target.value,
+                            })
+                          }
+                          disabled={savingOtherDisputeId === row.id}
+                          rows={2}
+                          placeholder="Add remarks..."
+                          className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none transition focus:border-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
+                        />
                       </td>
                     </tr>
                   ))}
