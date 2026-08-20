@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
 import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
-type Retailer = "all" | "kehe" | "target" | "unfi" | "heb" | "wegmans" | "tony";
+type Retailer = "all" | "kehe" | "target" | "unfi" | "hyvee" | "wegmans" | "tony";
 
 type KeheInvoiceRow = {
   id: number;
@@ -64,7 +64,7 @@ type WegmansInvoiceRow = {
   type: string | null;
 };
 
-type HebInvoiceRow = {
+type HyveeInvoiceRow = {
   id: number;
   month: string | null;
   type: string | null;
@@ -128,7 +128,7 @@ const retailerOptions: Array<{ value: Retailer; label: string }> = [
   { value: "kehe", label: "KeHE" },
   { value: "target", label: "Target" },
   { value: "unfi", label: "UNFI" },
-  { value: "heb", label: "HEB" },
+  { value: "hyvee", label: "Hy-Vee" },
   { value: "wegmans", label: "Wegmans" },
   { value: "tony", label: "Tony's" },
 ];
@@ -146,7 +146,7 @@ function retailerLabel(value: Retailer) {
   if (value === "kehe") return "KeHE";
   if (value === "target") return "Target";
   if (value === "unfi") return "UNFI";
-  if (value === "heb") return "HEB";
+  if (value === "hyvee") return "Hy-Vee";
   if (value === "wegmans") return "Wegmans";
   if (value === "tony") return "Tony's";
   return "All";
@@ -235,7 +235,7 @@ export default function CheckDetailsView() {
       try {
         if (!hasCachedData) setLoading(true);
 
-        const [keheRes, targetRes, hebRes, wegmansRes, tonyRes] = await Promise.all([
+        const [keheRes, targetRes, hyveeRes, wegmansRes, tonyRes] = await Promise.all([
           supabase
             .from("invoices")
             .select(
@@ -251,7 +251,7 @@ export default function CheckDetailsView() {
             .order("check_number", { ascending: false }),
 
           supabase
-            .from("heb_invoices")
+            .from("hyvee_invoices")
             .select(
               "id, month, type, check_number, check_date, check_amount, invoice_number, invoice_date, net_amount, memo_code, explanation"
             )
@@ -277,8 +277,8 @@ export default function CheckDetailsView() {
 
         if (keheRes.error) throw keheRes.error;
         if (targetRes.error) throw targetRes.error;
-        if (hebRes.error) {
-          console.error("HEB check details query error:", hebRes.error);
+        if (hyveeRes.error) {
+          console.error("Hy-Vee check details query error:", hyveeRes.error);
         }
         if (wegmansRes.error) {
           console.error("Wegmans check details query error:", wegmansRes.error);
@@ -324,10 +324,10 @@ export default function CheckDetailsView() {
           };
         });
 
-        const hebRows: InvoiceRecord[] = hebRes.error
+        const hyveeRows: InvoiceRecord[] = hyveeRes.error
           ? []
-          : ((hebRes.data || []) as HebInvoiceRow[]).map((row) => ({
-              id: `heb-${row.id}`,
+          : ((hyveeRes.data || []) as HyveeInvoiceRow[]).map((row) => ({
+              id: `hyvee-${row.id}`,
               month: row.month,
               check_date: row.check_date,
               check_number: row.check_number,
@@ -336,8 +336,8 @@ export default function CheckDetailsView() {
               invoice_amt: row.net_amount,
               dc_name: row.explanation,
               status: row.memo_code,
-              type: row.type || "HEB EDLC Allowances",
-              retailer: "heb",
+              type: row.type || "Hy-Vee EDLC Allowances",
+              retailer: "hyvee",
             }));
 
         const rawWegmansRows = (wegmansRes.data || []) as WegmansInvoiceRow[];
@@ -408,7 +408,7 @@ export default function CheckDetailsView() {
         const nextRows = [
           ...keheRows,
           ...targetRows,
-          ...hebRows,
+          ...hyveeRows,
           ...wegmansRows,
           ...tonyRows,
         ];

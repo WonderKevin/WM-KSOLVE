@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
 import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
-type Retailer = "all" | "kehe" | "target" | "unfi" | "heb" | "wegmans" | "tony";
+type Retailer = "all" | "kehe" | "target" | "unfi" | "hyvee" | "wegmans" | "tony";
 type ViewMode = "accounting" | "discrepancy";
 
 type InvoiceSummaryRow = {
@@ -48,7 +48,7 @@ type WegmansInvoiceRow = {
   retailer?: Retailer;
 };
 
-type HebInvoiceRow = {
+type HyveeInvoiceRow = {
   id: number;
   month: string | null;
   type: string | null;
@@ -159,7 +159,7 @@ const RETAILER_POSSESSIVE_LABELS: Record<SourceRetailer, string> = {
   kehe: "KeHE's",
   target: "Target's",
   unfi: "UNFI's",
-  heb: "HEB",
+  hyvee: "Hy-Vee",
   wegmans: "Wegmans'",
   tony: "Tony's",
 };
@@ -168,7 +168,7 @@ const RETAILER_SORT_ORDER: SourceRetailer[] = [
   "kehe",
   "target",
   "unfi",
-  "heb",
+  "hyvee",
   "wegmans",
   "tony",
 ];
@@ -176,7 +176,7 @@ const RETAILER_SORT_ORDER: SourceRetailer[] = [
 type AccountingSummaryCache = {
   invoiceRows: InvoiceSummaryRow[];
   targetRows: TargetInvoiceRow[];
-  hebRows: HebInvoiceRow[];
+  hyveeRows: HyveeInvoiceRow[];
   wegmansRows: WegmansInvoiceRow[];
   tonyRows: TonyInvoiceWireRow[];
   brokerRows: BrokerCommissionRow[];
@@ -379,8 +379,8 @@ function getRetailerTypeLabel(retailer: SourceRetailer, typeName: string) {
     return WEGMANS_EDLC_TYPE;
   }
 
-  if (retailer === "heb") {
-    return `HEB ${typeName}`;
+  if (retailer === "hyvee") {
+    return `Hy-Vee ${typeName}`;
   }
 
   return `${RETAILER_POSSESSIVE_LABELS[retailer]} ${typeName}`;
@@ -460,7 +460,7 @@ function getRetailerMonthlyTotalLabel(retailer: Retailer) {
   if (retailer === "kehe") return "KeHE Monthly Summary Total";
   if (retailer === "target") return "Target Monthly Summary Total";
   if (retailer === "unfi") return "UNFI Monthly Summary Total";
-  if (retailer === "heb") return "HEB Monthly Summary Total";
+  if (retailer === "hyvee") return "Hy-Vee Monthly Summary Total";
   if (retailer === "wegmans") return "Wegmans Monthly Summary Total";
   if (retailer === "tony") return "Tony's Monthly Summary Total";
 
@@ -603,8 +603,8 @@ export default function AccountingSummaryView() {
   const [targetRows, setTargetRows] = useState<TargetInvoiceRow[]>(
     () => startupCache?.targetRows || []
   );
-  const [hebRows, setHebRows] = useState<HebInvoiceRow[]>(
-    () => startupCache?.hebRows || []
+  const [hyveeRows, setHyveeRows] = useState<HyveeInvoiceRow[]>(
+    () => startupCache?.hyveeRows || []
   );
   const [wegmansRows, setWegmansRows] = useState<WegmansInvoiceRow[]>(
     () => startupCache?.wegmansRows || []
@@ -636,7 +636,7 @@ export default function AccountingSummaryView() {
     { value: "kehe", label: "KeHE" },
     { value: "target", label: "Target" },
     { value: "unfi", label: "UNFI" },
-    { value: "heb", label: "HEB" },
+    { value: "hyvee", label: "Hy-Vee" },
     { value: "wegmans", label: "Wegmans" },
     { value: "tony", label: "Tony's" },
   ];
@@ -651,7 +651,7 @@ export default function AccountingSummaryView() {
           rawBrokerRows,
           ksolveWmRows,
           rawTargetRes,
-          rawHebRes,
+          rawHyveeRes,
           rawWegmansRes,
           rawTonyRes,
         ] =
@@ -671,7 +671,7 @@ export default function AccountingSummaryView() {
               .order("check_date", { ascending: false }),
 
             supabase
-              .from("heb_invoices")
+              .from("hyvee_invoices")
               .select(
                 "id, month, type, check_number, check_date, check_amount, invoice_number, invoice_date, net_amount"
               )
@@ -694,7 +694,7 @@ export default function AccountingSummaryView() {
 
         let nextInvoiceRows: InvoiceSummaryRow[] = [];
         let nextTargetRows: TargetInvoiceRow[] = [];
-        let nextHebRows: HebInvoiceRow[] = [];
+        let nextHyveeRows: HyveeInvoiceRow[] = [];
         let nextWegmansRows: WegmansInvoiceRow[] = [];
         let nextTonyRows: TonyInvoiceWireRow[] = [];
         let nextBrokerRows: BrokerCommissionRow[] = [];
@@ -723,17 +723,17 @@ export default function AccountingSummaryView() {
           setTargetRows(nextTargetRows);
         }
 
-        if (rawHebRes.error) {
-          console.error("HEB invoice query error:", rawHebRes.error);
-          setHebRows([]);
+        if (rawHyveeRes.error) {
+          console.error("Hy-Vee invoice query error:", rawHyveeRes.error);
+          setHyveeRows([]);
         } else {
-          nextHebRows = ((rawHebRes.data || []) as HebInvoiceRow[]).map(
+          nextHyveeRows = ((rawHyveeRes.data || []) as HyveeInvoiceRow[]).map(
             (row) => ({
               ...row,
-              retailer: "heb",
+              retailer: "hyvee",
             })
           );
-          setHebRows(nextHebRows);
+          setHyveeRows(nextHyveeRows);
         }
 
         if (rawWegmansRes.error) {
@@ -825,7 +825,7 @@ export default function AccountingSummaryView() {
         writeBrowserCache<AccountingSummaryCache>(ACCOUNTING_SUMMARY_CACHE_KEY, {
           invoiceRows: nextInvoiceRows,
           targetRows: nextTargetRows,
-          hebRows: nextHebRows,
+          hyveeRows: nextHyveeRows,
           wegmansRows: nextWegmansRows,
           tonyRows: nextTonyRows,
           brokerRows: nextBrokerRows,
@@ -856,11 +856,11 @@ export default function AccountingSummaryView() {
     return targetRows.filter((row) => row.retailer === retailer);
   }, [targetRows, retailer]);
 
-  const filteredHebRows = useMemo(() => {
-    if (retailer === "all") return hebRows;
+  const filteredHyveeRows = useMemo(() => {
+    if (retailer === "all") return hyveeRows;
 
-    return hebRows.filter((row) => row.retailer === retailer);
-  }, [hebRows, retailer]);
+    return hyveeRows.filter((row) => row.retailer === retailer);
+  }, [hyveeRows, retailer]);
 
   const filteredWegmansRows = useMemo(() => {
     if (retailer === "all") return wegmansRows;
@@ -915,7 +915,7 @@ export default function AccountingSummaryView() {
       }
     }
 
-    for (const row of filteredHebRows) {
+    for (const row of filteredHyveeRows) {
       const date = parseUsDate(row.check_date);
 
       if (!date) continue;
@@ -967,7 +967,7 @@ export default function AccountingSummaryView() {
   }, [
     filteredInvoiceRows,
     filteredTargetRows,
-    filteredHebRows,
+    filteredHyveeRows,
     filteredWegmansRows,
     filteredTonyRows,
   ]);
@@ -1136,8 +1136,8 @@ export default function AccountingSummaryView() {
       }
     }
 
-    if (retailer === "all" || retailer === "heb") {
-      for (const row of filteredHebRows) {
+    if (retailer === "all" || retailer === "hyvee") {
+      for (const row of filteredHyveeRows) {
         const date = parseUsDate(row.check_date);
 
         if (!date) continue;
@@ -1145,7 +1145,7 @@ export default function AccountingSummaryView() {
         const monthKey = monthKeyFromDate(date);
         const amount = Number(row.net_amount || 0);
 
-        addAmount(row.type, "heb", monthKey, amount);
+        addAmount(row.type, "hyvee", monthKey, amount);
       }
     }
 
@@ -1259,7 +1259,7 @@ export default function AccountingSummaryView() {
   }, [
     filteredInvoiceRows,
     filteredTargetRows,
-    filteredHebRows,
+    filteredHyveeRows,
     filteredWegmansRows,
     filteredTonyRows,
     filteredMonthOptions,

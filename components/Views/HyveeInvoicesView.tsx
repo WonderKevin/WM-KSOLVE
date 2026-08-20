@@ -11,7 +11,7 @@ import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
 
 type WorksheetRow = unknown[];
 
-type HebInvoiceRow = {
+type HyveeInvoiceRow = {
   id?: number;
   month: string;
   type: string;
@@ -74,23 +74,23 @@ type ParsedCheckInfo = {
 };
 
 const PAGE_SIZE = 1000;
-const HEB_INVOICES_CACHE_KEY = "wmksolve:report-cache:heb-invoices";
-const HEB_TYPE_OPTIONS = [
-  "HEB EDLC Allowances",
-  "HEB Ad Fees",
-  "HEB Distribution (MCB) Allowances",
-  "HEB Customer Spoils Allowance",
-  "HEB Introduction Allowances",
-  "HEB TPR Funding",
-  "HEB Scan Allowance",
-  "HEB Promo & Placement Funds",
-  "HEB Slotting Fees",
-  "HEB Display Fees",
-  "HEB New Item Setup Fee",
+const HYVEE_INVOICES_CACHE_KEY = "wmksolve:report-cache:hyvee-invoices";
+const HYVEE_TYPE_OPTIONS = [
+  "Hy-Vee EDLC Allowances",
+  "Hy-Vee Ad Fees",
+  "Hy-Vee Distribution (MCB) Allowances",
+  "Hy-Vee Customer Spoils Allowance",
+  "Hy-Vee Introduction Allowances",
+  "Hy-Vee TPR Funding",
+  "Hy-Vee Scan Allowance",
+  "Hy-Vee Promo & Placement Funds",
+  "Hy-Vee Slotting Fees",
+  "Hy-Vee Display Fees",
+  "Hy-Vee New Item Setup Fee",
 ] as const;
 
-type HebInvoicesCache = {
-  rows: HebInvoiceRow[];
+type HyveeInvoicesCache = {
+  rows: HyveeInvoiceRow[];
 };
 
 function clean(value: unknown) {
@@ -279,7 +279,7 @@ function amountTokenIndexes(tokens: string[]) {
   }, []);
 }
 
-function parseHebTextLine(
+function parseHyveeTextLine(
   line: string,
   checkInfo: ParsedCheckInfo,
   fileName: string,
@@ -361,10 +361,10 @@ function parseHebTextLine(
     source_file_name: fileName,
     source_file_type: fileType,
     line_number: lineNumber,
-  } satisfies HebInvoiceRow;
+  } satisfies HyveeInvoiceRow;
 }
 
-function finalizeParsedRows(rows: HebInvoiceRow[], checkAmount: number | null) {
+function finalizeParsedRows(rows: HyveeInvoiceRow[], checkAmount: number | null) {
   const computedCheckAmount =
     checkAmount ??
     round2(rows.reduce((sum, row) => sum + Number(row.net_amount || 0), 0));
@@ -375,7 +375,7 @@ function finalizeParsedRows(rows: HebInvoiceRow[], checkAmount: number | null) {
   }));
 }
 
-function parseHebText(text: string, fileName: string, fileType: string, selectedType: string) {
+function parseHyveeText(text: string, fileName: string, fileType: string, selectedType: string) {
   const lines = text
     .split(/\r?\n/)
     .map((line) => clean(line))
@@ -399,17 +399,17 @@ function parseHebText(text: string, fileName: string, fileType: string, selected
   });
 
   if (headerIndex === -1) {
-    throw new Error(`Could not find the HEB invoice table header in ${fileName}.`);
+    throw new Error(`Could not find the Hy-Vee invoice table header in ${fileName}.`);
   }
 
-  const parsedRows: HebInvoiceRow[] = [];
+  const parsedRows: HyveeInvoiceRow[] = [];
   let currentInvoiceNumber = "";
   let currentInvoiceDate: string | null = null;
 
   lines.slice(headerIndex + 1).forEach((line, index) => {
     if (/vendor\s+name|check\s+number|invoice\s+number/i.test(line)) return;
 
-    const parsed = parseHebTextLine(
+    const parsed = parseHyveeTextLine(
       line,
       checkInfo,
       fileName,
@@ -429,7 +429,7 @@ function parseHebText(text: string, fileName: string, fileType: string, selected
   return finalizeParsedRows(parsedRows, checkInfo.checkAmount);
 }
 
-function parseHebWorksheet(rawRows: WorksheetRow[], fileName: string, selectedType: string) {
+function parseHyveeWorksheet(rawRows: WorksheetRow[], fileName: string, selectedType: string) {
   const fullText = rawRows.map((row) => row.map(clean).join(" ")).join("\n");
   const checkInfo = extractCheckInfoFromText(fullText);
 
@@ -447,7 +447,7 @@ function parseHebWorksheet(rawRows: WorksheetRow[], fileName: string, selectedTy
   });
 
   if (headerRowIndex === -1) {
-    throw new Error(`Could not find the HEB invoice table header in ${fileName}.`);
+    throw new Error(`Could not find the Hy-Vee invoice table header in ${fileName}.`);
   }
 
   const headers = rawRows[headerRowIndex];
@@ -465,7 +465,7 @@ function parseHebWorksheet(rawRows: WorksheetRow[], fileName: string, selectedTy
   }
 
   const fileType = getFileType(fileName);
-  const parsedRows: HebInvoiceRow[] = [];
+  const parsedRows: HyveeInvoiceRow[] = [];
   let currentInvoiceNumber = "";
   let currentInvoiceDate: string | null = null;
 
@@ -620,7 +620,7 @@ function fileToDataUrl(file: File) {
   });
 }
 
-async function parseHebFile(file: File, selectedType: string) {
+async function parseHyveeFile(file: File, selectedType: string) {
   const fileType = getFileType(file.name);
 
   if (fileType === "excel") {
@@ -637,42 +637,42 @@ async function parseHebFile(file: File, selectedType: string) {
       raw: false,
     });
 
-    return parseHebWorksheet(rawRows, file.name, selectedType);
+    return parseHyveeWorksheet(rawRows, file.name, selectedType);
   }
 
   if (fileType === "pdf") {
     const { pdf, text } = await extractTextFromPdf(file);
 
     try {
-      return parseHebText(text, file.name, fileType, selectedType);
+      return parseHyveeText(text, file.name, fileType, selectedType);
     } catch (error) {
       const ocrText = await ocrPdf(pdf);
       if (!ocrText.trim()) throw error;
-      return parseHebText(ocrText, file.name, fileType, selectedType);
+      return parseHyveeText(ocrText, file.name, fileType, selectedType);
     }
   }
 
   if (fileType === "image") {
-    return parseHebText(await ocrImage(file), file.name, fileType, selectedType);
+    return parseHyveeText(await ocrImage(file), file.name, fileType, selectedType);
   }
 
   throw new Error(`${file.name}: upload an Excel, CSV, PDF, or image file.`);
 }
 
-async function fetchAllHebRows() {
+async function fetchAllHyveeRows() {
   let from = 0;
-  let allRows: HebInvoiceRow[] = [];
+  let allRows: HyveeInvoiceRow[] = [];
 
   while (true) {
     const { data, error } = await supabase
-      .from("heb_invoices")
+      .from("hyvee_invoices")
       .select("*")
       .order("check_date", { ascending: false })
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
 
-    const batch = (data ?? []) as HebInvoiceRow[];
+    const batch = (data ?? []) as HyveeInvoiceRow[];
     allRows = [...allRows, ...batch];
 
     if (batch.length < PAGE_SIZE) break;
@@ -682,12 +682,12 @@ async function fetchAllHebRows() {
   return allRows;
 }
 
-export default function HebInvoicesView() {
+export default function HyveeInvoicesView() {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const [startupCache] = useState<HebInvoicesCache | null>(() =>
-    readBrowserCache<HebInvoicesCache>(HEB_INVOICES_CACHE_KEY)
+  const [startupCache] = useState<HyveeInvoicesCache | null>(() =>
+    readBrowserCache<HyveeInvoicesCache>(HYVEE_INVOICES_CACHE_KEY)
   );
-  const [rows, setRows] = useState<HebInvoiceRow[]>(() => startupCache?.rows || []);
+  const [rows, setRows] = useState<HyveeInvoiceRow[]>(() => startupCache?.rows || []);
   const [loading, setLoading] = useState(() => !startupCache);
   const [loadError, setLoadError] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -696,21 +696,21 @@ export default function HebInvoicesView() {
   const [search, setSearch] = useState("");
   const [monthFilter, setMonthFilter] = useState("All Months");
   const [typeFilter, setTypeFilter] = useState("All Types");
-  const [uploadType, setUploadType] = useState<string>(HEB_TYPE_OPTIONS[0]);
+  const [uploadType, setUploadType] = useState<string>(HYVEE_TYPE_OPTIONS[0]);
 
   const loadRows = async (hasCachedData = false) => {
     try {
       if (!hasCachedData) setLoading(true);
       setLoadError("");
-      const data = await fetchAllHebRows();
+      const data = await fetchAllHyveeRows();
       setRows(data);
-      writeBrowserCache<HebInvoicesCache>(HEB_INVOICES_CACHE_KEY, { rows: data });
+      writeBrowserCache<HyveeInvoicesCache>(HYVEE_INVOICES_CACHE_KEY, { rows: data });
     } catch (error: unknown) {
-      console.error("Failed to load heb_invoices:", error);
-      const message = getErrorMessage(error, "Failed to load HEB invoices.");
+      console.error("Failed to load hyvee_invoices:", error);
+      const message = getErrorMessage(error, "Failed to load Hy-Vee invoices.");
       setLoadError(
         message.includes("Could not find the table")
-          ? "Supabase table public.heb_invoices is not available yet."
+          ? "Supabase table public.hyvee_invoices is not available yet."
           : message
       );
       if (!hasCachedData) setRows([]);
@@ -728,7 +728,7 @@ export default function HebInvoicesView() {
   }, [startupCache]);
 
   const typeOptions = useMemo(() => {
-    const options = new Set<string>(HEB_TYPE_OPTIONS);
+    const options = new Set<string>(HYVEE_TYPE_OPTIONS);
 
     for (const row of rows) {
       if (clean(row.type)) options.add(clean(row.type));
@@ -807,7 +807,7 @@ export default function HebInvoicesView() {
         row.id === rowId ? { ...row, type } : row
       );
 
-      writeBrowserCache<HebInvoicesCache>(HEB_INVOICES_CACHE_KEY, {
+      writeBrowserCache<HyveeInvoicesCache>(HYVEE_INVOICES_CACHE_KEY, {
         rows: nextRows,
       });
 
@@ -815,7 +815,7 @@ export default function HebInvoicesView() {
     });
   };
 
-  const saveRowType = async (row: HebInvoiceRow, nextType: string) => {
+  const saveRowType = async (row: HyveeInvoiceRow, nextType: string) => {
     if (!row.id) return;
 
     const normalizedType = clean(nextType);
@@ -827,7 +827,7 @@ export default function HebInvoicesView() {
     updateTypeLocally(row.id, normalizedType);
 
     const { error } = await supabase
-      .from("heb_invoices")
+      .from("hyvee_invoices")
       .update({ type: normalizedType })
       .eq("id", row.id);
 
@@ -835,7 +835,7 @@ export default function HebInvoicesView() {
 
     if (error) {
       updateTypeLocally(row.id, currentType);
-      alert(getErrorMessage(error, "Failed to save HEB invoice type."));
+      alert(getErrorMessage(error, "Failed to save Hy-Vee invoice type."));
     }
   };
 
@@ -848,11 +848,11 @@ export default function HebInvoicesView() {
       let uploadedCount = 0;
 
       for (const file of files) {
-        const selectedType = clean(uploadType) || HEB_TYPE_OPTIONS[0];
-        const parsedRows = await parseHebFile(file, selectedType);
+        const selectedType = clean(uploadType) || HYVEE_TYPE_OPTIONS[0];
+        const parsedRows = await parseHyveeFile(file, selectedType);
 
         if (!parsedRows.length) {
-          alert(`No HEB invoice rows were parsed from ${file.name}.`);
+          alert(`No Hy-Vee invoice rows were parsed from ${file.name}.`);
           continue;
         }
 
@@ -862,13 +862,13 @@ export default function HebInvoicesView() {
 
         if (existingForFile) {
           const shouldReplace = window.confirm(
-            `HEB invoice data already exists from ${file.name}.\n\nDo you want to replace it?`
+            `Hy-Vee invoice data already exists from ${file.name}.\n\nDo you want to replace it?`
           );
 
           if (!shouldReplace) continue;
 
           const { error: deleteError } = await supabase
-            .from("heb_invoices")
+            .from("hyvee_invoices")
             .delete()
             .eq("source_file_name", file.name);
 
@@ -878,7 +878,7 @@ export default function HebInvoicesView() {
         for (let index = 0; index < parsedRows.length; index += 1000) {
           const chunk = parsedRows.slice(index, index + 1000);
           const { error: insertError } = await supabase
-            .from("heb_invoices")
+            .from("hyvee_invoices")
             .insert(chunk);
 
           if (insertError) throw insertError;
@@ -891,10 +891,10 @@ export default function HebInvoicesView() {
       setShowUploadBox(false);
 
       if (uploadedCount) {
-        alert(`${uploadedCount.toLocaleString()} HEB invoice rows uploaded successfully.`);
+        alert(`${uploadedCount.toLocaleString()} Hy-Vee invoice rows uploaded successfully.`);
       }
     } catch (error: unknown) {
-      alert(getErrorMessage(error, "HEB invoice upload failed."));
+      alert(getErrorMessage(error, "Hy-Vee invoice upload failed."));
     } finally {
       setUploading(false);
       if (inputRef.current) inputRef.current.value = "";
@@ -926,13 +926,13 @@ export default function HebInvoicesView() {
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "HEB Invoices");
-    XLSX.writeFile(workbook, "heb_invoices.xlsx");
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Hy-Vee Invoices");
+    XLSX.writeFile(workbook, "hyvee_invoices.xlsx");
   };
 
   return (
     <div className="space-y-6">
-      <datalist id="heb-invoice-type-options">
+      <datalist id="hyvee-invoice-type-options">
         {typeOptions.map((option) => (
           <option key={option} value={option} />
         ))}
@@ -942,9 +942,9 @@ export default function HebInvoicesView() {
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 className="text-xl font-bold text-slate-900">HEB Invoices</h2>
+              <h2 className="text-xl font-bold text-slate-900">Hy-Vee Invoices</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Upload HEB remittance files and review rows from the invoice table.
+                Upload Hy-Vee remittance files and review rows from the invoice table.
               </p>
             </div>
 
@@ -1024,16 +1024,16 @@ export default function HebInvoicesView() {
                   </label>
                   <Input
                     value={uploadType}
-                    list="heb-invoice-type-options"
+                    list="hyvee-invoice-type-options"
                     onChange={(event) => setUploadType(event.target.value)}
-                    placeholder="HEB EDLC Allowances"
+                    placeholder="Hy-Vee EDLC Allowances"
                     className="rounded-xl bg-white"
                   />
                 </div>
 
                 <div>
                   <label className="mb-2 block text-sm font-medium text-slate-700">
-                    HEB Invoice File
+                    Hy-Vee Invoice File
                   </label>
                   <input
                     ref={inputRef}
@@ -1069,7 +1069,7 @@ export default function HebInvoicesView() {
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         {loading ? (
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            Loading HEB invoices...
+            Loading Hy-Vee invoices...
           </div>
         ) : loadError ? (
           <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-6 text-sm text-amber-800">
@@ -1077,7 +1077,7 @@ export default function HebInvoicesView() {
           </div>
         ) : filteredRows.length === 0 ? (
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            No HEB invoice rows found.
+            No Hy-Vee invoice rows found.
           </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-200">
@@ -1112,7 +1112,7 @@ export default function HebInvoicesView() {
                       <td className="min-w-[240px] whitespace-nowrap px-4 py-3 text-slate-700">
                         <Input
                           defaultValue={row.type}
-                          list="heb-invoice-type-options"
+                          list="hyvee-invoice-type-options"
                           onBlur={(event) =>
                             void saveRowType(row, event.currentTarget.value)
                           }

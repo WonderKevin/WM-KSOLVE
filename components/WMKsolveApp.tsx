@@ -40,7 +40,7 @@ import HomeView from "@/components/Views/HomeView";
 import TargetView from "@/components/Views/TargetView";
 import TargetBrokerCommissionView from "@/components/Views/TargetBrokerCommissionView";
 import UnfiInvoicesView from "@/components/Views/UnfiInvoicesView";
-import HebInvoicesView from "@/components/Views/HebInvoicesView";
+import HyveeInvoicesView from "@/components/Views/HyveeInvoicesView";
 import WegmansView from "@/components/Views/WegmansView";
 
 const APP_NAME = "WM Brokers & Deductions";
@@ -63,7 +63,7 @@ type Permissions = {
   can_view_database_ksolve_invoices: boolean;
   can_view_database_target_invoices?: boolean;
   can_view_database_unfi_invoices?: boolean;
-  can_view_database_heb_invoices?: boolean;
+  can_view_database_hyvee_invoices?: boolean;
   can_view_database_wegmans?: boolean;
   can_view_database_kehe_velocity: boolean;
   can_view_database_tony_velocity?: boolean;
@@ -246,7 +246,7 @@ export default function WMKsolveApp() {
           can_view_database_ksolve_invoices: isAdmin,
           can_view_database_target_invoices: isAdmin,
           can_view_database_unfi_invoices: isAdmin,
-          can_view_database_heb_invoices: isAdmin,
+          can_view_database_hyvee_invoices: isAdmin,
           can_view_database_wegmans: isAdmin,
           can_view_database_kehe_velocity: isAdmin,
           can_view_database_tony_velocity: isAdmin,
@@ -378,9 +378,9 @@ export default function WMKsolveApp() {
       userEmail.toLowerCase() === "kevin@wondermonday.com"
         ? { label: "UNFI Invoices", key: "database-unfi-invoices" }
         : null,
-      permissions.can_view_database_heb_invoices ||
+      permissions.can_view_database_hyvee_invoices ||
       userEmail.toLowerCase() === "kevin@wondermonday.com"
-        ? { label: "HEB Invoices", key: "database-heb-invoices" }
+        ? { label: "Hy-Vee Invoices", key: "database-hyvee-invoices" }
         : null,
       permissions.can_view_database_wegmans ||
       userEmail.toLowerCase() === "kevin@wondermonday.com"
@@ -482,8 +482,8 @@ export default function WMKsolveApp() {
         return <TargetView />;
       case "database-unfi-invoices":
         return <UnfiInvoicesView />;
-      case "database-heb-invoices":
-        return <HebInvoicesView />;
+      case "database-hyvee-invoices":
+        return <HyveeInvoicesView />;
       case "database-wegmans":
         return <WegmansView />;
       case "database-kehe-velocity":

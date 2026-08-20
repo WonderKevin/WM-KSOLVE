@@ -25,7 +25,7 @@ type UserPermissionRow = {
   can_view_database_ksolve_invoices: boolean;
   can_view_database_target_invoices: boolean;
   can_view_database_unfi_invoices: boolean;
-  can_view_database_heb_invoices: boolean;
+  can_view_database_hyvee_invoices: boolean;
   can_view_database_wegmans: boolean;
   can_view_database_kehe_velocity: boolean;
   can_view_database_tony_velocity: boolean;
@@ -77,7 +77,7 @@ const PERMISSION_GROUPS: Array<{
       "can_view_database_ksolve_invoices",
       "can_view_database_target_invoices",
       "can_view_database_unfi_invoices",
-      "can_view_database_heb_invoices",
+      "can_view_database_hyvee_invoices",
       "can_view_database_wegmans",
       "can_view_database_kehe_velocity",
       "can_view_database_tony_velocity",
@@ -113,7 +113,7 @@ const LABEL_MAP: Record<string, string> = {
   can_view_database_ksolve_invoices: "Ksolve Invoices",
   can_view_database_target_invoices: "Target Invoices",
   can_view_database_unfi_invoices: "UNFI Invoices",
-  can_view_database_heb_invoices: "HEB Invoices",
+  can_view_database_hyvee_invoices: "Hy-Vee Invoices",
   can_view_database_wegmans: "Wegmans",
   can_view_database_kehe_velocity: "KeHe Velocity",
   can_view_database_tony_velocity: "Tony's Velocity",
@@ -144,7 +144,7 @@ const DEFAULT_PERMISSION_VALUES = {
   can_view_database_ksolve_invoices: false,
   can_view_database_target_invoices: false,
   can_view_database_unfi_invoices: false,
-  can_view_database_heb_invoices: false,
+  can_view_database_hyvee_invoices: false,
   can_view_database_wegmans: false,
   can_view_database_kehe_velocity: false,
   can_view_database_tony_velocity: false,
