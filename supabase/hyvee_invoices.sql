@@ -15,9 +15,13 @@ create table if not exists public.hyvee_invoices (
   explanation text not null default '',
   source_file_name text not null default '',
   source_file_type text not null default '',
+  source_file_path text,
   line_number integer not null default 0,
   created_at timestamptz not null default now()
 );
+
+alter table public.hyvee_invoices
+  add column if not exists source_file_path text;
 
 create index if not exists hyvee_invoices_month_idx
   on public.hyvee_invoices (month);
@@ -87,6 +91,7 @@ begin
       explanation,
       source_file_name,
       source_file_type,
+      source_file_path,
       line_number,
       created_at
     )
@@ -110,6 +115,7 @@ begin
       old.explanation,
       old.source_file_name,
       old.source_file_type,
+      null,
       old.line_number,
       old.created_at
     from public.heb_invoices old

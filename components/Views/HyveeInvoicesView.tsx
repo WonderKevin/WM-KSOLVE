@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { Download, Search, Upload, X } from "lucide-react";
+import { Download, FileImage, Search, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +28,7 @@ type HyveeInvoiceRow = {
   explanation: string;
   source_file_name: string;
   source_file_type: string;
+  source_file_path?: string | null;
   line_number: number;
   created_at?: string;
 };
@@ -74,6 +75,7 @@ type ParsedCheckInfo = {
 };
 
 const PAGE_SIZE = 1000;
+const DOCUMENT_BUCKET = "ksolve-documents";
 const HYVEE_INVOICES_CACHE_KEY = "wmksolve:report-cache:hyvee-invoices";
 const HYVEE_TYPE_OPTIONS = [
   "Hy-Vee EDLC Allowances",
@@ -103,6 +105,13 @@ function clean(value: unknown) {
 
 function normalizeHeader(value: unknown) {
   return clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeInvoiceNumber(value: unknown) {
+  const text = clean(value);
+  if (!/^\d+$/.test(text)) return text;
+
+  return text.replace(/^0+(?=\d)/, "");
 }
 
 function getHeaderIndex(headers: WorksheetRow, names: string[]) {
@@ -285,6 +294,31 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function sanitizeStorageSegment(value: string) {
+  return clean(value)
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
+
+async function uploadHyveeSourceFile(file: File) {
+  const randomId =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const storagePath = `hyvee-invoices/${new Date().toISOString().slice(0, 10)}/${randomId}-${sanitizeStorageSegment(file.name) || "source-file"}`;
+  const { error } = await supabase.storage
+    .from(DOCUMENT_BUCKET)
+    .upload(storagePath, file, {
+      cacheControl: "3600",
+      contentType: file.type || undefined,
+      upsert: false,
+    });
+
+  if (error) throw error;
+  return storagePath;
+}
+
 function extractCheckInfoFromText(text: string): ParsedCheckInfo {
   const normalized = text.replace(/\u00a0/g, " ");
   const checkNumber =
@@ -316,6 +350,27 @@ function amountTokenIndexes(tokens: string[]) {
   }, []);
 }
 
+function findDateMatchInLine(line: string) {
+  const match = line.match(
+    /(^|\s)(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})(?=\s|$|[^\d])/
+  );
+
+  if (!match || match.index === undefined) return null;
+
+  const rawDate = match[2];
+  const parsedDate = parseDate(rawDate);
+  if (!parsedDate) return null;
+
+  const startIndex = match.index + match[1].length;
+
+  return {
+    rawDate,
+    parsedDate,
+    beforeDate: clean(line.slice(0, startIndex)),
+    afterDate: clean(line.slice(startIndex + rawDate.length)),
+  };
+}
+
 function parseHyveeTextLine(
   line: string,
   checkInfo: ParsedCheckInfo,
@@ -326,18 +381,39 @@ function parseHyveeTextLine(
   fallbackInvoiceNumber: string,
   fallbackInvoiceDate: string | null
 ) {
-  const tokens = clean(line).split(/\s+/).filter(Boolean);
+  const cleanedLine = clean(line);
+  const normalizedLine = normalizeHeader(cleanedLine);
+
+  if (!cleanedLine) return null;
+  if (/amount\s*=\s*amount\s*bsr/i.test(cleanedLine)) return null;
+  if (
+    normalizedLine.includes("grossamount") ||
+    normalizedLine.includes("discountamount") ||
+    normalizedLine.includes("adjustmentamount")
+  ) {
+    return null;
+  }
+
+  const tokens = cleanedLine.split(/\s+/).filter(Boolean);
   if (!tokens.length) return null;
 
-  const dateIndex = tokens.findIndex((token) => parseDate(token));
   let invoiceNumber = "";
   let invoiceDate: string | null = null;
   let valueTokens = tokens;
+  const lineDateMatch = findDateMatchInLine(cleanedLine);
 
-  if (dateIndex >= 0) {
-    invoiceNumber = tokens.slice(0, dateIndex).join(" ");
-    invoiceDate = parseDate(tokens[dateIndex]);
-    valueTokens = tokens.slice(dateIndex + 1);
+  if (lineDateMatch) {
+    invoiceNumber = normalizeInvoiceNumber(lineDateMatch.beforeDate);
+    invoiceDate = lineDateMatch.parsedDate;
+    valueTokens = lineDateMatch.afterDate.split(/\s+/).filter(Boolean);
+  } else {
+    const dateIndex = tokens.findIndex((token) => parseDate(token));
+
+    if (dateIndex >= 0) {
+      invoiceNumber = normalizeInvoiceNumber(tokens.slice(0, dateIndex).join(" "));
+      invoiceDate = parseDate(tokens[dateIndex]);
+      valueTokens = tokens.slice(dateIndex + 1);
+    }
   }
 
   const indexes = amountTokenIndexes(valueTokens);
@@ -402,9 +478,13 @@ function parseHyveeTextLine(
 }
 
 function finalizeParsedRows(rows: HyveeInvoiceRow[], checkAmount: number | null) {
+  const computedRowTotal = round2(
+    rows.reduce((sum, row) => sum + Number(row.net_amount || 0), 0)
+  );
   const computedCheckAmount =
-    checkAmount ??
-    round2(rows.reduce((sum, row) => sum + Number(row.net_amount || 0), 0));
+    checkAmount == null || Math.abs(Math.abs(checkAmount) - Math.abs(computedRowTotal)) > 0.5
+      ? computedRowTotal
+      : checkAmount;
 
   return rows.map((row) => ({
     ...row,
@@ -418,6 +498,10 @@ function sanitizeHyveeRowsForInsert(rows: HyveeInvoiceRow[]) {
     check_date: parseDate(row.check_date),
     invoice_date: parseDate(row.invoice_date),
   }));
+}
+
+function isNoiseRow(row: HyveeInvoiceRow) {
+  return /amount\s*=\s*amount\s*bsr/i.test(row.explanation || "");
 }
 
 function parseHyveeText(text: string, fileName: string, fileType: string, selectedType: string) {
@@ -517,7 +601,7 @@ function parseHyveeWorksheet(rawRows: WorksheetRow[], fileName: string, selected
   rawRows.slice(headerRowIndex + 1).forEach((row, index) => {
     if (!row.some((cell) => clean(cell))) return;
 
-    const invoiceNumber = clean(getValue(row, invoiceNumberIndex));
+    const invoiceNumber = normalizeInvoiceNumber(getValue(row, invoiceNumberIndex));
     const invoiceDate = parseDate(getValue(row, invoiceDateIndex));
     const explanation = clean(getValue(row, explanationIndex));
     const memoCode = clean(getValue(row, memoCodeIndex));
@@ -732,7 +816,9 @@ export default function HyveeInvoicesView() {
   const [startupCache] = useState<HyveeInvoicesCache | null>(() =>
     readBrowserCache<HyveeInvoicesCache>(HYVEE_INVOICES_CACHE_KEY)
   );
-  const [rows, setRows] = useState<HyveeInvoiceRow[]>(() => startupCache?.rows || []);
+  const [rows, setRows] = useState<HyveeInvoiceRow[]>(() =>
+    (startupCache?.rows || []).filter((row) => !isNoiseRow(row))
+  );
   const [loading, setLoading] = useState(() => !startupCache);
   const [loadError, setLoadError] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -741,13 +827,12 @@ export default function HyveeInvoicesView() {
   const [search, setSearch] = useState("");
   const [monthFilter, setMonthFilter] = useState("All Months");
   const [typeFilter, setTypeFilter] = useState("All Types");
-  const [uploadType, setUploadType] = useState<string>(HYVEE_TYPE_OPTIONS[0]);
 
   const loadRows = async (hasCachedData = false) => {
     try {
       if (!hasCachedData) setLoading(true);
       setLoadError("");
-      const data = await fetchAllHyveeRows();
+      const data = (await fetchAllHyveeRows()).filter((row) => !isNoiseRow(row));
       setRows(data);
       writeBrowserCache<HyveeInvoicesCache>(HYVEE_INVOICES_CACHE_KEY, { rows: data });
     } catch (error: unknown) {
@@ -893,12 +978,12 @@ export default function HyveeInvoicesView() {
       let uploadedCount = 0;
 
       for (const file of files) {
-        const selectedType = clean(uploadType) || HYVEE_TYPE_OPTIONS[0];
-        const parsedRows = sanitizeHyveeRowsForInsert(
+        const selectedType = HYVEE_TYPE_OPTIONS[0];
+        const baseParsedRows = sanitizeHyveeRowsForInsert(
           await parseHyveeFile(file, selectedType)
         );
 
-        if (!parsedRows.length) {
+        if (!baseParsedRows.length) {
           alert(`No Hy-Vee invoice rows were parsed from ${file.name}.`);
           continue;
         }
@@ -921,6 +1006,12 @@ export default function HyveeInvoicesView() {
 
           if (deleteError) throw deleteError;
         }
+
+        const sourceFilePath = await uploadHyveeSourceFile(file);
+        const parsedRows = baseParsedRows.map((row) => ({
+          ...row,
+          source_file_path: sourceFilePath,
+        }));
 
         for (let index = 0; index < parsedRows.length; index += 1000) {
           const chunk = parsedRows.slice(index, index + 1000);
@@ -965,7 +1056,6 @@ export default function HyveeInvoicesView() {
       "Gross Amount": row.gross_amount,
       "Discount Amount": row.discount_amount,
       "Adjustment Amount": row.adjustment_amount,
-      "**": row.memo_code,
       "Net Amount": row.net_amount,
       Explanation: row.explanation,
       "Source File Name": row.source_file_name,
@@ -977,14 +1067,33 @@ export default function HyveeInvoicesView() {
     XLSX.writeFile(workbook, "hyvee_invoices.xlsx");
   };
 
+  const downloadSourceFile = async (row: HyveeInvoiceRow) => {
+    if (!row.source_file_path) {
+      alert("No downloadable source file is saved for this row yet.");
+      return;
+    }
+
+    const { data, error } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .download(row.source_file_path);
+
+    if (error) {
+      alert(getErrorMessage(error, "Failed to download source file."));
+      return;
+    }
+
+    const url = URL.createObjectURL(data);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = row.source_file_name || "hyvee-source-file";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-6">
-      <datalist id="hyvee-invoice-type-options">
-        {typeOptions.map((option) => (
-          <option key={option} value={option} />
-        ))}
-      </datalist>
-
       <div className="sticky top-0 z-30 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1064,34 +1173,19 @@ export default function HyveeInvoicesView() {
 
           {showUploadBox && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="grid gap-4 md:grid-cols-[minmax(240px,1fr)_minmax(280px,2fr)]">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700">
-                    Type
-                  </label>
-                  <Input
-                    value={uploadType}
-                    list="hyvee-invoice-type-options"
-                    onChange={(event) => setUploadType(event.target.value)}
-                    placeholder="Hy-Vee EDLC Allowances"
-                    className="rounded-xl bg-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700">
-                    Hy-Vee Invoice File
-                  </label>
-                  <input
-                    ref={inputRef}
-                    type="file"
-                    multiple
-                    accept=".csv,.xlsx,.xls,.pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff"
-                    onChange={(event) => void handleUpload(event.target.files)}
-                    disabled={uploading}
-                    className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  />
-                </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700">
+                  Hy-Vee Invoice File
+                </label>
+                <input
+                  ref={inputRef}
+                  type="file"
+                  multiple
+                  accept=".csv,.xlsx,.xls,.pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff"
+                  onChange={(event) => void handleUpload(event.target.files)}
+                  disabled={uploading}
+                  className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
               </div>
             </div>
           )}
@@ -1142,10 +1236,9 @@ export default function HyveeInvoicesView() {
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Gross Amount</th>
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Discount Amount</th>
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Adjustment Amount</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">**</th>
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Net Amount</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Explanation</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Source</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-center font-semibold text-slate-700">Reference</th>
                   </tr>
                 </thead>
 
@@ -1157,15 +1250,18 @@ export default function HyveeInvoicesView() {
                     >
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.month}</td>
                       <td className="min-w-[240px] whitespace-nowrap px-4 py-3 text-slate-700">
-                        <Input
-                          defaultValue={row.type}
-                          list="hyvee-invoice-type-options"
-                          onBlur={(event) =>
-                            void saveRowType(row, event.currentTarget.value)
-                          }
+                        <select
+                          value={row.type}
+                          onChange={(event) => void saveRowType(row, event.currentTarget.value)}
                           disabled={!row.id || savingTypeId === row.id}
-                          className="h-9 rounded-xl bg-white"
-                        />
+                          className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                        >
+                          {typeOptions.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.check_number}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDisplayDate(row.check_date)}</td>
@@ -1175,10 +1271,28 @@ export default function HyveeInvoicesView() {
                       <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatCurrency(row.gross_amount)}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatCurrency(row.discount_amount)}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatCurrency(row.adjustment_amount)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.memo_code}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{formatCurrency(row.net_amount)}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.explanation}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-500">{row.source_file_name}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-center text-slate-500">
+                        <button
+                          type="button"
+                          onClick={() => void downloadSourceFile(row)}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+                          title={
+                            row.source_file_path
+                              ? `Download ${row.source_file_name}`
+                              : "Source file not saved"
+                          }
+                          aria-label={
+                            row.source_file_path
+                              ? `Download ${row.source_file_name}`
+                              : "Source file not saved"
+                          }
+                          disabled={!row.source_file_path}
+                        >
+                          <FileImage className="h-4 w-4" />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
