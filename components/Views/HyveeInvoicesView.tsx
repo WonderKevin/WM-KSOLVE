@@ -78,6 +78,7 @@ const PAGE_SIZE = 1000;
 const DOCUMENT_BUCKET = "ksolve-documents";
 const HYVEE_INVOICES_CACHE_KEY = "wmksolve:report-cache:hyvee-invoices";
 const HYVEE_TYPE_OPTIONS = [
+  "Hy-Vee WM Invoice",
   "Hy-Vee EDLC Allowances",
   "Hy-Vee Ad Fees",
   "Hy-Vee Distribution (MCB) Allowances",
@@ -90,6 +91,7 @@ const HYVEE_TYPE_OPTIONS = [
   "Hy-Vee Display Fees",
   "Hy-Vee New Item Setup Fee",
 ] as const;
+const HYVEE_DEFAULT_TYPE = "Hy-Vee EDLC Allowances";
 
 type HyveeInvoicesCache = {
   rows: HyveeInvoiceRow[];
@@ -978,7 +980,7 @@ export default function HyveeInvoicesView() {
       let uploadedCount = 0;
 
       for (const file of files) {
-        const selectedType = HYVEE_TYPE_OPTIONS[0];
+        const selectedType = HYVEE_DEFAULT_TYPE;
         const baseParsedRows = sanitizeHyveeRowsForInsert(
           await parseHyveeFile(file, selectedType)
         );

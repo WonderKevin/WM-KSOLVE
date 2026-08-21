@@ -41,6 +41,7 @@ import TargetView from "@/components/Views/TargetView";
 import TargetBrokerCommissionView from "@/components/Views/TargetBrokerCommissionView";
 import UnfiInvoicesView from "@/components/Views/UnfiInvoicesView";
 import HyveeInvoicesView from "@/components/Views/HyveeInvoicesView";
+import HyveeBrokerCommissionView from "@/components/Views/HyveeBrokerCommissionView";
 import WegmansView from "@/components/Views/WegmansView";
 
 const APP_NAME = "WM Brokers & Deductions";
@@ -313,11 +314,22 @@ export default function WMKsolveApp() {
       });
     }
 
+    const canViewHyveeBrokerCommission =
+      permissions.can_view_target_broker_commission ||
+      permissions.can_view_database_hyvee_invoices ||
+      userEmail.toLowerCase() === "kevin@wondermonday.com";
+
     const brokerChildren = [
       permissions.can_view_target_broker_commission
         ? {
             label: "Target Broker Commission",
             key: "target-broker-commission",
+          }
+        : null,
+      canViewHyveeBrokerCommission
+        ? {
+            label: "Hy-Vee Broker Commission",
+            key: "hyvee-broker-commission",
           }
         : null,
       permissions.can_view_broker_commission_summary
@@ -459,6 +471,8 @@ export default function WMKsolveApp() {
         return <TonyDashboardView />;
       case "target-broker-commission":
         return <TargetBrokerCommissionView />;
+      case "hyvee-broker-commission":
+        return <HyveeBrokerCommissionView />;
       case "broker-commission-summary":
         return <BrokerCommissionSummaryView />;
       case "broker-commission-data-sets":
