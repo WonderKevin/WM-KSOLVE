@@ -153,6 +153,23 @@ function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+function formatValidIsoDate(year: number, month: number, day: number) {
+  if (year < 2000 || year > 2099) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function parseDate(value: unknown) {
   if (value === null || value === undefined || value === "") return null;
 
@@ -160,37 +177,57 @@ function parseDate(value: unknown) {
     const parsed = XLSX.SSF.parse_date_code(value);
     if (!parsed) return null;
 
-    return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(
-      parsed.d
-    ).padStart(2, "0")}`;
+    return formatValidIsoDate(parsed.y, parsed.m, parsed.d);
   }
 
   const text = clean(value);
   if (!text || /^-+$/.test(text)) return null;
 
-  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\b|T)/);
   if (isoMatch) {
-    return `${isoMatch[1]}-${isoMatch[2].padStart(2, "0")}-${isoMatch[3].padStart(
-      2,
-      "0"
-    )}`;
+    return formatValidIsoDate(
+      Number(isoMatch[1]),
+      Number(isoMatch[2]),
+      Number(isoMatch[3])
+    );
   }
 
   const slashMatch = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/);
   if (slashMatch) {
     const year =
-      slashMatch[3].length === 2 ? `20${slashMatch[3]}` : slashMatch[3];
+      slashMatch[3].length === 2 ? Number(`20${slashMatch[3]}`) : Number(slashMatch[3]);
 
-    return `${year}-${slashMatch[1].padStart(2, "0")}-${slashMatch[2].padStart(
-      2,
-      "0"
-    )}`;
+    return formatValidIsoDate(year, Number(slashMatch[1]), Number(slashMatch[2]));
   }
 
-  const date = new Date(text);
-  if (Number.isNaN(date.getTime())) return null;
+  const monthNameMatch = text.match(
+    /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2}),?\s+(\d{2}|\d{4})$/i
+  );
+  if (monthNameMatch) {
+    const monthNames = [
+      "jan",
+      "feb",
+      "mar",
+      "apr",
+      "may",
+      "jun",
+      "jul",
+      "aug",
+      "sep",
+      "oct",
+      "nov",
+      "dec",
+    ];
+    const month = monthNames.indexOf(monthNameMatch[1].slice(0, 3).toLowerCase()) + 1;
+    const year =
+      monthNameMatch[3].length === 2
+        ? Number(`20${monthNameMatch[3]}`)
+        : Number(monthNameMatch[3]);
 
-  return date.toISOString().slice(0, 10);
+    return formatValidIsoDate(year, month, Number(monthNameMatch[2]));
+  }
+
+  return null;
 }
 
 function monthNameFromDate(value: string | null | undefined) {
@@ -372,6 +409,14 @@ function finalizeParsedRows(rows: HyveeInvoiceRow[], checkAmount: number | null)
   return rows.map((row) => ({
     ...row,
     check_amount: computedCheckAmount,
+  }));
+}
+
+function sanitizeHyveeRowsForInsert(rows: HyveeInvoiceRow[]) {
+  return rows.map((row) => ({
+    ...row,
+    check_date: parseDate(row.check_date),
+    invoice_date: parseDate(row.invoice_date),
   }));
 }
 
@@ -849,7 +894,9 @@ export default function HyveeInvoicesView() {
 
       for (const file of files) {
         const selectedType = clean(uploadType) || HYVEE_TYPE_OPTIONS[0];
-        const parsedRows = await parseHyveeFile(file, selectedType);
+        const parsedRows = sanitizeHyveeRowsForInsert(
+          await parseHyveeFile(file, selectedType)
+        );
 
         if (!parsedRows.length) {
           alert(`No Hy-Vee invoice rows were parsed from ${file.name}.`);

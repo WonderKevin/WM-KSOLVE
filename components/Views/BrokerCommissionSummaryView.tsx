@@ -76,12 +76,20 @@ type BrokerCommissionStatusRow = {
   status: BrokerageStatus | null;
 };
 
+type TransferAllocationRow = {
+  allocation_key: string | null;
+  month: string | null;
+  target_retailer: string | null;
+  invoice_numbers: string[] | null;
+};
+
 const BROKER_SUMMARY_CACHE_KEY = "wmksolve:report-cache:broker-commission-summary:v3";
 
 type BrokerSummaryCache = {
   rows: DatasetRow[];
   velocityRows: VelocityRow[];
   monthStatuses: Record<string, BrokerageStatus>;
+  transferAllocations: TransferAllocationMap;
 };
 
 type DetailLine = {
@@ -146,6 +154,20 @@ const STATUS_OPTIONS: Array<{ value: BrokerageStatus; label: string }> = [
   { value: "Invoice Confirmed", label: "Invoice Confirmed" },
   { value: "Bill Paid", label: "Bill Paid" },
 ];
+
+function readLegacyTransferAllocations() {
+  if (typeof window === "undefined") return {};
+
+  try {
+    const saved = window.localStorage.getItem(TRANSFER_ALLOCATIONS_STORAGE_KEY);
+    if (!saved) return {};
+
+    const parsed = JSON.parse(saved) as TransferAllocationMap;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -667,6 +689,93 @@ async function fetchBrokerCommissionStatuses(): Promise<BrokerCommissionStatusRo
   return (data ?? []) as BrokerCommissionStatusRow[];
 }
 
+async function fetchBrokerCommissionTransferAllocations(): Promise<TransferAllocationRow[]> {
+  const { data, error } = await supabase
+    .from("broker_commission_transfer_allocations")
+    .select("allocation_key, month, target_retailer, invoice_numbers");
+
+  if (error) throw error;
+
+  return (data ?? []) as TransferAllocationRow[];
+}
+
+function transferAllocationRowsToMap(rows: TransferAllocationRow[]) {
+  const result: TransferAllocationMap = {};
+
+  for (const row of rows) {
+    const key =
+      row.allocation_key ||
+      (row.month && row.target_retailer
+        ? `${row.month}__${row.target_retailer}`
+        : "");
+
+    if (!key) continue;
+
+    const invoices = Array.isArray(row.invoice_numbers)
+      ? row.invoice_numbers.map(normalizeInvoice).filter(Boolean)
+      : [];
+
+    if (invoices.length) result[key] = Array.from(new Set(invoices));
+  }
+
+  return result;
+}
+
+async function saveBrokerCommissionTransferAllocation({
+  key,
+  month,
+  targetRetailer,
+  invoiceNumbers,
+}: {
+  key: string;
+  month: string;
+  targetRetailer: Exclude<RetailerName, "">;
+  invoiceNumbers: string[];
+}) {
+  const normalizedInvoices = Array.from(
+    new Set(invoiceNumbers.map(normalizeInvoice).filter(Boolean))
+  );
+
+  if (!normalizedInvoices.length) {
+    const { error } = await supabase
+      .from("broker_commission_transfer_allocations")
+      .delete()
+      .eq("allocation_key", key);
+
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await supabase.from("broker_commission_transfer_allocations").upsert(
+    {
+      allocation_key: key,
+      month,
+      target_retailer: targetRetailer,
+      invoice_numbers: normalizedInvoices,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "allocation_key" }
+  );
+
+  if (error) throw error;
+}
+
+async function syncBrokerCommissionTransferAllocations(map: TransferAllocationMap) {
+  for (const [key, invoiceNumbers] of Object.entries(map)) {
+    const [month, ...retailerParts] = key.split("__");
+    const targetRetailer = retailerParts.join("__") as Exclude<RetailerName, "">;
+
+    if (!month || !targetRetailer || !invoiceNumbers.length) continue;
+
+    await saveBrokerCommissionTransferAllocation({
+      key,
+      month,
+      targetRetailer,
+      invoiceNumbers,
+    });
+  }
+}
+
 export default function BrokerCommissionSummaryView() {
   const [startupCache] = useState<BrokerSummaryCache | null>(() =>
     readBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY)
@@ -695,17 +804,11 @@ export default function BrokerCommissionSummaryView() {
   const [expandedInvoiceRows, setExpandedInvoiceRows] = useState<
     Record<string, boolean>
   >({});
+  const [startupTransferAllocations] = useState<TransferAllocationMap>(() => {
+    return startupCache?.transferAllocations || readLegacyTransferAllocations();
+  });
   const [transferAllocations, setTransferAllocations] = useState<TransferAllocationMap>(() => {
-    if (typeof window === "undefined") return {};
-
-    try {
-      const saved = window.localStorage.getItem(TRANSFER_ALLOCATIONS_STORAGE_KEY);
-      if (!saved) return {};
-      const parsed = JSON.parse(saved) as TransferAllocationMap;
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
-    }
+    return startupTransferAllocations;
   });
   const [allocationModal, setAllocationModal] = useState<TransferAlert | null>(
     null
@@ -718,17 +821,6 @@ export default function BrokerCommissionSummaryView() {
   const [savingInvoiceRetailerKey, setSavingInvoiceRetailerKey] = useState<string | null>(
     null
   );
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        TRANSFER_ALLOCATIONS_STORAGE_KEY,
-        JSON.stringify(transferAllocations),
-      );
-    } catch {
-      // ignore localStorage write errors
-    }
-  }, [transferAllocations]);
 
   const load = useCallback(async (isManualRefresh = false, hasCachedData = false) => {
     if (isManualRefresh || hasCachedData) {
@@ -754,6 +846,9 @@ export default function BrokerCommissionSummaryView() {
 
     let statusData: BrokerCommissionStatusRow[] = [];
     let statusError: unknown = null;
+
+    let transferAllocationData: TransferAllocationRow[] = [];
+    let transferAllocationError: unknown = null;
 
     try {
       [
@@ -814,9 +909,22 @@ export default function BrokerCommissionSummaryView() {
     }
 
     try {
-      statusData = await fetchBrokerCommissionStatuses();
-    } catch (error) {
-      statusError = error;
+      [statusData, transferAllocationData] = await Promise.all([
+        fetchBrokerCommissionStatuses(),
+        fetchBrokerCommissionTransferAllocations(),
+      ]);
+    } catch {
+      try {
+        statusData = await fetchBrokerCommissionStatuses();
+      } catch (statusLoadError) {
+        statusError = statusLoadError;
+      }
+
+      try {
+        transferAllocationData = await fetchBrokerCommissionTransferAllocations();
+      } catch (allocationLoadError) {
+        transferAllocationError = allocationLoadError;
+      }
     }
 
     if (datasetError) console.error("Failed to load datasets:", datasetError);
@@ -825,6 +933,12 @@ export default function BrokerCommissionSummaryView() {
     if (invoiceError) console.error("Failed to load invoices:", invoiceError);
     if (velocityError) console.error("Failed to load kehe velocity:", velocityError);
     if (statusError) console.error("Failed to load broker commission statuses:", statusError);
+    if (transferAllocationError) {
+      console.error(
+        "Failed to load broker commission transfer allocations:",
+        transferAllocationError
+      );
+    }
 
     const overrides = new Map<string, string>(
       overrideData.map((r) => [r.dataset_id, r.retailer])
@@ -904,14 +1018,38 @@ export default function BrokerCommissionSummaryView() {
         .filter((row) => row.month && row.status)
         .map((row) => [row.month as string, row.status as BrokerageStatus])
     );
+    let nextTransferAllocations = startupTransferAllocations;
+
+    if (!transferAllocationError) {
+      const sharedTransferAllocations = transferAllocationRowsToMap(transferAllocationData);
+      const hasSharedAllocations = Object.keys(sharedTransferAllocations).length > 0;
+      const hasStartupAllocations = Object.keys(startupTransferAllocations).length > 0;
+
+      nextTransferAllocations = hasSharedAllocations
+        ? sharedTransferAllocations
+        : startupTransferAllocations;
+
+      if (!hasSharedAllocations && hasStartupAllocations) {
+        try {
+          await syncBrokerCommissionTransferAllocations(startupTransferAllocations);
+        } catch (syncError) {
+          console.error(
+            "Failed to seed shared broker transfer allocations:",
+            syncError
+          );
+        }
+      }
+    }
 
     setRows(hydratedRows);
     setVelocityRows(normalizedVelocityRows);
     setMonthStatuses(nextMonthStatuses);
+    setTransferAllocations(nextTransferAllocations);
     writeBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY, {
       rows: hydratedRows,
       velocityRows: normalizedVelocityRows,
       monthStatuses: nextMonthStatuses,
+      transferAllocations: nextTransferAllocations,
     });
 
     const months = Array.from(
@@ -928,7 +1066,7 @@ export default function BrokerCommissionSummaryView() {
 
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [startupTransferAllocations]);
 
   useEffect(() => {
     const refreshTimer = window.setTimeout(() => {
@@ -1319,19 +1457,48 @@ export default function BrokerCommissionSummaryView() {
     setDraftAllocationInvoices(alert.firstInvoice ? [alert.firstInvoice] : []);
   };
 
-  const saveAllocationModal = () => {
+  const saveAllocationModal = async () => {
     if (!allocationModal) return;
 
     const validInvoices = draftAllocationInvoices.filter((invoice) =>
       allocationModal.invoiceOptions.some((option) => option.invoice === invoice),
     );
 
-    setTransferAllocations((prev) => ({
-      ...prev,
-      [allocationModal.key]: validInvoices,
-    }));
-    setAllocationModal(null);
-    setDraftAllocationInvoices([]);
+    try {
+      await saveBrokerCommissionTransferAllocation({
+        key: allocationModal.key,
+        month: allocationModal.month,
+        targetRetailer: allocationModal.targetRetailer,
+        invoiceNumbers: validInvoices,
+      });
+
+      setTransferAllocations((prev) => {
+        const next = { ...prev };
+
+        if (validInvoices.length) {
+          next[allocationModal.key] = validInvoices;
+        } else {
+          delete next[allocationModal.key];
+        }
+
+        writeBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY, {
+          rows,
+          velocityRows,
+          monthStatuses,
+          transferAllocations: next,
+        });
+
+        return next;
+      });
+      setAllocationModal(null);
+      setDraftAllocationInvoices([]);
+    } catch (error) {
+      console.error("Failed to save broker transfer allocation:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      alert(
+        `Could not save this allocation for all users: ${message}\n\nRun supabase/broker_commission_transfer_allocations.sql if the shared allocation table is not created yet.`
+      );
+    }
   };
 
   const openInvoiceRetailerEdit = ({
@@ -1399,6 +1566,7 @@ export default function BrokerCommissionSummaryView() {
           rows: nextRows,
           velocityRows,
           monthStatuses,
+          transferAllocations,
         });
 
         return nextRows;
@@ -1932,7 +2100,7 @@ export default function BrokerCommissionSummaryView() {
             <div className="mt-5 flex justify-end">
               <button
                 type="button"
-                onClick={saveAllocationModal}
+                onClick={() => void saveAllocationModal()}
                 className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
               >
                 Done
