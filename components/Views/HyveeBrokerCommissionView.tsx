@@ -138,6 +138,14 @@ function getLineLabel(row: HyveeInvoiceRow) {
   return row.type || row.explanation || "Hy-Vee Charge";
 }
 
+function isNoiseRow(row: HyveeInvoiceRow) {
+  return /amount\s*=\s*amount\s*bsr/i.test(row.explanation || "");
+}
+
+function filterBrokerRows(rows: HyveeInvoiceRow[]) {
+  return rows.filter((row) => !isNoiseRow(row));
+}
+
 function getTotals(rows: HyveeInvoiceRow[]) {
   const wmInvoiceTotal = round2(
     rows
@@ -231,7 +239,9 @@ export default function HyveeBrokerCommissionView() {
   const [startupCache] = useState<HyveeBrokerCommissionCache | null>(() =>
     readBrowserCache<HyveeBrokerCommissionCache>(HYVEE_BROKER_COMMISSION_CACHE_KEY)
   );
-  const [rows, setRows] = useState<HyveeInvoiceRow[]>(() => startupCache?.rows || []);
+  const [rows, setRows] = useState<HyveeInvoiceRow[]>(() =>
+    filterBrokerRows(startupCache?.rows || [])
+  );
   const [loading, setLoading] = useState(() => !startupCache);
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
   const [expandedLines, setExpandedLines] = useState<Record<string, boolean>>({});
@@ -240,7 +250,7 @@ export default function HyveeBrokerCommissionView() {
     if (!hasCachedData) setLoading(true);
 
     try {
-      const nextRows = await fetchAllHyveeRows();
+      const nextRows = filterBrokerRows(await fetchAllHyveeRows());
       setRows(nextRows);
       writeBrowserCache<HyveeBrokerCommissionCache>(
         HYVEE_BROKER_COMMISSION_CACHE_KEY,
