@@ -53,6 +53,20 @@ type TargetInvoiceRow = {
   net_amount: number | null;
 };
 
+type UnfiInvoiceRow = {
+  id: number;
+  month: string | null;
+  type: string | null;
+  check_date: string | null;
+  check_number: string | null;
+  invoice_date: string | null;
+  invoice_number: string | null;
+  description: string | null;
+  gross_amount: number | null;
+  discount_amount: number | null;
+  net_amount: number | null;
+};
+
 type WegmansInvoiceRow = {
   id: number;
   month: string | null;
@@ -206,6 +220,17 @@ function getTargetCheckAmounts(rows: TargetInvoiceRow[]) {
   return map;
 }
 
+function getUnfiCheckAmounts(rows: UnfiInvoiceRow[]) {
+  const map = new Map<string, number>();
+
+  for (const row of rows) {
+    const key = `${row.check_date || ""}__${row.check_number || ""}`;
+    map.set(key, (map.get(key) || 0) + Number(row.net_amount || 0));
+  }
+
+  return map;
+}
+
 function getWegmansCheckAmounts(rows: WegmansInvoiceRow[]) {
   const map = new Map<string, number>();
 
@@ -235,7 +260,7 @@ export default function CheckDetailsView() {
       try {
         if (!hasCachedData) setLoading(true);
 
-        const [keheRes, targetRes, hyveeRes, wegmansRes, tonyRes] = await Promise.all([
+        const [keheRes, targetRes, unfiRes, hyveeRes, wegmansRes, tonyRes] = await Promise.all([
           supabase
             .from("invoices")
             .select(
@@ -247,6 +272,14 @@ export default function CheckDetailsView() {
           supabase
             .from("target_invoices")
             .select("*")
+            .order("check_date", { ascending: false })
+            .order("check_number", { ascending: false }),
+
+          supabase
+            .from("unfi_invoices")
+            .select(
+              "id, month, type, check_date, check_number, invoice_date, invoice_number, description, gross_amount, discount_amount, net_amount"
+            )
             .order("check_date", { ascending: false })
             .order("check_number", { ascending: false }),
 
@@ -277,6 +310,9 @@ export default function CheckDetailsView() {
 
         if (keheRes.error) throw keheRes.error;
         if (targetRes.error) throw targetRes.error;
+        if (unfiRes.error) {
+          console.error("UNFI check details query error:", unfiRes.error);
+        }
         if (hyveeRes.error) {
           console.error("Hy-Vee check details query error:", hyveeRes.error);
         }
@@ -323,6 +359,29 @@ export default function CheckDetailsView() {
             retailer: "target",
           };
         });
+
+        const rawUnfiRows = (unfiRes.data || []) as UnfiInvoiceRow[];
+        const unfiCheckAmounts = getUnfiCheckAmounts(rawUnfiRows);
+
+        const unfiRows: InvoiceRecord[] = unfiRes.error
+          ? []
+          : rawUnfiRows.map((row) => {
+              const checkKey = `${row.check_date || ""}__${row.check_number || ""}`;
+
+              return {
+                id: `unfi-${row.id}`,
+                month: row.month,
+                check_date: row.check_date,
+                check_number: row.check_number,
+                check_amt: unfiCheckAmounts.get(checkKey) || 0,
+                invoice_number: row.invoice_number,
+                invoice_amt: row.net_amount,
+                dc_name: row.description,
+                status: row.invoice_date,
+                type: row.type || "UNFI's WM Invoice",
+                retailer: "unfi",
+              };
+            });
 
         const hyveeRows: InvoiceRecord[] = hyveeRes.error
           ? []
@@ -408,6 +467,7 @@ export default function CheckDetailsView() {
         const nextRows = [
           ...keheRows,
           ...targetRows,
+          ...unfiRows,
           ...hyveeRows,
           ...wegmansRows,
           ...tonyRows,

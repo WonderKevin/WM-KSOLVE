@@ -6,6 +6,10 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase/client";
 import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
+import {
+  readSharedReportSnapshot,
+  writeSharedReportSnapshot,
+} from "@/lib/report-snapshots";
 
 type BrokerageStatus = "" | "Invoice Confirmed" | "Bill Paid";
 
@@ -192,10 +196,24 @@ type TargetBrokerCommissionViewProps = {
 
 const TARGET_BROKER_COMMISSION_CACHE_KEY =
   "wmksolve:report-cache:target-broker-commission:v1";
+const TARGET_BROKER_COMMISSION_REPORT_KEY = "target-broker-commission";
 
 type TargetBrokerCommissionCache = {
   rows: TargetInvoiceRow[];
 };
+
+function persistTargetBrokerSnapshot(snapshot: TargetBrokerCommissionCache) {
+  writeBrowserCache<TargetBrokerCommissionCache>(
+    TARGET_BROKER_COMMISSION_CACHE_KEY,
+    snapshot,
+    { mirrorShared: false }
+  );
+  void writeSharedReportSnapshot<TargetBrokerCommissionCache>(
+    TARGET_BROKER_COMMISSION_REPORT_KEY,
+    snapshot,
+    1
+  );
+}
 
 export default function TargetBrokerCommissionView({
   title = "Target Brokerage Commission",
@@ -231,10 +249,7 @@ export default function TargetBrokerCommissionView({
 
       const nextRows = (data || []) as TargetInvoiceRow[];
       setRows(nextRows);
-      writeBrowserCache<TargetBrokerCommissionCache>(
-        TARGET_BROKER_COMMISSION_CACHE_KEY,
-        { rows: nextRows }
-      );
+      persistTargetBrokerSnapshot({ rows: nextRows });
     } catch (error) {
       console.error("Target broker commission load error:", error);
     } finally {
@@ -243,11 +258,41 @@ export default function TargetBrokerCommissionView({
   };
 
   useEffect(() => {
-    const refreshTimer = window.setTimeout(() => {
-      void loadData(Boolean(startupCache));
-    }, 0);
+    let cancelled = false;
 
-    return () => window.clearTimeout(refreshTimer);
+    const hydrate = async () => {
+      if (startupCache?.rows?.length) {
+        setLoading(false);
+        void loadData(true);
+        return;
+      }
+
+      const sharedSnapshot =
+        await readSharedReportSnapshot<TargetBrokerCommissionCache>(
+          TARGET_BROKER_COMMISSION_REPORT_KEY
+        );
+
+      if (cancelled) return;
+
+      if (sharedSnapshot?.rows?.length) {
+        setRows(sharedSnapshot.rows);
+        writeBrowserCache<TargetBrokerCommissionCache>(
+          TARGET_BROKER_COMMISSION_CACHE_KEY,
+          sharedSnapshot
+        );
+        setLoading(false);
+        void loadData(true);
+        return;
+      }
+
+      await loadData(false);
+    };
+
+    void hydrate();
+
+    return () => {
+      cancelled = true;
+    };
   }, [startupCache]);
 
   const monthGroups = useMemo(() => groupRowsByMonth(rows), [rows]);
@@ -276,16 +321,19 @@ export default function TargetBrokerCommissionView({
 
     setSavingStatusKey(month);
 
-    setRows((prev) =>
-      prev.map((row) =>
+    setRows((prev) => {
+      const nextRows = prev.map((row) =>
         rowIds.includes(row.id)
           ? {
               ...row,
               brokerage_status: status,
             }
           : row
-      )
-    );
+      );
+
+      persistTargetBrokerSnapshot({ rows: nextRows });
+      return nextRows;
+    });
 
     const { error } = await supabase
       .from("target_invoices")
@@ -311,16 +359,19 @@ export default function TargetBrokerCommissionView({
 
     setSavingInvoiceKey(month);
 
-    setRows((prev) =>
-      prev.map((row) =>
+    setRows((prev) => {
+      const nextRows = prev.map((row) =>
         rowIds.includes(row.id)
           ? {
               ...row,
               brokerage_invoice_number: cleanInvoiceNumber,
             }
           : row
-      )
-    );
+      );
+
+      persistTargetBrokerSnapshot({ rows: nextRows });
+      return nextRows;
+    });
 
     const { error } = await supabase
       .from("target_invoices")

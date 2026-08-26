@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { Search, Upload, X } from "lucide-react";
+import { Download, Search, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,57 +14,93 @@ type WorksheetRow = unknown[];
 type UnfiInvoiceRow = {
   id?: number;
   month: string;
-  description: string;
-  upc: string;
-  sales_period_fob: number | null;
-  deal_oi_percent: number | null;
-  promo_cases_to_cover: number | null;
-  promo_dollars_to_cover: number | null;
-  total: number | null;
-  po_number: string;
-  po_received_date: string | null;
+  type: string;
+  check_date: string | null;
+  check_number: string;
+  invoice_date: string | null;
   invoice_number: string;
+  description: string;
+  gross_amount: number | null;
+  discount_amount: number | null;
+  net_amount: number | null;
   source_file_name: string;
+  source_file_type: string;
   line_number: number;
   created_at?: string;
 };
 
+type PdfTextItem = {
+  str?: string;
+  transform?: number[];
+};
+
+type PdfTextContent = {
+  items: PdfTextItem[];
+};
+
+type PdfDocumentProxy = {
+  numPages: number;
+  getPage(pageNumber: number): Promise<{
+    getTextContent(): Promise<PdfTextContent>;
+  }>;
+};
+
+type PdfJsLib = {
+  GlobalWorkerOptions: {
+    workerSrc: string;
+  };
+  getDocument(options: { data: Uint8Array }): { promise: Promise<PdfDocumentProxy> };
+};
+
+type ParsedCheckInfo = {
+  checkDate: string | null;
+  checkNumber: string;
+};
+
+const PAGE_SIZE = 1000;
 const UNFI_INVOICES_CACHE_KEY = "wmksolve:report-cache:unfi-invoices";
+const UNFI_WM_INVOICE_TYPE = "UNFI's WM Invoice";
+const UNFI_MCB_TYPE = "UNFI's Distribution (MCB) Allowances";
+const UNFI_TYPE_OPTIONS = [UNFI_WM_INVOICE_TYPE, UNFI_MCB_TYPE] as const;
 
 type UnfiInvoicesCache = {
   rows: UnfiInvoiceRow[];
 };
 
 function clean(value: unknown) {
-  return String(value ?? "").replace(/\u0000/g, "").trim();
+  return String(value ?? "")
+    .replace(/\u0000/g, "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeHeader(value: unknown) {
   return clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function normalizeMonthLabel(value: string) {
-  return String(value || "")
-    .replace(/\u00a0/g, " ")
-    .replace(/[â€™`]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
+function normalizeMonthLabel(value: string | null | undefined) {
+  return clean(value).replace(/[\u2019`]/g, "'");
 }
 
-function formatMonthLabel(monthNumber: number, year: number) {
-  const date = new Date(year, monthNumber - 1, 1);
-  return `${date.toLocaleString("en-US", { month: "long" })} '${String(year).slice(-2)}`;
-}
-
-function getMonthSortValue(value: string) {
+function getMonthSortValue(value: string | null | undefined) {
   const normalized = normalizeMonthLabel(value);
-  const match = normalized.match(/^([A-Za-z]+)\s+'(\d{2})$/);
-  if (!match) return -Infinity;
+  const shortMatch = normalized.match(/^([A-Za-z]+)\s+'(\d{2})$/);
 
-  const monthIndex = new Date(`${match[1]} 1, 2000`).getMonth();
-  if (Number.isNaN(monthIndex)) return -Infinity;
+  if (shortMatch) {
+    const monthIndex = new Date(`${shortMatch[1]} 1, 2000`).getMonth();
+    if (Number.isNaN(monthIndex)) return -Infinity;
+    return (2000 + Number(shortMatch[2])) * 100 + monthIndex + 1;
+  }
 
-  return (2000 + Number(match[2])) * 100 + monthIndex + 1;
+  const longMatch = normalized.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (longMatch) {
+    const monthIndex = new Date(`${longMatch[1]} 1, 2000`).getMonth();
+    if (Number.isNaN(monthIndex)) return -Infinity;
+    return Number(longMatch[2]) * 100 + monthIndex + 1;
+  }
+
+  return -Infinity;
 }
 
 function compareMonthLabelsDesc(a: string, b: string) {
@@ -88,35 +124,51 @@ function getValue(row: WorksheetRow, index: number) {
 }
 
 function parseNumber(value: unknown) {
-  const original = clean(value);
-  const text = original.replace(/[$,%]/g, "").replace(/,/g, "").replace(/[()]/g, "").trim();
+  const original = clean(value).replace(/[\u2212\u2013\u2014]/g, "-");
+  if (!original || /^-+$/.test(original)) return null;
 
-  if (!text) return null;
+  const text = original
+    .replace(/[$,*#%]/g, "")
+    .replace(/,/g, "")
+    .replace(/[()]/g, "")
+    .trim();
 
-  const number = Number(text);
+  if (!text || /^-+$/.test(text)) return null;
+
+  const number = Number(text.replace(/[^0-9.-]/g, ""));
   if (Number.isNaN(number)) return null;
 
-  return original.includes("(") && original.includes(")") ? -number : number;
+  return original.includes("(") && original.includes(")") ? -Math.abs(number) : number;
 }
 
-function formatNumber(value: number | null | undefined, digits = 2) {
+function isAmountToken(value: string) {
+  return /[0-9,]+\.\d{2}/.test(value) && parseNumber(value) != null;
+}
+
+function formatCurrency(value: number | null | undefined) {
   if (value == null || Number.isNaN(Number(value))) return "";
 
   return new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
+    style: "currency",
+    currency: "USD",
   }).format(Number(value));
 }
 
-function formatOptionalInteger(value: number | null | undefined) {
-  if (value == null || Number.isNaN(Number(value))) return "";
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Number(value));
-}
+function formatValidIsoDate(year: number, month: number, day: number) {
+  if (year < 2000 || year > 2099) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
 
-function normalizeUpc(value: unknown) {
-  const text = clean(value).replace(/\.0$/, "");
-  const trimmed = text.replace(/^0+/, "");
-  return trimmed || text;
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function parseDate(value: unknown) {
@@ -125,26 +177,31 @@ function parseDate(value: unknown) {
   if (typeof value === "number") {
     const parsed = XLSX.SSF.parse_date_code(value);
     if (!parsed) return null;
-    return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+
+    return formatValidIsoDate(parsed.y, parsed.m, parsed.d);
   }
 
   const text = clean(value);
-  if (!text) return null;
+  if (!text || /^-+$/.test(text)) return null;
 
-  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\b|T)/);
   if (isoMatch) {
-    return `${isoMatch[1]}-${isoMatch[2].padStart(2, "0")}-${isoMatch[3].padStart(2, "0")}`;
+    return formatValidIsoDate(
+      Number(isoMatch[1]),
+      Number(isoMatch[2]),
+      Number(isoMatch[3])
+    );
   }
 
-  const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const slashMatch = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/);
   if (slashMatch) {
-    return `${slashMatch[3]}-${slashMatch[1].padStart(2, "0")}-${slashMatch[2].padStart(2, "0")}`;
+    const year =
+      slashMatch[3].length === 2 ? Number(`20${slashMatch[3]}`) : Number(slashMatch[3]);
+
+    return formatValidIsoDate(year, Number(slashMatch[1]), Number(slashMatch[2]));
   }
 
-  const date = new Date(text);
-  if (Number.isNaN(date.getTime())) return text;
-
-  return date.toISOString().slice(0, 10);
+  return null;
 }
 
 function formatDisplayDate(value: string | null | undefined) {
@@ -156,6 +213,25 @@ function formatDisplayDate(value: string | null | undefined) {
   return value;
 }
 
+function monthLabelFromDate(value: string | null | undefined) {
+  if (!value) return "";
+
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return "";
+
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(date.getTime())) return "";
+
+  return `${date.toLocaleString("en-US", { month: "long" })} '${String(date.getFullYear()).slice(-2)}`;
+}
+
+function getFileType(fileName: string) {
+  const extension = fileName.split(".").pop()?.toLowerCase() || "";
+  if (["xlsx", "xls", "csv"].includes(extension)) return "excel";
+  if (extension === "pdf") return "pdf";
+  return extension || "file";
+}
+
 function getErrorMessage(error: unknown, fallback: string) {
   if (error && typeof error === "object" && "message" in error) {
     const message = (error as { message?: unknown }).message;
@@ -165,110 +241,291 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-function parseUnfiWorksheet(rawRows: WorksheetRow[], month: string, fileName: string) {
-  const headerRowIndex = rawRows.findIndex((row) =>
-    row.some((cell) => normalizeHeader(cell) === "description")
+function getUnfiType(invoiceNumber: string, description: string) {
+  const normalizedDescription = normalizeHeader(description);
+
+  if (normalizedDescription.includes("mcbchargeback")) {
+    return UNFI_MCB_TYPE;
+  }
+
+  if (/^\d+$/.test(clean(invoiceNumber))) {
+    return UNFI_WM_INVOICE_TYPE;
+  }
+
+  return normalizedDescription.includes("chargeback") ? UNFI_MCB_TYPE : UNFI_WM_INVOICE_TYPE;
+}
+
+function extractCheckInfoFromText(text: string): ParsedCheckInfo {
+  const normalized = text.replace(/\u00a0/g, " ");
+  const pairedCheckMatch = normalized.match(
+    /CHECK\s*DATE\s+CHECK\s*NUMBER[\s\S]*?(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+([0-9]{4,})/i
   );
+  const directCheckNumber =
+    normalized.match(/CHECK\s*NUMBER\s*:?\s*#?\s*([0-9]{4,})/i)?.[1] ||
+    normalized.match(/\bCHECK\s*#\s*:?\s*([0-9]{4,})/i)?.[1] ||
+    "";
+  const directCheckDate =
+    normalized.match(/CHECK\s*DATE\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i)?.[1] ||
+    null;
+
+  return {
+    checkDate: parseDate(pairedCheckMatch?.[1] || directCheckDate),
+    checkNumber: pairedCheckMatch?.[2] || directCheckNumber,
+  };
+}
+
+function parseUnfiTextLine(
+  line: string,
+  checkInfo: ParsedCheckInfo,
+  fileName: string,
+  fileType: string,
+  lineNumber: number
+): UnfiInvoiceRow | null {
+  const cleanedLine = clean(line);
+  if (!cleanedLine) return null;
+  if (/vendor\s+no|total\s+paid|bank\s+of\s+america|void\s+after/i.test(cleanedLine)) {
+    return null;
+  }
+
+  const tokens = cleanedLine.split(/\s+/).filter(Boolean);
+  if (tokens.length < 5) return null;
+
+  const invoiceDate = parseDate(tokens[0]);
+  if (!invoiceDate) return null;
+
+  const invoiceNumber = clean(tokens[1]);
+  const amountIndexes = tokens.reduce<number[]>((indexes, token, index) => {
+    if (index > 1 && isAmountToken(token)) indexes.push(index);
+    return indexes;
+  }, []);
+
+  if (amountIndexes.length < 3) return null;
+
+  const firstAmountIndex = amountIndexes[0];
+  const description = clean(tokens.slice(2, firstAmountIndex).join(" "));
+  const grossAmount = parseNumber(tokens[amountIndexes[0]]);
+  const discountAmount = parseNumber(tokens[amountIndexes[1]]);
+  const netAmount = parseNumber(tokens[amountIndexes[2]]);
+  const checkDate = checkInfo.checkDate;
+
+  if (!checkDate) {
+    throw new Error(`Could not find Check Date in ${fileName}.`);
+  }
+
+  return {
+    month: monthLabelFromDate(checkDate),
+    type: getUnfiType(invoiceNumber, description),
+    check_date: checkDate,
+    check_number: checkInfo.checkNumber,
+    invoice_date: invoiceDate,
+    invoice_number: invoiceNumber,
+    description,
+    gross_amount: grossAmount,
+    discount_amount: discountAmount,
+    net_amount: netAmount,
+    source_file_name: fileName,
+    source_file_type: fileType,
+    line_number: lineNumber,
+  } satisfies UnfiInvoiceRow;
+}
+
+function parseUnfiText(text: string, fileName: string, fileType: string) {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => clean(line))
+    .filter(Boolean);
+  const checkInfo = extractCheckInfoFromText(text);
+
+  if (!checkInfo.checkDate) {
+    throw new Error(`Could not find Check Date in ${fileName}.`);
+  }
+
+  const headerIndex = lines.findIndex((line, index) => {
+    const normalized = normalizeHeader(
+      [line, lines[index + 1] || "", lines[index + 2] || ""].join(" ")
+    );
+
+    return (
+      normalized.includes("invoicedate") &&
+      normalized.includes("invoicenumber") &&
+      normalized.includes("grossamount") &&
+      normalized.includes("discountamount") &&
+      normalized.includes("netamount")
+    );
+  });
+
+  if (headerIndex === -1) {
+    throw new Error(`Could not find the UNFI invoice table header in ${fileName}.`);
+  }
+
+  return lines
+    .slice(headerIndex + 1)
+    .map((line, index) =>
+      parseUnfiTextLine(line, checkInfo, fileName, fileType, headerIndex + index + 2)
+    )
+    .filter((row): row is UnfiInvoiceRow => Boolean(row));
+}
+
+function parseUnfiWorksheet(rawRows: WorksheetRow[], fileName: string) {
+  const fullText = rawRows.map((row) => row.map(clean).join(" ")).join("\n");
+  const fallbackCheckInfo = extractCheckInfoFromText(fullText);
+  const headerRowIndex = rawRows.findIndex((row) => {
+    const normalized = row.map(normalizeHeader);
+    return (
+      normalized.includes("invoicedate") &&
+      normalized.includes("invoicenumber") &&
+      normalized.includes("grossamount") &&
+      normalized.includes("discountamount") &&
+      normalized.includes("netamount")
+    );
+  });
 
   if (headerRowIndex === -1) {
-    throw new Error(`Could not find the UNFI invoice header row in ${fileName}.`);
+    throw new Error(`Could not find the UNFI invoice table header in ${fileName}.`);
   }
 
   const headers = rawRows[headerRowIndex];
-  const remitNameIndex = getHeaderIndex(headers, ["Remit Name"]);
-  const invoiceNumberIndex = getHeaderIndex(headers, ["Invoice Number"]);
+  const checkDateIndex = getHeaderIndex(headers, ["Check Date"]);
+  const checkNumberIndex = getHeaderIndex(headers, ["Check Number", "Check #"]);
+  const invoiceDateIndex = getHeaderIndex(headers, ["Invoice Date"]);
+  const invoiceNumberIndex = getHeaderIndex(headers, ["Invoice Number", "Invoice #"]);
   const descriptionIndex = getHeaderIndex(headers, ["Description"]);
-  const upcIndex = getHeaderIndex(headers, ["UPC"]);
-  const salesPeriodFobIndex = getHeaderIndex(headers, ["Sales Period FOB"]);
-  const dealOiPercentIndex = getHeaderIndex(headers, ["Deal OI Percent"]);
-  const promoCasesIndex = getHeaderIndex(headers, ["Promo Cases to Cover"]);
-  const promoDollarsIndex = getHeaderIndex(headers, ["Promo $ to Cover", "Promo Dollars to Cover"]);
-  const poNumberIndex = getHeaderIndex(headers, ["PO Number"]);
-  const poReceivedDateIndex = getHeaderIndex(headers, ["PO Received Date"]);
-  const amountDueIndex = getHeaderIndex(headers, ["Amount Due"]);
+  const grossAmountIndex = getHeaderIndex(headers, ["Gross Amount"]);
+  const discountAmountIndex = getHeaderIndex(headers, ["Discount Amount"]);
+  const netAmountIndex = getHeaderIndex(headers, ["Net Amount"]);
 
-  const requiredIndexes = [
-    ["Description", descriptionIndex],
-    ["UPC", upcIndex],
-    ["Promo $ to Cover", promoDollarsIndex],
-  ] as const;
-
-  const missingHeader = requiredIndexes.find(([, index]) => index === -1);
-  if (missingHeader) {
-    throw new Error(`Missing "${missingHeader[0]}" column in ${fileName}.`);
+  if (invoiceDateIndex === -1 || invoiceNumberIndex === -1 || netAmountIndex === -1) {
+    throw new Error(`Missing required UNFI invoice columns in ${fileName}.`);
   }
 
   const parsedRows: UnfiInvoiceRow[] = [];
-  let currentDescription = "";
-  let currentUpc = "";
-  let currentInvoiceNumber = "";
+  const fileType = getFileType(fileName);
 
   rawRows.slice(headerRowIndex + 1).forEach((row, index) => {
     if (!row.some((cell) => clean(cell))) return;
 
-    const remitName = normalizeHeader(getValue(row, remitNameIndex));
-    const isProductTotal = remitName === "producttotal";
-    const isWarehouseOrInvoiceTotal =
-      remitName === "warehousetotal" || remitName === "invoicetotal";
-
-    if (isWarehouseOrInvoiceTotal) return;
-
-    const description = clean(getValue(row, descriptionIndex));
-    const upc = normalizeUpc(getValue(row, upcIndex));
+    const checkDate =
+      parseDate(getValue(row, checkDateIndex)) || fallbackCheckInfo.checkDate;
+    const checkNumber =
+      clean(getValue(row, checkNumberIndex)) || fallbackCheckInfo.checkNumber;
+    const invoiceDate = parseDate(getValue(row, invoiceDateIndex));
     const invoiceNumber = clean(getValue(row, invoiceNumberIndex));
+    const description = clean(getValue(row, descriptionIndex));
+    const grossAmount = parseNumber(getValue(row, grossAmountIndex));
+    const discountAmount = parseNumber(getValue(row, discountAmountIndex));
+    const netAmount = parseNumber(getValue(row, netAmountIndex));
 
-    if (description) currentDescription = description;
-    if (upc) currentUpc = upc;
-    if (invoiceNumber) currentInvoiceNumber = invoiceNumber;
+    if (!checkDate) {
+      throw new Error(`Could not find Check Date in ${fileName}.`);
+    }
 
-    if (isProductTotal) {
-      const total =
-        parseNumber(getValue(row, amountDueIndex)) ??
-        parseNumber(getValue(row, promoDollarsIndex));
-
-      parsedRows.push({
-        month,
-        description: currentDescription,
-        upc: currentUpc,
-        sales_period_fob: null,
-        deal_oi_percent: null,
-        promo_cases_to_cover: null,
-        promo_dollars_to_cover: null,
-        total,
-        po_number: "",
-        po_received_date: null,
-        invoice_number: currentInvoiceNumber,
-        source_file_name: fileName,
-        line_number: index + 1,
-      });
-
+    if (
+      !invoiceDate &&
+      !invoiceNumber &&
+      !description &&
+      grossAmount == null &&
+      discountAmount == null &&
+      netAmount == null
+    ) {
       return;
     }
 
-    if (!description && !upc) return;
-
     parsedRows.push({
-      month,
+      month: monthLabelFromDate(checkDate),
+      type: getUnfiType(invoiceNumber, description),
+      check_date: checkDate,
+      check_number: checkNumber,
+      invoice_date: invoiceDate,
+      invoice_number: invoiceNumber,
       description,
-      upc,
-      sales_period_fob: parseNumber(getValue(row, salesPeriodFobIndex)),
-      deal_oi_percent: parseNumber(getValue(row, dealOiPercentIndex)),
-      promo_cases_to_cover: parseNumber(getValue(row, promoCasesIndex)),
-      promo_dollars_to_cover: parseNumber(getValue(row, promoDollarsIndex)),
-      total: null,
-      po_number: clean(getValue(row, poNumberIndex)),
-      po_received_date: parseDate(getValue(row, poReceivedDateIndex)),
-      invoice_number: invoiceNumber || currentInvoiceNumber,
+      gross_amount: grossAmount,
+      discount_amount: discountAmount,
+      net_amount: netAmount,
       source_file_name: fileName,
-      line_number: index + 1,
+      source_file_type: fileType,
+      line_number: headerRowIndex + index + 2,
     });
   });
 
   return parsedRows;
 }
 
+async function extractTextFromPdf(file: File) {
+  const pdfjsLib = (await import(
+    "pdfjs-dist/legacy/build/pdf.mjs"
+  )) as unknown as PdfJsLib;
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url
+  ).toString();
+
+  const pdf = await pdfjsLib.getDocument({
+    data: new Uint8Array(await file.arrayBuffer()),
+  }).promise;
+  const pageTexts: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const spansByLine = new Map<number, Array<{ x: number; text: string }>>();
+
+    for (const item of textContent.items) {
+      if (!item.str?.trim()) continue;
+
+      const y = Math.round(item.transform?.[5] ?? 0);
+      const x = item.transform?.[4] ?? 0;
+      const bucket = Math.round(y / 3) * 3;
+
+      if (!spansByLine.has(bucket)) spansByLine.set(bucket, []);
+      spansByLine.get(bucket)!.push({ x, text: item.str });
+    }
+
+    pageTexts.push(
+      Array.from(spansByLine.keys())
+        .sort((a, b) => b - a)
+        .map((bucket) =>
+          spansByLine
+            .get(bucket)!
+            .sort((a, b) => a.x - b.x)
+            .map((span) => span.text)
+            .join(" ")
+        )
+        .join("\n")
+    );
+  }
+
+  return pageTexts.join("\n");
+}
+
+async function parseUnfiFile(file: File) {
+  const fileType = getFileType(file.name);
+
+  if (fileType === "excel") {
+    const workbook = XLSX.read(await file.arrayBuffer(), {
+      type: "array",
+      cellDates: false,
+      raw: false,
+    });
+
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rawRows = XLSX.utils.sheet_to_json<WorksheetRow>(sheet, {
+      header: 1,
+      defval: "",
+      raw: false,
+    });
+
+    return parseUnfiWorksheet(rawRows, file.name);
+  }
+
+  if (fileType === "pdf") {
+    return parseUnfiText(await extractTextFromPdf(file), file.name, fileType);
+  }
+
+  throw new Error(`${file.name}: upload an Excel, CSV, or PDF file.`);
+}
+
 async function fetchAllUnfiRows() {
-  const pageSize = 1000;
   let from = 0;
   let allRows: UnfiInvoiceRow[] = [];
 
@@ -276,25 +533,23 @@ async function fetchAllUnfiRows() {
     const { data, error } = await supabase
       .from("unfi_invoices")
       .select("*")
-      .range(from, from + pageSize - 1);
+      .order("check_date", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
 
     const batch = (data ?? []) as UnfiInvoiceRow[];
     allRows = [...allRows, ...batch];
 
-    if (batch.length < pageSize) break;
-    from += pageSize;
+    if (batch.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
   }
 
   return allRows;
 }
 
 export default function UnfiInvoicesView() {
-  const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth() + 1;
   const inputRef = useRef<HTMLInputElement | null>(null);
-
   const [startupCache] = useState<UnfiInvoicesCache | null>(() =>
     readBrowserCache<UnfiInvoicesCache>(UNFI_INVOICES_CACHE_KEY)
   );
@@ -305,8 +560,7 @@ export default function UnfiInvoicesView() {
   const [showUploadBox, setShowUploadBox] = useState(false);
   const [search, setSearch] = useState("");
   const [monthFilter, setMonthFilter] = useState("All Months");
-  const [monthInput, setMonthInput] = useState(String(currentMonth));
-  const [yearInput, setYearInput] = useState(String(currentYear));
+  const [typeFilter, setTypeFilter] = useState("All Types");
 
   const loadRows = async (hasCachedData = false) => {
     try {
@@ -314,9 +568,7 @@ export default function UnfiInvoicesView() {
       setLoadError("");
       const data = await fetchAllUnfiRows();
       setRows(data);
-      writeBrowserCache<UnfiInvoicesCache>(UNFI_INVOICES_CACHE_KEY, {
-        rows: data,
-      });
+      writeBrowserCache<UnfiInvoicesCache>(UNFI_INVOICES_CACHE_KEY, { rows: data });
     } catch (error: unknown) {
       console.error("Failed to load unfi_invoices:", error);
       const message = getErrorMessage(error, "Failed to load UNFI invoices.");
@@ -339,13 +591,24 @@ export default function UnfiInvoicesView() {
     return () => window.clearTimeout(refreshTimer);
   }, [startupCache]);
 
+  const typeOptions = useMemo(() => {
+    const options = new Set<string>(UNFI_TYPE_OPTIONS);
+
+    for (const row of rows) {
+      const type = clean(row.type);
+      if (type) options.add(type);
+    }
+
+    return Array.from(options);
+  }, [rows]);
+
   const sortedRows = useMemo(() => {
     return [...rows].sort((a, b) => {
-      const monthCompare = compareMonthLabelsDesc(a.month, b.month);
-      if (monthCompare !== 0) return monthCompare;
+      const dateCompare = clean(b.check_date).localeCompare(clean(a.check_date));
+      if (dateCompare !== 0) return dateCompare;
 
-      const invoiceCompare = clean(b.invoice_number).localeCompare(clean(a.invoice_number));
-      if (invoiceCompare !== 0) return invoiceCompare;
+      const checkCompare = clean(b.check_number).localeCompare(clean(a.check_number));
+      if (checkCompare !== 0) return checkCompare;
 
       return Number(a.line_number || 0) - Number(b.line_number || 0);
     });
@@ -367,112 +630,100 @@ export default function UnfiInvoicesView() {
 
     return sortedRows.filter((row) => {
       const rowMonth = normalizeMonthLabel(row.month);
+      const rowType = clean(row.type);
       const matchesMonth = selectedMonth === "All Months" || rowMonth === selectedMonth;
-
+      const matchesType = typeFilter === "All Types" || rowType === typeFilter;
       const matchesSearch =
         !q ||
         [
           rowMonth,
-          row.description,
-          row.upc,
-          row.sales_period_fob,
-          row.deal_oi_percent,
-          row.promo_cases_to_cover,
-          row.promo_dollars_to_cover,
-          row.total,
-          row.po_number,
-          row.po_received_date,
+          rowType,
+          row.check_date,
+          row.check_number,
+          row.invoice_date,
           row.invoice_number,
+          row.description,
+          row.gross_amount,
+          row.discount_amount,
+          row.net_amount,
           row.source_file_name,
         ]
           .join(" ")
           .toLowerCase()
           .includes(q);
 
-      return matchesMonth && matchesSearch;
+      return matchesMonth && matchesType && matchesSearch;
     });
-  }, [sortedRows, search, monthFilter]);
+  }, [sortedRows, search, monthFilter, typeFilter]);
 
   const totals = useMemo(
     () =>
       filteredRows.reduce(
         (acc, row) => {
-          acc.promoDollars += Number(row.promo_dollars_to_cover || 0);
-          acc.total += Number(row.total || 0);
+          acc.rows += 1;
+          acc.netAmount += Number(row.net_amount || 0);
+          acc.checks.add(`${row.check_number}__${row.check_date}`);
           return acc;
         },
-        { promoDollars: 0, total: 0 }
+        { rows: 0, netAmount: 0, checks: new Set<string>() }
       ),
     [filteredRows]
   );
 
-  const handleUpload = async (file: File) => {
+  const handleUpload = async (fileList: FileList | null) => {
+    if (!fileList?.length) return;
+
     try {
       setUploading(true);
+      const files = Array.from(fileList);
+      let uploadedCount = 0;
 
-      const monthLabel = formatMonthLabel(Number(monthInput), Number(yearInput));
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, {
-        type: "array",
-        cellDates: false,
-        raw: false,
-      });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rawRows = XLSX.utils.sheet_to_json<WorksheetRow>(sheet, {
-        header: 1,
-        defval: "",
-        raw: false,
-      });
-      const parsedRows = parseUnfiWorksheet(rawRows, monthLabel, file.name);
+      for (const file of files) {
+        const parsedRows = await parseUnfiFile(file);
 
-      if (!parsedRows.length) {
-        alert("No UNFI invoice rows were parsed from the file.");
-        return;
-      }
+        if (!parsedRows.length) {
+          alert(`No UNFI invoice rows were parsed from ${file.name}.`);
+          continue;
+        }
 
-      const existingForFile = rows.some(
-        (row) =>
-          normalizeMonthLabel(row.month) === normalizeMonthLabel(monthLabel) &&
-          clean(row.source_file_name) === file.name
-      );
+        const existingForFile = rows.some((row) => clean(row.source_file_name) === file.name);
 
-      if (existingForFile) {
-        const shouldReplace = window.confirm(
-          `UNFI invoice data already exists for ${monthLabel} from ${file.name}.\n\nDo you want to replace it?`
-        );
+        if (existingForFile) {
+          const shouldReplace = window.confirm(
+            `UNFI invoice data already exists from ${file.name}.\n\nDo you want to replace it?`
+          );
 
-        if (!shouldReplace) return;
+          if (!shouldReplace) continue;
 
-        const { error: deleteError } = await supabase
-          .from("unfi_invoices")
-          .delete()
-          .eq("month", monthLabel)
-          .eq("source_file_name", file.name);
+          const { error: deleteError } = await supabase
+            .from("unfi_invoices")
+            .delete()
+            .eq("source_file_name", file.name);
 
-        if (deleteError) throw deleteError;
-      }
+          if (deleteError) throw deleteError;
+        }
 
-      for (let index = 0; index < parsedRows.length; index += 1000) {
-        const chunk = parsedRows.slice(index, index + 1000);
-        const { error: insertError } = await supabase.from("unfi_invoices").insert(chunk);
-        if (insertError) throw insertError;
+        for (let index = 0; index < parsedRows.length; index += 1000) {
+          const chunk = parsedRows.slice(index, index + 1000);
+          const { error: insertError } = await supabase.from("unfi_invoices").insert(chunk);
+          if (insertError) throw insertError;
+        }
+
+        uploadedCount += parsedRows.length;
       }
 
       await loadRows();
       setShowUploadBox(false);
-      alert(`${parsedRows.length} UNFI invoice rows uploaded successfully.`);
+
+      if (uploadedCount) {
+        alert(`${uploadedCount.toLocaleString()} UNFI invoice rows uploaded successfully.`);
+      }
     } catch (error: unknown) {
       alert(getErrorMessage(error, "UNFI invoice upload failed."));
     } finally {
       setUploading(false);
       if (inputRef.current) inputRef.current.value = "";
     }
-  };
-
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    await handleUpload(file);
   };
 
   const handleExportToExcel = () => {
@@ -483,16 +734,15 @@ export default function UnfiInvoicesView() {
 
     const exportRows = filteredRows.map((row) => ({
       Month: normalizeMonthLabel(row.month),
-      Description: row.description,
-      UPC: row.upc,
-      "Sales Period FOB": row.sales_period_fob,
-      "Deal OI Percent": row.deal_oi_percent,
-      "Promo Cases to Cover": row.promo_cases_to_cover,
-      "Promo $ to Cover": row.promo_dollars_to_cover,
-      Total: row.total,
-      "PO Number": row.po_number,
-      "PO Received Date": formatDisplayDate(row.po_received_date),
+      Type: row.type,
+      "Check Date": formatDisplayDate(row.check_date),
+      "Check #": row.check_number,
+      "Invoice Date": formatDisplayDate(row.invoice_date),
       "Invoice Number": row.invoice_number,
+      Description: row.description,
+      "Gross Amount": row.gross_amount,
+      "Discount Amount": row.discount_amount,
+      "Net Amount": row.net_amount,
       "Source File Name": row.source_file_name,
     }));
 
@@ -516,7 +766,7 @@ export default function UnfiInvoicesView() {
             <div>
               <h2 className="text-xl font-bold text-slate-900">UNFI Invoices</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Upload UNFI invoice files and keep product totals beside the flavor rows.
+                Upload UNFI remittance files and review rows from the check detail.
               </p>
             </div>
 
@@ -526,7 +776,7 @@ export default function UnfiInvoicesView() {
                 <Input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search description, UPC, PO"
+                  placeholder="Search check, invoice, description"
                   className="rounded-2xl pl-10 pr-10"
                 />
                 {search && (
@@ -552,6 +802,19 @@ export default function UnfiInvoicesView() {
                 ))}
               </select>
 
+              <select
+                value={typeFilter}
+                onChange={(event) => setTypeFilter(event.target.value)}
+                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                <option value="All Types">All Types</option>
+                {typeOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+
               <Button
                 type="button"
                 variant="outline"
@@ -559,7 +822,8 @@ export default function UnfiInvoicesView() {
                 onClick={handleExportToExcel}
                 disabled={!filteredRows.length}
               >
-                Export to Excel
+                <Download className="mr-2 h-4 w-4" />
+                Export
               </Button>
 
               <Button
@@ -575,51 +839,19 @@ export default function UnfiInvoicesView() {
 
           {showUploadBox && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="grid gap-4 md:grid-cols-3">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700">
-                    Month
-                  </label>
-                  <select
-                    value={monthInput}
-                    onChange={(event) => setMonthInput(event.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  >
-                    {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
-                      <option key={month} value={String(month)}>
-                        {new Date(2026, month - 1, 1).toLocaleString("en-US", {
-                          month: "long",
-                        })}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700">
-                    Year
-                  </label>
-                  <Input
-                    value={yearInput}
-                    onChange={(event) => setYearInput(event.target.value)}
-                    placeholder="2026"
-                    className="rounded-xl"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700">
-                    UNFI Invoice File
-                  </label>
-                  <input
-                    ref={inputRef}
-                    type="file"
-                    accept=".csv,.xlsx,.xls"
-                    onChange={handleFileChange}
-                    disabled={uploading}
-                    className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  />
-                </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700">
+                  UNFI Invoice File
+                </label>
+                <input
+                  ref={inputRef}
+                  type="file"
+                  multiple
+                  accept=".csv,.xlsx,.xls,.pdf"
+                  onChange={(event) => void handleUpload(event.target.files)}
+                  disabled={uploading}
+                  className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
               </div>
             </div>
           )}
@@ -627,15 +859,15 @@ export default function UnfiInvoicesView() {
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
               <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Rows</div>
-              <div className="mt-1 text-lg font-bold text-slate-900">{filteredRows.length.toLocaleString()}</div>
+              <div className="mt-1 text-lg font-bold text-slate-900">{totals.rows.toLocaleString()}</div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Promo $ to Cover</div>
-              <div className="mt-1 text-lg font-bold text-slate-900">{formatNumber(totals.promoDollars)}</div>
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Checks</div>
+              <div className="mt-1 text-lg font-bold text-slate-900">{totals.checks.size.toLocaleString()}</div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Total</div>
-              <div className="mt-1 text-lg font-bold text-slate-900">{formatNumber(totals.total)}</div>
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Net Amount</div>
+              <div className="mt-1 text-lg font-bold text-slate-900">{formatCurrency(totals.netAmount)}</div>
             </div>
           </div>
         </div>
@@ -661,40 +893,36 @@ export default function UnfiInvoicesView() {
                 <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
                   <tr>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Month</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Type</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Check Date</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Check #</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Invoice Date</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Invoice Number</th>
                     <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">Description</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">UPC</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Sales Period FOB</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Deal OI Percent</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Promo Cases to Cover</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Promo $ to Cover</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Total</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">PO Number</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-700">PO Received Date</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Gross Amount</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Discount Amount</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Net Amount</th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {filteredRows.map((row, index) => {
-                    const isTotalRow = row.total !== null && row.total !== undefined;
-
-                    return (
-                      <tr
-                        key={row.id || `${row.source_file_name}-${row.line_number}-${index}`}
-                        className={`border-t border-slate-200 ${isTotalRow ? "bg-amber-50/70" : "bg-white"}`}
-                      >
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{normalizeMonthLabel(row.month)}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.description}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.upc}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatNumber(row.sales_period_fob)}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatNumber(row.deal_oi_percent, 0)}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatOptionalInteger(row.promo_cases_to_cover)}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatNumber(row.promo_dollars_to_cover)}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{formatNumber(row.total)}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.po_number}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDisplayDate(row.po_received_date)}</td>
-                      </tr>
-                    );
-                  })}
+                  {filteredRows.map((row, index) => (
+                    <tr
+                      key={row.id || `${row.source_file_name}-${row.line_number}-${index}`}
+                      className="border-t border-slate-200 bg-white"
+                    >
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{normalizeMonthLabel(row.month)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{clean(row.type) || UNFI_WM_INVOICE_TYPE}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDisplayDate(row.check_date)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.check_number}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDisplayDate(row.invoice_date)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.invoice_number}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.description}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatCurrency(row.gross_amount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatCurrency(row.discount_amount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{formatCurrency(row.net_amount)}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

@@ -21,14 +21,50 @@ begin
   end if;
 
   select case permission_name
+    when 'can_view_dashboard'
+      then coalesce(up.can_view_dashboard, false)
+    when 'can_view_kehe_dashboard'
+      then coalesce(up.can_view_kehe_dashboard, false)
+    when 'can_view_tonys_dashboard'
+      then coalesce(up.can_view_tonys_dashboard, false)
+    when 'can_view_target_broker_commission'
+      then coalesce(up.can_view_target_broker_commission, false)
     when 'can_view_broker_commission_summary'
       then coalesce(up.can_view_broker_commission_summary, false)
     when 'can_view_broker_commission_data_sets'
       then coalesce(up.can_view_broker_commission_data_sets, false)
     when 'can_view_accounting_summary'
       then coalesce(up.can_view_accounting_summary, false)
+    when 'can_view_accounting_check_details'
+      then coalesce(up.can_view_accounting_check_details, false)
     when 'can_view_accounting_wm_invoice_discrepancy'
       then coalesce(up.can_view_accounting_wm_invoice_discrepancy, false)
+    when 'can_view_database_ksolve_invoices'
+      then coalesce(up.can_view_database_ksolve_invoices, false)
+    when 'can_view_database_target_invoices'
+      then coalesce(up.can_view_database_target_invoices, false)
+    when 'can_view_database_unfi_invoices'
+      then coalesce(up.can_view_database_unfi_invoices, false)
+    when 'can_view_database_hyvee_invoices'
+      then coalesce(up.can_view_database_hyvee_invoices, false)
+    when 'can_view_database_wegmans'
+      then coalesce(up.can_view_database_wegmans, false)
+    when 'can_view_database_kehe_velocity'
+      then coalesce(up.can_view_database_kehe_velocity, false)
+    when 'can_view_database_tony_velocity'
+      then coalesce(up.can_view_database_tony_velocity, false)
+    when 'can_view_database_tony_invoices'
+      then coalesce(up.can_view_database_tony_invoices, false)
+    when 'can_view_database_product_list'
+      then coalesce(up.can_view_database_product_list, false)
+    when 'can_view_database_locations'
+      then coalesce(up.can_view_database_locations, false)
+    when 'can_view_database_deduction_type'
+      then coalesce(up.can_view_database_deduction_type, false)
+    when 'can_view_user_account'
+      then coalesce(up.can_view_user_account, false)
+    when 'can_view_admin_automation'
+      then coalesce(up.can_view_admin_automation, false)
     when 'can_reprocess_invoices'
       then coalesce(up.can_reprocess_invoices, false)
     else false

@@ -36,6 +36,21 @@ type TargetInvoiceRow = {
   retailer?: Retailer;
 };
 
+type UnfiInvoiceRow = {
+  id: number;
+  month: string | null;
+  type: string | null;
+  check_date: string | null;
+  check_number: string | null;
+  invoice_date: string | null;
+  invoice_number: string | null;
+  description: string | null;
+  gross_amount: number | null;
+  discount_amount: number | null;
+  net_amount: number | null;
+  retailer?: Retailer;
+};
+
 type WegmansInvoiceRow = {
   id: number;
   month: string | null;
@@ -176,6 +191,7 @@ const RETAILER_SORT_ORDER: SourceRetailer[] = [
 type AccountingSummaryCache = {
   invoiceRows: InvoiceSummaryRow[];
   targetRows: TargetInvoiceRow[];
+  unfiRows: UnfiInvoiceRow[];
   hyveeRows: HyveeInvoiceRow[];
   wegmansRows: WegmansInvoiceRow[];
   tonyRows: TonyInvoiceWireRow[];
@@ -603,6 +619,9 @@ export default function AccountingSummaryView() {
   const [targetRows, setTargetRows] = useState<TargetInvoiceRow[]>(
     () => startupCache?.targetRows || []
   );
+  const [unfiRows, setUnfiRows] = useState<UnfiInvoiceRow[]>(
+    () => startupCache?.unfiRows || []
+  );
   const [hyveeRows, setHyveeRows] = useState<HyveeInvoiceRow[]>(
     () => startupCache?.hyveeRows || []
   );
@@ -651,6 +670,7 @@ export default function AccountingSummaryView() {
           rawBrokerRows,
           ksolveWmRows,
           rawTargetRes,
+          rawUnfiRes,
           rawHyveeRes,
           rawWegmansRes,
           rawTonyRes,
@@ -668,6 +688,13 @@ export default function AccountingSummaryView() {
             supabase
               .from("target_invoices")
               .select("*")
+              .order("check_date", { ascending: false }),
+
+            supabase
+              .from("unfi_invoices")
+              .select(
+                "id, month, type, check_date, check_number, invoice_date, invoice_number, description, gross_amount, discount_amount, net_amount"
+              )
               .order("check_date", { ascending: false }),
 
             supabase
@@ -694,6 +721,7 @@ export default function AccountingSummaryView() {
 
         let nextInvoiceRows: InvoiceSummaryRow[] = [];
         let nextTargetRows: TargetInvoiceRow[] = [];
+        let nextUnfiRows: UnfiInvoiceRow[] = [];
         let nextHyveeRows: HyveeInvoiceRow[] = [];
         let nextWegmansRows: WegmansInvoiceRow[] = [];
         let nextTonyRows: TonyInvoiceWireRow[] = [];
@@ -721,6 +749,19 @@ export default function AccountingSummaryView() {
             })
           );
           setTargetRows(nextTargetRows);
+        }
+
+        if (rawUnfiRes.error) {
+          console.error("UNFI invoice query error:", rawUnfiRes.error);
+          setUnfiRows([]);
+        } else {
+          nextUnfiRows = ((rawUnfiRes.data || []) as UnfiInvoiceRow[]).map(
+            (row) => ({
+              ...row,
+              retailer: "unfi",
+            })
+          );
+          setUnfiRows(nextUnfiRows);
         }
 
         if (rawHyveeRes.error) {
@@ -825,6 +866,7 @@ export default function AccountingSummaryView() {
         writeBrowserCache<AccountingSummaryCache>(ACCOUNTING_SUMMARY_CACHE_KEY, {
           invoiceRows: nextInvoiceRows,
           targetRows: nextTargetRows,
+          unfiRows: nextUnfiRows,
           hyveeRows: nextHyveeRows,
           wegmansRows: nextWegmansRows,
           tonyRows: nextTonyRows,
@@ -855,6 +897,12 @@ export default function AccountingSummaryView() {
 
     return targetRows.filter((row) => row.retailer === retailer);
   }, [targetRows, retailer]);
+
+  const filteredUnfiRows = useMemo(() => {
+    if (retailer === "all") return unfiRows;
+
+    return unfiRows.filter((row) => row.retailer === retailer);
+  }, [unfiRows, retailer]);
 
   const filteredHyveeRows = useMemo(() => {
     if (retailer === "all") return hyveeRows;
@@ -900,6 +948,22 @@ export default function AccountingSummaryView() {
     }
 
     for (const row of filteredTargetRows) {
+      const date = parseUsDate(row.check_date);
+
+      if (!date) continue;
+
+      const key = monthKeyFromDate(date);
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          label: monthLabelFromDate(date),
+          sortValue: date.getFullYear() * 100 + date.getMonth() + 1,
+        });
+      }
+    }
+
+    for (const row of filteredUnfiRows) {
       const date = parseUsDate(row.check_date);
 
       if (!date) continue;
@@ -967,6 +1031,7 @@ export default function AccountingSummaryView() {
   }, [
     filteredInvoiceRows,
     filteredTargetRows,
+    filteredUnfiRows,
     filteredHyveeRows,
     filteredWegmansRows,
     filteredTonyRows,
@@ -1136,6 +1201,19 @@ export default function AccountingSummaryView() {
       }
     }
 
+    if (retailer === "all" || retailer === "unfi") {
+      for (const row of filteredUnfiRows) {
+        const date = parseUsDate(row.check_date);
+
+        if (!date) continue;
+
+        const monthKey = monthKeyFromDate(date);
+        const amount = Number(row.net_amount || 0);
+
+        addAmount(row.type, "unfi", monthKey, amount);
+      }
+    }
+
     if (retailer === "all" || retailer === "hyvee") {
       for (const row of filteredHyveeRows) {
         const date = parseUsDate(row.check_date);
@@ -1259,6 +1337,7 @@ export default function AccountingSummaryView() {
   }, [
     filteredInvoiceRows,
     filteredTargetRows,
+    filteredUnfiRows,
     filteredHyveeRows,
     filteredWegmansRows,
     filteredTonyRows,

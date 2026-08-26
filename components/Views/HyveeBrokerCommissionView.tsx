@@ -6,6 +6,10 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase/client";
 import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
+import {
+  readSharedReportSnapshot,
+  writeSharedReportSnapshot,
+} from "@/lib/report-snapshots";
 
 type HyveeInvoiceRow = {
   id: number;
@@ -36,10 +40,24 @@ const PAGE_SIZE = 1000;
 const HYVEE_WM_INVOICE_TYPE = "Hy-Vee WM Invoice";
 const HYVEE_BROKER_COMMISSION_CACHE_KEY =
   "wmksolve:report-cache:hyvee-broker-commission:v1";
+const HYVEE_BROKER_COMMISSION_REPORT_KEY = "hyvee-broker-commission";
 
 type HyveeBrokerCommissionCache = {
   rows: HyveeInvoiceRow[];
 };
+
+function persistHyveeBrokerSnapshot(snapshot: HyveeBrokerCommissionCache) {
+  writeBrowserCache<HyveeBrokerCommissionCache>(
+    HYVEE_BROKER_COMMISSION_CACHE_KEY,
+    snapshot,
+    { mirrorShared: false }
+  );
+  void writeSharedReportSnapshot<HyveeBrokerCommissionCache>(
+    HYVEE_BROKER_COMMISSION_REPORT_KEY,
+    snapshot,
+    1
+  );
+}
 
 const MONTH_NAMES = [
   "January",
@@ -252,10 +270,7 @@ export default function HyveeBrokerCommissionView() {
     try {
       const nextRows = filterBrokerRows(await fetchAllHyveeRows());
       setRows(nextRows);
-      writeBrowserCache<HyveeBrokerCommissionCache>(
-        HYVEE_BROKER_COMMISSION_CACHE_KEY,
-        { rows: nextRows }
-      );
+      persistHyveeBrokerSnapshot({ rows: nextRows });
     } catch (error) {
       console.error("Hy-Vee broker commission load error:", error);
     } finally {
@@ -264,11 +279,42 @@ export default function HyveeBrokerCommissionView() {
   };
 
   useEffect(() => {
-    const refreshTimer = window.setTimeout(() => {
-      void loadData(Boolean(startupCache));
-    }, 0);
+    let cancelled = false;
 
-    return () => window.clearTimeout(refreshTimer);
+    const hydrate = async () => {
+      if (startupCache?.rows?.length) {
+        setLoading(false);
+        void loadData(true);
+        return;
+      }
+
+      const sharedSnapshot =
+        await readSharedReportSnapshot<HyveeBrokerCommissionCache>(
+          HYVEE_BROKER_COMMISSION_REPORT_KEY
+        );
+
+      if (cancelled) return;
+
+      if (sharedSnapshot?.rows?.length) {
+        const snapshotRows = filterBrokerRows(sharedSnapshot.rows);
+        setRows(snapshotRows);
+        writeBrowserCache<HyveeBrokerCommissionCache>(
+          HYVEE_BROKER_COMMISSION_CACHE_KEY,
+          { rows: snapshotRows }
+        );
+        setLoading(false);
+        void loadData(true);
+        return;
+      }
+
+      await loadData(false);
+    };
+
+    void hydrate();
+
+    return () => {
+      cancelled = true;
+    };
   }, [startupCache]);
 
   const monthGroups = useMemo(() => groupRowsByMonth(rows), [rows]);

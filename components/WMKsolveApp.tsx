@@ -19,6 +19,9 @@ import type { LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase/client";
+import { writeBrowserCache } from "@/lib/browser-cache";
+import { SHARED_REPORT_CACHE_ENTRIES } from "@/lib/report-cache-registry";
+import { readSharedReportSnapshot } from "@/lib/report-snapshots";
 
 import BrokerCommissionSummaryView from "@/components/Views/BrokerCommissionSummaryView";
 import BrokerCommissionDataSetsView from "@/components/Views/BrokerCommissionDataSetsView";
@@ -196,7 +199,6 @@ export default function WMKsolveApp() {
   const [activeKey, setActiveKey] = useState("");
   const [openGroupKey, setOpenGroupKey] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [visitedKeys, setVisitedKeys] = useState<string[]>([""]);
   const [documentUploadSignal, setDocumentUploadSignal] = useState(0);
   const [invoiceUploadSignal, setInvoiceUploadSignal] = useState(0);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -450,18 +452,45 @@ export default function WMKsolveApp() {
   }, [permissions, userEmail]);
 
   useEffect(() => {
-    setVisitedKeys((prev) =>
-      prev.includes(activeKey) ? prev : [...prev, activeKey]
-    );
-  }, [activeKey]);
-
-  useEffect(() => {
     const activeGroup = sidebarItems.find((item) =>
       item.children?.some((child) => child.key === activeKey)
     );
 
     if (activeGroup) setOpenGroupKey(activeGroup.key);
   }, [activeKey, sidebarItems]);
+
+  useEffect(() => {
+    if (!permissions) return;
+
+    let cancelled = false;
+    const isAdmin = userEmail.toLowerCase() === "kevin@wondermonday.com";
+
+    const preloadSharedSnapshots = async () => {
+      const allowedEntries = SHARED_REPORT_CACHE_ENTRIES.filter((entry) =>
+        isAdmin ||
+        entry.permissions.some((permission) =>
+          Boolean((permissions as unknown as Record<string, unknown>)[permission])
+        )
+      );
+
+      await Promise.allSettled(
+        allowedEntries.map(async (entry) => {
+          const snapshot = await readSharedReportSnapshot<unknown>(entry.reportKey);
+          if (cancelled || !snapshot) return;
+
+          writeBrowserCache(entry.browserCacheKey, snapshot, {
+            mirrorShared: false,
+          });
+        })
+      );
+    };
+
+    void preloadSharedSnapshots();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [permissions, userEmail]);
 
   const renderContent = (key: string) => {
     switch (key) {
@@ -530,10 +559,6 @@ export default function WMKsolveApp() {
       </div>
     );
   }
-
-  const renderedKeys = visitedKeys.includes(activeKey)
-    ? visitedKeys
-    : [...visitedKeys, activeKey];
 
   return (
     <div className="flex min-h-screen bg-slate-100">
@@ -631,11 +656,7 @@ export default function WMKsolveApp() {
         </div>
 
         <div className="px-6 py-5">
-          {renderedKeys.map((key) => (
-            <div key={key || "home"} hidden={key !== activeKey}>
-              {renderContent(key)}
-            </div>
-          ))}
+          <div key={activeKey || "home"}>{renderContent(activeKey)}</div>
         </div>
       </main>
     </div>

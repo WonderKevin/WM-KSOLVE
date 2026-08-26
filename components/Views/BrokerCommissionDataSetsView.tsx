@@ -781,7 +781,9 @@ export default function BrokerCommissionDataSetsView() {
       missingInvoices: nextMissingInvoices,
     };
 
-    writeBrowserCache<BrokerDataSetsCache>(BROKER_DATA_SETS_CACHE_KEY, snapshot);
+    writeBrowserCache<BrokerDataSetsCache>(BROKER_DATA_SETS_CACHE_KEY, snapshot, {
+      mirrorShared: false,
+    });
     void writeSharedReportSnapshot<BrokerDataSetsCache>(
       BROKER_DATA_SETS_REPORT_KEY,
       snapshot,

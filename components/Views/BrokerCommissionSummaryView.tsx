@@ -12,6 +12,10 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { readBrowserCache, writeBrowserCache } from "@/lib/browser-cache";
+import {
+  readSharedReportSnapshot,
+  writeSharedReportSnapshot,
+} from "@/lib/report-snapshots";
 
 type RetailerName =
   | "Fresh Thyme"
@@ -84,6 +88,7 @@ type TransferAllocationRow = {
 };
 
 const BROKER_SUMMARY_CACHE_KEY = "wmksolve:report-cache:broker-commission-summary:v3";
+const BROKER_SUMMARY_REPORT_KEY = "broker-commission-summary";
 
 type BrokerSummaryCache = {
   rows: DatasetRow[];
@@ -91,6 +96,17 @@ type BrokerSummaryCache = {
   monthStatuses: Record<string, BrokerageStatus>;
   transferAllocations: TransferAllocationMap;
 };
+
+function persistBrokerSummarySnapshot(snapshot: BrokerSummaryCache) {
+  writeBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY, snapshot, {
+    mirrorShared: false,
+  });
+  void writeSharedReportSnapshot<BrokerSummaryCache>(
+    BROKER_SUMMARY_REPORT_KEY,
+    snapshot,
+    1
+  );
+}
 
 type DetailLine = {
   label: string;
@@ -822,6 +838,29 @@ export default function BrokerCommissionSummaryView() {
     null
   );
 
+  const applySnapshot = useCallback((snapshot: BrokerSummaryCache) => {
+    const snapshotRows = snapshot.rows || [];
+    const snapshotVelocityRows = snapshot.velocityRows || [];
+    const snapshotMonthStatuses = snapshot.monthStatuses || {};
+    const snapshotTransferAllocations = snapshot.transferAllocations || {};
+
+    setRows(snapshotRows);
+    setVelocityRows(snapshotVelocityRows);
+    setMonthStatuses(snapshotMonthStatuses);
+    setTransferAllocations(snapshotTransferAllocations);
+    setExpandedMonths((prev) => {
+      const next = { ...prev };
+
+      Array.from(new Set(snapshotRows.map((row) => row.month).filter(Boolean))).forEach(
+        (month) => {
+          if (!(month in next)) next[month] = false;
+        }
+      );
+
+      return next;
+    });
+  }, []);
+
   const load = useCallback(async (isManualRefresh = false, hasCachedData = false) => {
     if (isManualRefresh || hasCachedData) {
       setRefreshing(true);
@@ -1041,16 +1080,18 @@ export default function BrokerCommissionSummaryView() {
       }
     }
 
-    setRows(hydratedRows);
-    setVelocityRows(normalizedVelocityRows);
-    setMonthStatuses(nextMonthStatuses);
-    setTransferAllocations(nextTransferAllocations);
-    writeBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY, {
+    const snapshot: BrokerSummaryCache = {
       rows: hydratedRows,
       velocityRows: normalizedVelocityRows,
       monthStatuses: nextMonthStatuses,
       transferAllocations: nextTransferAllocations,
-    });
+    };
+
+    setRows(hydratedRows);
+    setVelocityRows(normalizedVelocityRows);
+    setMonthStatuses(nextMonthStatuses);
+    setTransferAllocations(nextTransferAllocations);
+    persistBrokerSummarySnapshot(snapshot);
 
     const months = Array.from(
       new Set(hydratedRows.map((r) => r.month).filter(Boolean))
@@ -1069,12 +1110,41 @@ export default function BrokerCommissionSummaryView() {
   }, [startupTransferAllocations]);
 
   useEffect(() => {
-    const refreshTimer = window.setTimeout(() => {
-      void load(false, Boolean(startupCache));
-    }, 0);
+    let cancelled = false;
 
-    return () => window.clearTimeout(refreshTimer);
-  }, [load, startupCache]);
+    const hydrate = async () => {
+      if (startupCache?.rows?.length) {
+        setLoading(false);
+        void load(false, true);
+        return;
+      }
+
+      const sharedSnapshot = await readSharedReportSnapshot<BrokerSummaryCache>(
+        BROKER_SUMMARY_REPORT_KEY
+      );
+
+      if (cancelled) return;
+
+      if (sharedSnapshot?.rows?.length) {
+        applySnapshot(sharedSnapshot);
+        writeBrowserCache<BrokerSummaryCache>(
+          BROKER_SUMMARY_CACHE_KEY,
+          sharedSnapshot
+        );
+        setLoading(false);
+        void load(false, true);
+        return;
+      }
+
+      await load(false, false);
+    };
+
+    void hydrate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applySnapshot, load, startupCache]);
 
   const monthOptions = useMemo(() => {
     return [
@@ -1481,7 +1551,7 @@ export default function BrokerCommissionSummaryView() {
           delete next[allocationModal.key];
         }
 
-        writeBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY, {
+        persistBrokerSummarySnapshot({
           rows,
           velocityRows,
           monthStatuses,
@@ -1562,7 +1632,7 @@ export default function BrokerCommissionSummaryView() {
           targetRowIds.has(row.id) ? { ...row, retailer } : row
         );
 
-        writeBrowserCache<BrokerSummaryCache>(BROKER_SUMMARY_CACHE_KEY, {
+        persistBrokerSummarySnapshot({
           rows: nextRows,
           velocityRows,
           monthStatuses,
@@ -1587,10 +1657,21 @@ export default function BrokerCommissionSummaryView() {
     const previousStatus = monthStatuses[month] ?? "";
 
     setSavingStatusKey(month);
-    setMonthStatuses((prev) => ({
-      ...prev,
-      [month]: status,
-    }));
+    setMonthStatuses((prev) => {
+      const next = {
+        ...prev,
+        [month]: status,
+      };
+
+      persistBrokerSummarySnapshot({
+        rows,
+        velocityRows,
+        monthStatuses: next,
+        transferAllocations,
+      });
+
+      return next;
+    });
 
     const { error } = status
       ? await supabase.from("broker_commission_statuses").upsert(
