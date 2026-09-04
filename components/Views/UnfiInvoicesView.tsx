@@ -63,9 +63,22 @@ type ParsedCheckInfo = {
 const PAGE_SIZE = 1000;
 const DOCUMENT_BUCKET = "ksolve-documents";
 const UNFI_INVOICES_CACHE_KEY = "wmksolve:report-cache:unfi-invoices";
-const UNFI_WM_INVOICE_TYPE = "UNFI's WM Invoice";
-const UNFI_MCB_TYPE = "UNFI's Distribution (MCB) Allowances";
-const UNFI_TYPE_OPTIONS = [UNFI_WM_INVOICE_TYPE, UNFI_MCB_TYPE] as const;
+const UNFI_WM_INVOICE_TYPE = "UNFI WM Invoice";
+const UNFI_MCB_TYPE = "UNFI Distribution (MCB) Allowances";
+const UNFI_TYPE_OPTIONS = [
+  UNFI_WM_INVOICE_TYPE,
+  "UNFI EDLC Allowances",
+  "UNFI Ad Fees",
+  UNFI_MCB_TYPE,
+  "UNFI Customer Spoils Allowance",
+  "UNFI Introduction Allowances",
+  "UNFI TPR Funding",
+  "UNFI Scan Allowance",
+  "UNFI Promo & Placement Funds",
+  "UNFI Slotting Fees",
+  "UNFI Display Fees",
+  "UNFI New Item Setup Fee",
+] as const;
 
 type UnfiInvoicesCache = {
   rows: UnfiInvoiceRow[];
@@ -85,6 +98,13 @@ function normalizeHeader(value: unknown) {
 
 function normalizeMonthLabel(value: string | null | undefined) {
   return clean(value).replace(/[\u2019`]/g, "'");
+}
+
+function normalizeUnfiTypeLabel(value: string | null | undefined) {
+  const type = clean(value);
+  if (!type) return "";
+
+  return type.replace(/^UNFI's\s+/i, "UNFI ");
 }
 
 function getMonthSortValue(value: string | null | undefined) {
@@ -645,7 +665,7 @@ export default function UnfiInvoicesView() {
     const options = new Set<string>(UNFI_TYPE_OPTIONS);
 
     for (const row of rows) {
-      const type = clean(row.type);
+      const type = normalizeUnfiTypeLabel(row.type);
       if (type) options.add(type);
     }
 
@@ -680,7 +700,7 @@ export default function UnfiInvoicesView() {
 
     return sortedRows.filter((row) => {
       const rowMonth = normalizeMonthLabel(row.month);
-      const rowType = clean(row.type) || UNFI_WM_INVOICE_TYPE;
+      const rowType = normalizeUnfiTypeLabel(row.type) || UNFI_WM_INVOICE_TYPE;
       const matchesMonth = selectedMonth === "All Months" || rowMonth === selectedMonth;
       const matchesType = typeFilter === "All Types" || rowType === typeFilter;
       const matchesSearch =
@@ -735,7 +755,7 @@ export default function UnfiInvoicesView() {
     if (!row.id) return;
 
     const normalizedType = clean(nextType);
-    const currentType = clean(row.type);
+    const currentType = normalizeUnfiTypeLabel(row.type);
 
     setEditingTypeRowId(null);
     if (!normalizedType || normalizedType === (currentType || UNFI_WM_INVOICE_TYPE)) return;
@@ -881,7 +901,7 @@ export default function UnfiInvoicesView() {
 
     const exportRows = filteredRows.map((row) => ({
       Month: normalizeMonthLabel(row.month),
-      Type: row.type,
+      Type: normalizeUnfiTypeLabel(row.type) || UNFI_WM_INVOICE_TYPE,
       "Check Date": formatDisplayDate(row.check_date),
       "Check #": row.check_number,
       "Invoice Date": formatDisplayDate(row.invoice_date),
@@ -1091,7 +1111,7 @@ export default function UnfiInvoicesView() {
                 <tbody>
                   {filteredRows.map((row, index) => {
                     const rowId = row.id ?? null;
-                    const displayType = clean(row.type) || UNFI_WM_INVOICE_TYPE;
+                    const displayType = normalizeUnfiTypeLabel(row.type) || UNFI_WM_INVOICE_TYPE;
                     const isEditingType = rowId != null && editingTypeRowId === rowId;
                     const isSavingType = rowId != null && savingTypeId === rowId;
                     const isUploadingAttachment = rowId != null && uploadingAttachmentId === rowId;

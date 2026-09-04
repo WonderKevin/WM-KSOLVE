@@ -378,7 +378,7 @@ export default function CheckDetailsView() {
                 invoice_amt: row.net_amount,
                 dc_name: row.description,
                 status: row.invoice_date,
-                type: row.type || "UNFI's WM Invoice",
+                type: row.type?.replace(/^UNFI's\s+/i, "UNFI ") || "UNFI WM Invoice",
                 retailer: "unfi",
               };
             });

@@ -173,7 +173,7 @@ const STANDARD_ACCOUNTING_TYPES = [
 const RETAILER_POSSESSIVE_LABELS: Record<SourceRetailer, string> = {
   kehe: "KeHE's",
   target: "Target's",
-  unfi: "UNFI's",
+  unfi: "UNFI",
   hyvee: "Hy-Vee",
   wegmans: "Wegmans'",
   tony: "Tony's",
