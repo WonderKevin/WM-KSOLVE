@@ -2,7 +2,17 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { Download, FileText, MoreHorizontal, Paperclip, Pencil, Search, Upload, X } from "lucide-react";
+import {
+  Download,
+  FileSpreadsheet,
+  FileText,
+  MoreHorizontal,
+  Paperclip,
+  Pencil,
+  Search,
+  Upload,
+  X,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -104,7 +114,7 @@ function normalizeUnfiTypeLabel(value: string | null | undefined) {
   const type = clean(value);
   if (!type) return "";
 
-  return type.replace(/^UNFI's\s+/i, "UNFI ");
+  return type.replace(/^UNFI['\u2019]s\s+/i, "UNFI ");
 }
 
 function getMonthSortValue(value: string | null | undefined) {
@@ -254,6 +264,28 @@ function getFileType(fileName: string) {
   if (["xlsx", "xls", "csv"].includes(extension)) return "excel";
   if (extension === "pdf") return "pdf";
   return extension || "file";
+}
+
+function getAttachmentFileType(row: UnfiInvoiceRow) {
+  return clean(row.attachment_file_type).toLowerCase() || getFileType(row.attachment_file_name || "");
+}
+
+function getAttachmentButtonClass(row: UnfiInvoiceRow) {
+  if (!row.attachment_file_path) {
+    return "border-slate-200 bg-white text-slate-400";
+  }
+
+  const attachmentType = getAttachmentFileType(row);
+
+  if (attachmentType === "excel") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800";
+  }
+
+  if (attachmentType === "pdf") {
+    return "border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700";
+  }
+
+  return "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900";
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -1115,6 +1147,8 @@ export default function UnfiInvoicesView() {
                     const isEditingType = rowId != null && editingTypeRowId === rowId;
                     const isSavingType = rowId != null && savingTypeId === rowId;
                     const isUploadingAttachment = rowId != null && uploadingAttachmentId === rowId;
+                    const attachmentType = getAttachmentFileType(row);
+                    const ReferenceIcon = attachmentType === "excel" ? FileSpreadsheet : FileText;
 
                     return (
                       <tr
@@ -1157,7 +1191,7 @@ export default function UnfiInvoicesView() {
                           <button
                             type="button"
                             onClick={() => void downloadAttachment(row)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+                            className={`inline-flex h-8 w-8 items-center justify-center rounded-full border disabled:cursor-not-allowed disabled:opacity-40 ${getAttachmentButtonClass(row)}`}
                             title={
                               row.attachment_file_path
                                 ? `Download ${row.attachment_file_name || "reference file"}`
@@ -1170,7 +1204,7 @@ export default function UnfiInvoicesView() {
                             }
                             disabled={!row.attachment_file_path}
                           >
-                            <FileText className="h-4 w-4" />
+                            <ReferenceIcon className="h-4 w-4" />
                           </button>
                         </td>
                         <td className="relative whitespace-nowrap px-4 py-3 text-right text-slate-700">
