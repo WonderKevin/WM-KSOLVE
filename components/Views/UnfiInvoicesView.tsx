@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { Download, Search, Upload, X } from "lucide-react";
+import { Download, FileText, MoreHorizontal, Paperclip, Pencil, Search, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,9 @@ type UnfiInvoiceRow = {
   net_amount: number | null;
   source_file_name: string;
   source_file_type: string;
+  attachment_file_name?: string | null;
+  attachment_file_type?: string | null;
+  attachment_file_path?: string | null;
   line_number: number;
   created_at?: string;
 };
@@ -58,6 +61,7 @@ type ParsedCheckInfo = {
 };
 
 const PAGE_SIZE = 1000;
+const DOCUMENT_BUCKET = "ksolve-documents";
 const UNFI_INVOICES_CACHE_KEY = "wmksolve:report-cache:unfi-invoices";
 const UNFI_WM_INVOICE_TYPE = "UNFI's WM Invoice";
 const UNFI_MCB_TYPE = "UNFI's Distribution (MCB) Allowances";
@@ -239,6 +243,33 @@ function getErrorMessage(error: unknown, fallback: string) {
   }
 
   return fallback;
+}
+
+function sanitizeStorageSegment(value: string) {
+  return clean(value)
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
+
+async function uploadUnfiAttachment(row: UnfiInvoiceRow, file: File) {
+  const randomId =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const rowSegment = sanitizeStorageSegment(
+    [row.check_number, row.invoice_number, row.id].filter(Boolean).join("-")
+  );
+  const fileSegment = sanitizeStorageSegment(file.name) || "attachment";
+  const storagePath = `unfi-invoices/attachments/${rowSegment || "row"}/${randomId}-${fileSegment}`;
+  const { error } = await supabase.storage.from(DOCUMENT_BUCKET).upload(storagePath, file, {
+    cacheControl: "3600",
+    contentType: file.type || undefined,
+    upsert: false,
+  });
+
+  if (error) throw error;
+  return storagePath;
 }
 
 function getUnfiType(invoiceNumber: string, description: string) {
@@ -550,6 +581,8 @@ async function fetchAllUnfiRows() {
 
 export default function UnfiInvoicesView() {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const actionMenuRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const [startupCache] = useState<UnfiInvoicesCache | null>(() =>
     readBrowserCache<UnfiInvoicesCache>(UNFI_INVOICES_CACHE_KEY)
   );
@@ -557,7 +590,12 @@ export default function UnfiInvoicesView() {
   const [loading, setLoading] = useState(() => !startupCache);
   const [loadError, setLoadError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [savingTypeId, setSavingTypeId] = useState<number | null>(null);
+  const [uploadingAttachmentId, setUploadingAttachmentId] = useState<number | null>(null);
   const [showUploadBox, setShowUploadBox] = useState(false);
+  const [editingTypeRowId, setEditingTypeRowId] = useState<number | null>(null);
+  const [menuRowId, setMenuRowId] = useState<number | null>(null);
+  const [pendingAttachmentRow, setPendingAttachmentRow] = useState<UnfiInvoiceRow | null>(null);
   const [search, setSearch] = useState("");
   const [monthFilter, setMonthFilter] = useState("All Months");
   const [typeFilter, setTypeFilter] = useState("All Types");
@@ -590,6 +628,18 @@ export default function UnfiInvoicesView() {
 
     return () => window.clearTimeout(refreshTimer);
   }, [startupCache]);
+
+  useEffect(() => {
+    if (menuRowId == null) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const menuRef = actionMenuRefs.current[menuRowId];
+      if (menuRef && !menuRef.contains(event.target as Node)) setMenuRowId(null);
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuRowId]);
 
   const typeOptions = useMemo(() => {
     const options = new Set<string>(UNFI_TYPE_OPTIONS);
@@ -630,7 +680,7 @@ export default function UnfiInvoicesView() {
 
     return sortedRows.filter((row) => {
       const rowMonth = normalizeMonthLabel(row.month);
-      const rowType = clean(row.type);
+      const rowType = clean(row.type) || UNFI_WM_INVOICE_TYPE;
       const matchesMonth = selectedMonth === "All Months" || rowMonth === selectedMonth;
       const matchesType = typeFilter === "All Types" || rowType === typeFilter;
       const matchesSearch =
@@ -647,6 +697,7 @@ export default function UnfiInvoicesView() {
           row.discount_amount,
           row.net_amount,
           row.source_file_name,
+          row.attachment_file_name,
         ]
           .join(" ")
           .toLowerCase()
@@ -669,6 +720,102 @@ export default function UnfiInvoicesView() {
       ),
     [filteredRows]
   );
+
+  const updateRowLocally = (rowId: number, changes: Partial<UnfiInvoiceRow>) => {
+    setRows((prev) => {
+      const nextRows = prev.map((row) => (row.id === rowId ? { ...row, ...changes } : row));
+
+      writeBrowserCache<UnfiInvoicesCache>(UNFI_INVOICES_CACHE_KEY, { rows: nextRows });
+
+      return nextRows;
+    });
+  };
+
+  const saveRowType = async (row: UnfiInvoiceRow, nextType: string) => {
+    if (!row.id) return;
+
+    const normalizedType = clean(nextType);
+    const currentType = clean(row.type);
+
+    setEditingTypeRowId(null);
+    if (!normalizedType || normalizedType === (currentType || UNFI_WM_INVOICE_TYPE)) return;
+
+    setSavingTypeId(row.id);
+    updateRowLocally(row.id, { type: normalizedType });
+
+    const { error } = await supabase
+      .from("unfi_invoices")
+      .update({ type: normalizedType })
+      .eq("id", row.id);
+
+    setSavingTypeId(null);
+
+    if (error) {
+      updateRowLocally(row.id, { type: currentType });
+      alert(getErrorMessage(error, "Failed to save UNFI invoice type."));
+    }
+  };
+
+  const startTypeEdit = (row: UnfiInvoiceRow) => {
+    if (!row.id) {
+      alert("This row needs to be saved before it can be edited.");
+      return;
+    }
+
+    setEditingTypeRowId(row.id);
+    setMenuRowId(null);
+  };
+
+  const startAttachmentUpload = (row: UnfiInvoiceRow) => {
+    if (!row.id) {
+      alert("This row needs to be saved before an attachment can be uploaded.");
+      return;
+    }
+
+    setPendingAttachmentRow(row);
+    setMenuRowId(null);
+    attachmentInputRef.current?.click();
+  };
+
+  const handleAttachmentChange = async (fileList: FileList | null) => {
+    const file = fileList?.[0];
+    const row = pendingAttachmentRow;
+
+    if (!file || !row?.id) {
+      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+      setPendingAttachmentRow(null);
+      return;
+    }
+
+    try {
+      setUploadingAttachmentId(row.id);
+      const storagePath = await uploadUnfiAttachment(row, file);
+      const updates: Partial<UnfiInvoiceRow> = {
+        attachment_file_name: file.name,
+        attachment_file_type: getFileType(file.name),
+        attachment_file_path: storagePath,
+      };
+
+      const { error } = await supabase.from("unfi_invoices").update(updates).eq("id", row.id);
+
+      if (error) {
+        await supabase.storage.from(DOCUMENT_BUCKET).remove([storagePath]);
+        throw error;
+      }
+
+      if (row.attachment_file_path) {
+        await supabase.storage.from(DOCUMENT_BUCKET).remove([row.attachment_file_path]);
+      }
+
+      updateRowLocally(row.id, updates);
+    } catch (error: unknown) {
+      alert(getErrorMessage(error, "Failed to upload UNFI invoice attachment."));
+    } finally {
+      setUploadingAttachmentId(null);
+      setPendingAttachmentRow(null);
+      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+    }
+  };
 
   const handleUpload = async (fileList: FileList | null) => {
     if (!fileList?.length) return;
@@ -744,6 +891,7 @@ export default function UnfiInvoicesView() {
       "Discount Amount": row.discount_amount,
       "Net Amount": row.net_amount,
       "Source File Name": row.source_file_name,
+      "Reference File Name": row.attachment_file_name || "",
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
@@ -758,8 +906,41 @@ export default function UnfiInvoicesView() {
     XLSX.writeFile(workbook, `${fileNameParts.join("_")}.xlsx`);
   };
 
+  const downloadAttachment = async (row: UnfiInvoiceRow) => {
+    if (!row.attachment_file_path) {
+      alert("No reference file is saved for this row yet.");
+      return;
+    }
+
+    const { data, error } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .download(row.attachment_file_path);
+
+    if (error) {
+      alert(getErrorMessage(error, "Failed to download reference file."));
+      return;
+    }
+
+    const url = URL.createObjectURL(data);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = row.attachment_file_name || "unfi-reference-file";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-6">
+      <input
+        ref={attachmentInputRef}
+        type="file"
+        accept=".pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff,.csv,.xlsx,.xls"
+        hidden
+        onChange={(event) => void handleAttachmentChange(event.target.files)}
+      />
+
       <div className="sticky top-0 z-30 bg-slate-100/95 pb-4 pt-2 backdrop-blur supports-[backdrop-filter]:bg-slate-100/80">
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -902,27 +1083,122 @@ export default function UnfiInvoicesView() {
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Gross Amount</th>
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Discount Amount</th>
                     <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Net Amount</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-center font-semibold text-slate-700">Reference</th>
+                    <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">Actions</th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {filteredRows.map((row, index) => (
-                    <tr
-                      key={row.id || `${row.source_file_name}-${row.line_number}-${index}`}
-                      className="border-t border-slate-200 bg-white"
-                    >
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{normalizeMonthLabel(row.month)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{clean(row.type) || UNFI_WM_INVOICE_TYPE}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDisplayDate(row.check_date)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.check_number}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDisplayDate(row.invoice_date)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.invoice_number}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.description}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatCurrency(row.gross_amount)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatCurrency(row.discount_amount)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{formatCurrency(row.net_amount)}</td>
-                    </tr>
-                  ))}
+                  {filteredRows.map((row, index) => {
+                    const rowId = row.id ?? null;
+                    const displayType = clean(row.type) || UNFI_WM_INVOICE_TYPE;
+                    const isEditingType = rowId != null && editingTypeRowId === rowId;
+                    const isSavingType = rowId != null && savingTypeId === rowId;
+                    const isUploadingAttachment = rowId != null && uploadingAttachmentId === rowId;
+
+                    return (
+                      <tr
+                        key={row.id || `${row.source_file_name}-${row.line_number}-${index}`}
+                        className="border-t border-slate-200 bg-white"
+                      >
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{normalizeMonthLabel(row.month)}</td>
+                        <td className="min-w-[260px] whitespace-nowrap px-4 py-3 text-slate-700">
+                          {isEditingType ? (
+                            <select
+                              autoFocus
+                              value={displayType}
+                              onChange={(event) => void saveRowType(row, event.currentTarget.value)}
+                              onBlur={() => setEditingTypeRowId(null)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Escape") setEditingTypeRowId(null);
+                              }}
+                              disabled={isSavingType}
+                              className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                            >
+                              {typeOptions.map((option) => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            displayType
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDisplayDate(row.check_date)}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.check_number}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDisplayDate(row.invoice_date)}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.invoice_number}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.description}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatCurrency(row.gross_amount)}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-700">{formatCurrency(row.discount_amount)}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{formatCurrency(row.net_amount)}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-center text-slate-500">
+                          <button
+                            type="button"
+                            onClick={() => void downloadAttachment(row)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+                            title={
+                              row.attachment_file_path
+                                ? `Download ${row.attachment_file_name || "reference file"}`
+                                : "No reference file saved"
+                            }
+                            aria-label={
+                              row.attachment_file_path
+                                ? `Download ${row.attachment_file_name || "reference file"}`
+                                : "No reference file saved"
+                            }
+                            disabled={!row.attachment_file_path}
+                          >
+                            <FileText className="h-4 w-4" />
+                          </button>
+                        </td>
+                        <td className="relative whitespace-nowrap px-4 py-3 text-right text-slate-700">
+                          <div
+                            className="relative inline-block text-left"
+                            ref={(element) => {
+                              if (rowId != null) actionMenuRefs.current[rowId] = element;
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() =>
+                                rowId != null && setMenuRowId((current) => (current === rowId ? null : rowId))
+                              }
+                              disabled={rowId == null}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+                              title="More actions"
+                              aria-label="More actions"
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </button>
+
+                            {rowId != null && menuRowId === rowId && (
+                              <div className="absolute right-0 z-30 mt-2 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+                                <button
+                                  type="button"
+                                  onClick={() => startTypeEdit(row)}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => startAttachmentUpload(row)}
+                                  disabled={isUploadingAttachment}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <Paperclip className="h-4 w-4" />
+                                  {row.attachment_file_path ? "Replace attachment" : "Upload attachment"}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

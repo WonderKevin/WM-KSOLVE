@@ -20,6 +20,9 @@ create table if not exists public.unfi_invoices (
   po_received_date date,
   source_file_name text not null default '',
   source_file_type text not null default '',
+  attachment_file_name text,
+  attachment_file_type text,
+  attachment_file_path text,
   line_number integer not null default 0,
   created_at timestamptz not null default now()
 );
@@ -32,13 +35,19 @@ alter table public.unfi_invoices
   add column if not exists gross_amount numeric,
   add column if not exists discount_amount numeric,
   add column if not exists net_amount numeric,
-  add column if not exists source_file_type text not null default '';
+  add column if not exists source_file_type text not null default '',
+  add column if not exists attachment_file_name text,
+  add column if not exists attachment_file_type text,
+  add column if not exists attachment_file_path text;
 
 create index if not exists unfi_invoices_month_idx
   on public.unfi_invoices (month);
 
 create index if not exists unfi_invoices_source_file_idx
   on public.unfi_invoices (source_file_name);
+
+create index if not exists unfi_invoices_attachment_file_idx
+  on public.unfi_invoices (attachment_file_path);
 
 create index if not exists unfi_invoices_invoice_number_idx
   on public.unfi_invoices (invoice_number);
