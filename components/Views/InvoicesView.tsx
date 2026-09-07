@@ -235,10 +235,14 @@ function getKnownDeductionType(raw: string | null | undefined) {
 }
 
 function normalizeKsolveInvoiceTypeForStorage(raw: string | null | undefined) {
+  const trimmed = String(raw || "").replace(/\s+/g, " ").trim();
+  if (!trimmed) return "";
   const normalized = normalizeType(String(raw || ""));
   if (normalized === "Customer Spoils Allowance") return KEHE_CUSTOMER_SPOILS_TYPE;
   if (normalized === "WM Invoice") return KEHE_WM_INVOICE_TYPE;
-  return "";
+  if (normalized === "Pass Thru Deduction") return "";
+  if (normalized === "Unknown") return "";
+  return trimmed;
 }
 
 function normalizeDocDate(raw: string) {
@@ -2446,11 +2450,25 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
     [rows]
   );
 
-  const typeOptions = useMemo(() => [...KEHE_KSOLVE_TYPE_OPTIONS], []);
+  const typeOptions = useMemo(() => {
+    const values = new Set<string>(KEHE_KSOLVE_TYPE_OPTIONS);
+    for (const row of rows) {
+      const invoice = normalizeInvoiceNumber(row.invoice_number || "");
+      const rawType = invoice ? uploadMap.get(invoice)?.category || row.type || "" : row.type || "";
+      const type = normalizeKsolveInvoiceTypeForStorage(rawType);
+      if (type) values.add(type);
+    }
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  }, [rows, uploadMap]);
   
   const uniqueDeductionTypeOptions = useMemo(() => {
-    return [...KEHE_KSOLVE_TYPE_OPTIONS];
-  }, []);
+    const values = new Set<string>(KEHE_KSOLVE_TYPE_OPTIONS);
+    for (const record of deductionTypes) {
+      const type = normalizeKsolveInvoiceTypeForStorage(record.deduction_type);
+      if (type) values.add(type);
+    }
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  }, [deductionTypes]);
   
   const documentFilterLabel = useMemo(() => {
     if (documentFilter === "With Document") return "With Document";
