@@ -177,6 +177,12 @@ type NewUpcModal = {
 };
 
 const DOCUMENT_BUCKET = "ksolve-documents";
+const KEHE_CUSTOMER_SPOILS_TYPE = "Kehe Customer Spoils Allowance";
+const KEHE_WM_INVOICE_TYPE = "Kehe WM Invoice";
+const KEHE_KSOLVE_TYPE_OPTIONS = [
+  KEHE_CUSTOMER_SPOILS_TYPE,
+  KEHE_WM_INVOICE_TYPE,
+] as const;
 const KEHE_NEW_ITEM_SETUP_TYPE = "KeHE New Item Setup Fee";
 
 function isNewItemSetupText(raw: string) {
@@ -205,6 +211,7 @@ function normalizeType(raw: string) {
 const KNOWN_DEDUCTION_TYPES = new Set([
   "$1 Promotion",
   "Customer Spoils Allowance",
+  KEHE_CUSTOMER_SPOILS_TYPE,
   "Pass Thru Deduction",
   "New Item Setup Fee",
   "New Item Setup",
@@ -212,6 +219,7 @@ const KNOWN_DEDUCTION_TYPES = new Set([
   "Intro Allowance Audit",
   "Introductory Fee",
   "WM Invoice",
+  KEHE_WM_INVOICE_TYPE,
 ]);
 
 function normalizeForMapping(raw: string | null | undefined) {
@@ -224,6 +232,13 @@ function normalizeForMapping(raw: string | null | undefined) {
 function getKnownDeductionType(raw: string | null | undefined) {
   const normalized = normalizeType(String(raw || ""));
   return KNOWN_DEDUCTION_TYPES.has(normalized) ? normalized : "";
+}
+
+function normalizeKsolveInvoiceTypeForStorage(raw: string | null | undefined) {
+  const normalized = normalizeType(String(raw || ""));
+  if (normalized === "Customer Spoils Allowance") return KEHE_CUSTOMER_SPOILS_TYPE;
+  if (normalized === "WM Invoice") return KEHE_WM_INVOICE_TYPE;
+  return "";
 }
 
 function normalizeDocDate(raw: string) {
@@ -2068,7 +2083,7 @@ function buildDatasetInsert(
   invoiceNorm: string,
   type: string
 ): DatasetInsert {
-  const normalizedType = normalizeType(type);
+  const normalizedType = normalizeKsolveInvoiceTypeForStorage(type);
   const upc = normalizeSku(String(row.upc || "").trim());
   const amount = Number(row.amt || 0);
   return {
@@ -2128,7 +2143,7 @@ async function replaceDatasetRowsForInvoice(
     throw new Error(`No check date found in invoices for ${ni}. Upload the invoice Excel first.`);
   }
 
-  const finalType = normalizeType(categoryFallback || it || "Unknown");
+  const finalType = normalizeKsolveInvoiceTypeForStorage(categoryFallback || it || "");
   console.log("[replaceDatasetRowsForInvoice] finalType normalized:", finalType);
 
   if (!detailRows.length) {
@@ -2227,10 +2242,11 @@ async function reprocessAllUploads(
         console.warn(`[reprocess] Metadata refresh failed for ${u.file_name}; using stored upload values.`, metaErr);
       }
 
-      if (effectiveCategory && effectiveCategory !== u.category) {
+      const storedCategory = normalizeKsolveInvoiceTypeForStorage(effectiveCategory);
+      if (storedCategory !== String(u.category || "")) {
         const { error: updateUploadError } = await supabase
           .from("uploads")
-          .update({ category: effectiveCategory, pdf_date: effectivePdfDate || u.pdf_date || null })
+          .update({ category: storedCategory, pdf_date: effectivePdfDate || u.pdf_date || null })
           .eq("id", u.id);
         if (updateUploadError) throw new Error(`Failed updating upload category: ${updateUploadError.message}`);
       } else if (effectivePdfDate && effectivePdfDate !== u.pdf_date) {
@@ -2241,10 +2257,10 @@ async function reprocessAllUploads(
         if (updateUploadError) throw new Error(`Failed updating upload date: ${updateUploadError.message}`);
       }
 
-      await syncInvoiceFromUpload(u.invoice, effectiveCategory || "");
+      await syncInvoiceFromUpload(u.invoice, storedCategory);
 
       const inserted = await replaceDatasetRowsForInvoice(u.invoice, f, {
-        categoryFallback: effectiveCategory || "",
+        categoryFallback: storedCategory,
         invoiceDate: effectivePdfDate || "",
       });
 
@@ -2264,13 +2280,14 @@ async function reprocessAllUploads(
 async function syncInvoiceFromUpload(invoice: string, type: string) {
   if (!invoice || invoice === "Unknown") return;
   const ni = normalizeInvoiceNumber(invoice);
+  const storedType = normalizeKsolveInvoiceTypeForStorage(type);
   const { data: exactData, error: exactError } = await supabase
     .from("invoices")
     .select("id,invoice_number")
     .ilike("invoice_number", ni)
     .limit(1);
   if (!exactError && exactData?.[0]) {
-    await supabase.from("invoices").update({ type: type === "Unknown" ? "" : type, doc_status: true }).eq("id", exactData[0].id);
+    await supabase.from("invoices").update({ type: storedType, doc_status: true }).eq("id", exactData[0].id);
     return;
   }
 
@@ -2278,7 +2295,7 @@ async function syncInvoiceFromUpload(invoice: string, type: string) {
   if (error) return;
   const matched = (data || []).find((r) => normalizeInvoiceNumber(r.invoice_number || "") === ni);
   if (!matched) return;
-  await supabase.from("invoices").update({ type: type === "Unknown" ? "" : type, doc_status: true }).eq("id", matched.id);
+  await supabase.from("invoices").update({ type: storedType, doc_status: true }).eq("id", matched.id);
 }
 
 export default function InvoicesView({
@@ -2429,25 +2446,11 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
     [rows]
   );
 
-  const typeOptions = useMemo(() => {
-    const v = new Set<string>();
-    for (const r of rows) {
-      const n = normalizeInvoiceNumber(r.invoice_number || "");
-      const t = n ? uploadMap.get(n)?.category || r.type || "" : r.type || "";
-      if (t.trim()) v.add(t.trim());
-    }
-    return Array.from(v).sort((a, b) => a.localeCompare(b));
-  }, [rows, uploadMap]);
+  const typeOptions = useMemo(() => [...KEHE_KSOLVE_TYPE_OPTIONS], []);
   
   const uniqueDeductionTypeOptions = useMemo(() => {
-    return Array.from(
-      new Set(
-        deductionTypes
-          .map((t) => String(t.deduction_type || "").trim())
-          .filter(Boolean)
-      )
-    ).sort((a, b) => a.localeCompare(b));
-  }, [deductionTypes]);
+    return [...KEHE_KSOLVE_TYPE_OPTIONS];
+  }, []);
   
   const documentFilterLabel = useMemo(() => {
     if (documentFilter === "With Document") return "With Document";
@@ -2462,7 +2465,8 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
       const s = searchTerm.toLowerCase().trim();
       const n = normalizeInvoiceNumber(row.invoice_number || "");
       const hasDoc = !!(n && uploadMap.has(n));
-      const liveType = n ? uploadMap.get(n)?.category || row.type || "" : row.type || "";
+      const rawType = n ? uploadMap.get(n)?.category || row.type || "" : row.type || "";
+      const liveType = normalizeKsolveInvoiceTypeForStorage(rawType);
       return (
         (monthFilter === "Month" || row.month === monthFilter) &&
         (typeFilter === "Type" || liveType === typeFilter) &&
@@ -2524,7 +2528,7 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
           invoice_amt: parseAmount(row["Invoice Amt"]) ?? 0,
           dc_name: String(row["DC Name"] || "").trim(),
           status: String(row["Status"] || "").trim(),
-          type: mu?.category || "",
+          type: normalizeKsolveInvoiceTypeForStorage(mu?.category || ""),
           doc_status: !!mu,
         };
       }).filter((r) => r.invoice_number);
@@ -2580,16 +2584,17 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
     const fp = `${Date.now()}-${file.name.replace(/\s+/g, "-")}`;
     const ct = getUploadContentType(file, meta.file_type);
     const nowIso = new Date().toISOString();
+    const category = normalizeKsolveInvoiceTypeForStorage(meta.category);
     await uploadToStorageWithRetry(fp, file, ct);
     const { error: de } = await supabase.from("uploads").insert({
       file_name: file.name, file_path: fp, file_type: meta.file_type,
-      category: meta.category, invoice: meta.invoice, pdf_date: meta.pdf_date, uploaded_at: nowIso,
+      category, invoice: meta.invoice, pdf_date: meta.pdf_date, uploaded_at: nowIso,
     });
     if (de) {
       await supabase.storage.from(DOCUMENT_BUCKET).remove([fp]);
       throw new Error(`${file.name}: ${de.message}`);
     }
-    await syncInvoiceFromUpload(meta.invoice, meta.category);
+    await syncInvoiceFromUpload(meta.invoice, category);
   };
 
   const replaceExistingDocument = async (
@@ -2604,16 +2609,17 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
     const fp = `${Date.now()}-${file.name.replace(/\s+/g, "-")}`;
     const ct = getUploadContentType(file, meta.file_type);
     const nowIso = new Date().toISOString();
+    const category = normalizeKsolveInvoiceTypeForStorage(meta.category);
     await uploadToStorageWithRetry(fp, file, ct);
     const { error: de } = await supabase.from("uploads").update({
       file_name: file.name, file_path: fp, file_type: meta.file_type,
-      category: meta.category, invoice: meta.invoice, pdf_date: meta.pdf_date, uploaded_at: nowIso,
+      category, invoice: meta.invoice, pdf_date: meta.pdf_date, uploaded_at: nowIso,
     }).eq("id", eu.id);
     if (de) {
       await supabase.storage.from(DOCUMENT_BUCKET).remove([fp]);
       throw new Error(`${file.name}: ${de.message}`);
     }
-    await syncInvoiceFromUpload(meta.invoice, meta.category);
+    await syncInvoiceFromUpload(meta.invoice, category);
     return { replaced: true };
   };
 
@@ -2689,7 +2695,11 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
           if (de) { showToast(`${file.name}: failed checking existing upload.`, "error"); failed++; continue; }
 
           const existingUpload = dup && dup.length > 0 ? dup[0] : null;
-          const finalMeta = { ...meta, invoice: matchedInvoice.invoice_number || meta.invoice };
+          const finalMeta = {
+            ...meta,
+            category: normalizeKsolveInvoiceTypeForStorage(meta.category),
+            invoice: matchedInvoice.invoice_number || meta.invoice,
+          };
 
           if (existingUpload) {
             const r = await replaceExistingDocument(existingUpload, file, finalMeta);
@@ -2732,7 +2742,10 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
       await saveDeductionType(docTypeName.trim() || deductionName.trim(), deductionName.trim());
       const refreshed = await fetchDeductionTypes();
       setDeductionTypes(refreshed);
-      const fm = { ...pendingMeta, category: deductionName.trim() };
+      const fm = {
+        ...pendingMeta,
+        category: normalizeKsolveInvoiceTypeForStorage(deductionName.trim()),
+      };
       if (pendingIsReplace && pendingExistingUpload) {
         const r = await replaceExistingDocument(pendingExistingUpload, pendingFile, fm);
         if (!r.skipped) await replaceDatasetRowsForInvoice(fm.invoice, pendingFile, {
@@ -3162,7 +3175,7 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
                         <td className="px-4 py-3">{formatCurrency(row.invoice_amt)}</td>
                         <td className="px-4 py-3">{row.dc_name || ""}</td>
                         <td className="px-4 py-3">{row.status || ""}</td>
-                        <td className="px-4 py-3">{ur?.category || row.type || ""}</td>
+                        <td className="px-4 py-3">{normalizeKsolveInvoiceTypeForStorage(ur?.category || row.type || "")}</td>
                         <td className="px-4 py-3">
                           {hasDoc ? (
                             <button type="button" onClick={() => openDocumentByInvoice(row.invoice_number)}
