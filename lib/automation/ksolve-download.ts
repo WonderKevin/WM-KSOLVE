@@ -265,9 +265,10 @@ function isSupportingDocument(document: KsolveDocument) {
 const KEHE_CUSTOMER_SPOILS_TYPE = "Kehe Customer Spoils Allowance";
 const KEHE_WM_INVOICE_TYPE = "Kehe WM Invoice";
 const KEHE_TPR_FUNDING_TYPE = "Kehe TPR Funding";
+const KEHE_EDLC_ALLOWANCE_TYPE = "Kehe EDLC Allowance";
 const KEHE_DISTRIBUTION_MCB_TYPE = "Kehe Distribution (MCB) Allowances";
+const KEHE_PROMO_PLACEMENT_FUNDS_TYPE = "Kehe Promo & Placement Funds";
 const KEHE_NEW_ITEM_SETUP_TYPE = "Kehe New Item Setup Fee";
-const KEHE_LEGACY_NEW_ITEM_SETUP_TYPE = "KeHE New Item Setup Fee";
 const KEHE_INTRODUCTION_ALLOWANCE_TYPE = "Kehe Introduction Allowance";
 
 function normalizeTypeKey(raw: string | null | undefined) {
@@ -292,6 +293,10 @@ const KEHE_TYPE_BY_KEY = new Map<string, string>([
   ["1dollarpromotion", KEHE_TPR_FUNDING_TYPE],
   ["distributorcharge", KEHE_TPR_FUNDING_TYPE],
   ["kehetprfunding", KEHE_TPR_FUNDING_TYPE],
+  ["keheedlcallowance", KEHE_EDLC_ALLOWANCE_TYPE],
+  ["edlcallowance", KEHE_EDLC_ALLOWANCE_TYPE],
+  ["kehepromoandplacementfunds", KEHE_PROMO_PLACEMENT_FUNDS_TYPE],
+  ["ppf", KEHE_PROMO_PLACEMENT_FUNDS_TYPE],
   ["mcbpromotion", KEHE_DISTRIBUTION_MCB_TYPE],
   ["kehedistributionmcballowances", KEHE_DISTRIBUTION_MCB_TYPE],
   ["distributionmcballowances", KEHE_DISTRIBUTION_MCB_TYPE],
@@ -341,9 +346,6 @@ function normalizeKsolveInvoiceTypeForStorage(raw: string | null | undefined) {
   const trimmed = String(raw || "").replace(/\s+/g, " ").trim();
   if (!trimmed) return "";
   if (trimmed.toLowerCase() === "blank") return "";
-  if (/^KeHE\s*New\s*Item\s*Setup\s*Fee$/i.test(trimmed) && /^KeHE/.test(trimmed)) {
-    return KEHE_LEGACY_NEW_ITEM_SETUP_TYPE;
-  }
   const normalized = normalizeType(trimmed);
   const mappedType =
     KEHE_TYPE_BY_KEY.get(normalizeTypeKey(trimmed)) ||
@@ -530,7 +532,6 @@ const KNOWN_DEDUCTION_TYPES = new Set([
   "New Item Setup Fee",
   "New Item Setup",
   KEHE_NEW_ITEM_SETUP_TYPE,
-  KEHE_LEGACY_NEW_ITEM_SETUP_TYPE,
   "Intro Allowance Audit",
   "Introductory Fee",
   "Introduction Allowance",
@@ -538,7 +539,9 @@ const KNOWN_DEDUCTION_TYPES = new Set([
   "Promo and Placement Funds",
   "MCB Promotion",
   KEHE_TPR_FUNDING_TYPE,
+  KEHE_EDLC_ALLOWANCE_TYPE,
   KEHE_DISTRIBUTION_MCB_TYPE,
+  KEHE_PROMO_PLACEMENT_FUNDS_TYPE,
   KEHE_INTRODUCTION_ALLOWANCE_TYPE,
   "WM Invoice",
   KEHE_WM_INVOICE_TYPE,
@@ -647,14 +650,11 @@ function getInvoiceType(row: KsolveSearchRow) {
     return "Customer Spoils Allowance";
   }
 
-  if (
-    invoiceNumber.startsWith("IAA") ||
-    invoiceNumber.startsWith("PPF") ||
-    invoiceNumber.startsWith("KD") ||
-    invoiceNumber.startsWith("MCBP")
-  ) {
-    return "Pass Thru Deduction";
-  }
+  if (invoiceNumber.startsWith("MCB")) return KEHE_DISTRIBUTION_MCB_TYPE;
+  if (invoiceNumber.startsWith("PPF")) return KEHE_PROMO_PLACEMENT_FUNDS_TYPE;
+  if (invoiceNumber.startsWith("IA")) return KEHE_INTRODUCTION_ALLOWANCE_TYPE;
+  if (invoiceNumber.startsWith("KD")) return KEHE_DISTRIBUTION_MCB_TYPE;
+  if (invoiceNumber.startsWith("KK")) return KEHE_EDLC_ALLOWANCE_TYPE;
 
   if (row.DocumentUrl && /^\d+$/.test(invoiceNumber)) return "WM Invoice";
 

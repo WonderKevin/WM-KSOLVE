@@ -24,9 +24,10 @@ const KEHE_DEDUCTION_TYPE_OPTIONS = [
   "Kehe Customer Spoils Allowance",
   "Kehe WM Invoice",
   "Kehe TPR Funding",
+  "Kehe EDLC Allowance",
   "Kehe Distribution (MCB) Allowances",
+  "Kehe Promo & Placement Funds",
   "Kehe New Item Setup Fee",
-  "KeHE New Item Setup Fee",
   "Kehe Introduction Allowance",
 ] as const;
 
@@ -52,6 +53,10 @@ const KEHE_DEDUCTION_TYPE_BY_KEY = new Map<string, string>([
   ["1dollarpromotion", "Kehe TPR Funding"],
   ["distributorcharge", "Kehe TPR Funding"],
   ["kehetprfunding", "Kehe TPR Funding"],
+  ["keheedlcallowance", "Kehe EDLC Allowance"],
+  ["edlcallowance", "Kehe EDLC Allowance"],
+  ["kehepromoandplacementfunds", "Kehe Promo & Placement Funds"],
+  ["ppf", "Kehe Promo & Placement Funds"],
   ["mcbpromotion", "Kehe Distribution (MCB) Allowances"],
   ["kehedistributionmcballowances", "Kehe Distribution (MCB) Allowances"],
   ["distributionmcballowances", "Kehe Distribution (MCB) Allowances"],
@@ -66,7 +71,10 @@ const KEHE_DEDUCTION_TYPE_BY_KEY = new Map<string, string>([
 
 function normalizeKeheDeductionType(raw: string) {
   const trimmed = String(raw || "").replace(/\s+/g, " ").trim();
-  if (/^KeHE\s*New\s*Item\s*Setup\s*Fee$/i.test(trimmed) && /^KeHE/.test(trimmed)) return "KeHE New Item Setup Fee";
+  const mapped = KEHE_DEDUCTION_TYPE_BY_KEY.get(normalizeTypeKey(trimmed));
+  if (mapped) return mapped;
+  if (/edlc\s+allowance/i.test(trimmed)) return "Kehe EDLC Allowance";
+  if (/^kehe\s+promo\s+(?:and|&)\s+placement\s+funds?/i.test(trimmed)) return "Kehe Promo & Placement Funds";
   if (/promo\s+(?:and|&)\s+placement\s+funds?/i.test(trimmed)) return "Kehe TPR Funding";
   if (/\$\s*1\s*promotion/i.test(trimmed) || /\b1\s*dollar\s*promotion\b/i.test(trimmed)) return "Kehe TPR Funding";
   if (/distributor\s+charge/i.test(trimmed)) return "Kehe TPR Funding";
@@ -75,7 +83,7 @@ function normalizeKeheDeductionType(raw: string) {
   if (/intro\s+allowance\s+audit/i.test(trimmed) || /introduction\s+allowance/i.test(trimmed) || /introductory\s+fee/i.test(trimmed)) return "Kehe Introduction Allowance";
   if (/customer\s+spoil(?:s|age)/i.test(trimmed)) return "Kehe Customer Spoils Allowance";
   if (/wm\s+invoice/i.test(trimmed)) return "Kehe WM Invoice";
-  return KEHE_DEDUCTION_TYPE_BY_KEY.get(normalizeTypeKey(trimmed)) || trimmed;
+  return trimmed;
 }
 
 export default function DeductionTypesView() {
