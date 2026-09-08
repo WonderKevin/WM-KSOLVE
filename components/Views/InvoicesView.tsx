@@ -5,10 +5,11 @@ import {
   Search,
   Trash2,
   FileText,
-  XCircle,
   FileSpreadsheet,
   RefreshCw,
   ChevronDown,
+  MoreHorizontal,
+  Pencil,
 } from "lucide-react";
 import { createWorker } from "tesseract.js";
 import * as XLSX from "xlsx";
@@ -112,6 +113,20 @@ type PendingUnknownDeduction = {
   existingUpload: UploadRecord | null;
 };
 
+type InvoiceEditDraft = {
+  id: number;
+  originalInvoiceNumber: string;
+  month: string;
+  check_date: string;
+  check_number: string;
+  check_amt: string;
+  invoice_number: string;
+  invoice_amt: string;
+  dc_name: string;
+  status: string;
+  type: string;
+};
+
 async function fetchAllInvoiceRecords(): Promise<InvoiceRecord[]> {
   let allRows: InvoiceRecord[] = [];
   let from = 0;
@@ -177,13 +192,57 @@ type NewUpcModal = {
 };
 
 const DOCUMENT_BUCKET = "ksolve-documents";
+const BLANK_TYPE_OPTION = "Blank";
 const KEHE_CUSTOMER_SPOILS_TYPE = "Kehe Customer Spoils Allowance";
 const KEHE_WM_INVOICE_TYPE = "Kehe WM Invoice";
+const KEHE_TPR_FUNDING_TYPE = "Kehe TPR Funding";
+const KEHE_DISTRIBUTION_MCB_TYPE = "Kehe Distribution (MCB) Allowances";
+const KEHE_NEW_ITEM_SETUP_TYPE = "Kehe New Item Setup Fee";
+const KEHE_LEGACY_NEW_ITEM_SETUP_TYPE = "KeHE New Item Setup Fee";
+const KEHE_INTRODUCTION_ALLOWANCE_TYPE = "Kehe Introduction Allowance";
 const KEHE_KSOLVE_TYPE_OPTIONS = [
   KEHE_CUSTOMER_SPOILS_TYPE,
   KEHE_WM_INVOICE_TYPE,
+  KEHE_TPR_FUNDING_TYPE,
+  KEHE_DISTRIBUTION_MCB_TYPE,
+  KEHE_NEW_ITEM_SETUP_TYPE,
+  KEHE_LEGACY_NEW_ITEM_SETUP_TYPE,
+  KEHE_INTRODUCTION_ALLOWANCE_TYPE,
 ] as const;
-const KEHE_NEW_ITEM_SETUP_TYPE = "KeHE New Item Setup Fee";
+
+function normalizeTypeKey(raw: string | null | undefined) {
+  return String(raw || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/&/g, "and")
+    .replace(/[^A-Za-z0-9]+/g, "")
+    .toLowerCase();
+}
+
+const KEHE_TYPE_BY_KEY = new Map<string, string>([
+  ["kehecustomerspoilsallowance", KEHE_CUSTOMER_SPOILS_TYPE],
+  ["customerspoilsallowance", KEHE_CUSTOMER_SPOILS_TYPE],
+  ["customerspoilagenatural", KEHE_CUSTOMER_SPOILS_TYPE],
+  ["customerspoilage", KEHE_CUSTOMER_SPOILS_TYPE],
+  ["kehewminvoice", KEHE_WM_INVOICE_TYPE],
+  ["targetswminvoice", KEHE_WM_INVOICE_TYPE],
+  ["wminvoice", KEHE_WM_INVOICE_TYPE],
+  ["promoandplacementfund", KEHE_TPR_FUNDING_TYPE],
+  ["promoandplacementfunds", KEHE_TPR_FUNDING_TYPE],
+  ["1promotion", KEHE_TPR_FUNDING_TYPE],
+  ["1dollarpromotion", KEHE_TPR_FUNDING_TYPE],
+  ["distributorcharge", KEHE_TPR_FUNDING_TYPE],
+  ["kehetprfunding", KEHE_TPR_FUNDING_TYPE],
+  ["mcbpromotion", KEHE_DISTRIBUTION_MCB_TYPE],
+  ["kehedistributionmcballowances", KEHE_DISTRIBUTION_MCB_TYPE],
+  ["distributionmcballowances", KEHE_DISTRIBUTION_MCB_TYPE],
+  ["newitemsetupfee", KEHE_NEW_ITEM_SETUP_TYPE],
+  ["newitemsetup", KEHE_NEW_ITEM_SETUP_TYPE],
+  ["kehenewitemsetupfee", KEHE_NEW_ITEM_SETUP_TYPE],
+  ["introductionallowance", KEHE_INTRODUCTION_ALLOWANCE_TYPE],
+  ["introallowanceaudit", KEHE_INTRODUCTION_ALLOWANCE_TYPE],
+  ["introductoryfee", KEHE_INTRODUCTION_ALLOWANCE_TYPE],
+  ["keheintroductionallowance", KEHE_INTRODUCTION_ALLOWANCE_TYPE],
+]);
 
 function isNewItemSetupText(raw: string) {
   return /new\s+item\s+(?:setup|set\s*[-\u2010-\u2015]?\s*up|allowances?)(?:\s+fee)?/i.test(
@@ -195,6 +254,8 @@ function normalizeType(raw: string) {
   const c = raw.replace(/\s+/g, " ").trim().toLowerCase();
   if (/\$\s*1\s*promotion/i.test(c) || /\b1\s*dollar\s*promotion\b/i.test(c)) return "$1 Promotion";
   if (/distributor\s+charge/i.test(c)) return "$1 Promotion";
+  if (/promo\s+(?:and|&)\s+placement\s+funds?/i.test(c)) return "Promo and Placement Fund";
+  if (/\bmcb\s+promotion\b/i.test(c)) return "MCB Promotion";
   if (/customer\s+spoils\s+allowance/i.test(c)) return "Customer Spoils Allowance";
   if (/customer\s+spoilage\s+natural/i.test(c)) return "Customer Spoils Allowance";
   if (/customer\s+spoilage/i.test(c)) return "Customer Spoils Allowance";
@@ -202,8 +263,9 @@ function normalizeType(raw: string) {
   if (/fresh\s+thyme\s+ppf/i.test(c)) return "Pass Thru Deduction";
   if (/kroger\s+disc/i.test(c) || /kroger\s+discount/i.test(c)) return "Pass Thru Deduction";
   if (isNewItemSetupText(c)) return KEHE_NEW_ITEM_SETUP_TYPE;
-  if (/intro\s+allowance\s+audit/i.test(c)) return "Intro Allowance Audit";
-  if (/introductory\s+fee/i.test(c)) return "Introductory Fee";
+  if (/intro\s+allowance\s+audit/i.test(c)) return "Introduction Allowance";
+  if (/introduction\s+allowance/i.test(c)) return "Introduction Allowance";
+  if (/introductory\s+fee/i.test(c)) return "Introduction Allowance";
   if (/wm\s+invoice/i.test(c)) return "WM Invoice";
   return raw.replace(/\s+/g, " ").trim() || "Unknown";
 }
@@ -216,8 +278,16 @@ const KNOWN_DEDUCTION_TYPES = new Set([
   "New Item Setup Fee",
   "New Item Setup",
   KEHE_NEW_ITEM_SETUP_TYPE,
+  KEHE_LEGACY_NEW_ITEM_SETUP_TYPE,
   "Intro Allowance Audit",
   "Introductory Fee",
+  "Introduction Allowance",
+  "Promo and Placement Fund",
+  "Promo and Placement Funds",
+  "MCB Promotion",
+  KEHE_TPR_FUNDING_TYPE,
+  KEHE_DISTRIBUTION_MCB_TYPE,
+  KEHE_INTRODUCTION_ALLOWANCE_TYPE,
   "WM Invoice",
   KEHE_WM_INVOICE_TYPE,
 ]);
@@ -237,12 +307,32 @@ function getKnownDeductionType(raw: string | null | undefined) {
 function normalizeKsolveInvoiceTypeForStorage(raw: string | null | undefined) {
   const trimmed = String(raw || "").replace(/\s+/g, " ").trim();
   if (!trimmed) return "";
+  if (trimmed.toLowerCase() === BLANK_TYPE_OPTION.toLowerCase()) return "";
+  if (/^KeHE\s*New\s*Item\s*Setup\s*Fee$/i.test(trimmed) && /^KeHE/.test(trimmed)) {
+    return KEHE_LEGACY_NEW_ITEM_SETUP_TYPE;
+  }
   const normalized = normalizeType(String(raw || ""));
-  if (normalized === "Customer Spoils Allowance") return KEHE_CUSTOMER_SPOILS_TYPE;
-  if (normalized === "WM Invoice") return KEHE_WM_INVOICE_TYPE;
+  const mappedType =
+    KEHE_TYPE_BY_KEY.get(normalizeTypeKey(trimmed)) ||
+    KEHE_TYPE_BY_KEY.get(normalizeTypeKey(normalized));
+  if (mappedType) return mappedType;
   if (normalized === "Pass Thru Deduction") return "";
   if (normalized === "Unknown") return "";
   return trimmed;
+}
+
+function isKsolveKnownBlankType(raw: string | null | undefined) {
+  return normalizeType(String(raw || "")) === "Pass Thru Deduction";
+}
+
+function buildKeheTypeOptions(extraValues: Iterable<string | null | undefined> = []) {
+  const values = new Set<string>(KEHE_KSOLVE_TYPE_OPTIONS);
+  for (const value of extraValues) {
+    if (String(value || "").trim().toLowerCase() === BLANK_TYPE_OPTION.toLowerCase()) continue;
+    const normalized = normalizeKsolveInvoiceTypeForStorage(value);
+    if (normalized) values.add(normalized);
+  }
+  return Array.from(values);
 }
 
 function normalizeDocDate(raw: string) {
@@ -980,7 +1070,7 @@ async function fetchDeductionTypes(): Promise<DeductionTypeRecord[]> {
 
 async function saveDeductionType(documentType: string, deductionType: string): Promise<void> {
   const doc = String(documentType || "").trim();
-  const ded = String(deductionType || "").trim();
+  const ded = normalizeKsolveInvoiceTypeForStorage(deductionType) || String(deductionType || "").trim();
 
   if (!doc || !ded) {
     throw new Error("Document type and deduction type are required.");
@@ -2349,6 +2439,9 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
   const [deleteMonth, setDeleteMonth] = useState("Delete Month");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [openActionMenuId, setOpenActionMenuId] = useState<number | null>(null);
+  const [editingInvoice, setEditingInvoice] = useState<InvoiceEditDraft | null>(null);
+  const [savingInvoiceEdit, setSavingInvoiceEdit] = useState(false);
 
   const invoiceInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
@@ -2356,6 +2449,7 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
   const lastInvRef = useRef(invoiceUploadSignal);
   const lastDocRef = useRef(documentUploadSignal);
   const documentDropdownRef = useRef<HTMLDivElement | null>(null);
+  const actionMenuRef = useRef<HTMLDivElement | null>(null);
 
   const showToast = (text: string, type: ToastType = "success") => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -2420,6 +2514,9 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
       if (documentDropdownRef.current && !documentDropdownRef.current.contains(event.target as Node)) {
         setDocumentDropdownOpen(false);
       }
+      if (actionMenuRef.current && !actionMenuRef.current.contains(event.target as Node)) {
+        setOpenActionMenuId(null);
+      }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
@@ -2451,23 +2548,21 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
   );
 
   const typeOptions = useMemo(() => {
-    const values = new Set<string>(KEHE_KSOLVE_TYPE_OPTIONS);
+    const values: string[] = [];
+    let hasBlankType = false;
     for (const row of rows) {
       const invoice = normalizeInvoiceNumber(row.invoice_number || "");
       const rawType = invoice ? uploadMap.get(invoice)?.category || row.type || "" : row.type || "";
-      const type = normalizeKsolveInvoiceTypeForStorage(rawType);
-      if (type) values.add(type);
+      const normalizedType = normalizeKsolveInvoiceTypeForStorage(rawType);
+      if (normalizedType) values.push(rawType);
+      else hasBlankType = true;
     }
-    return Array.from(values).sort((a, b) => a.localeCompare(b));
+    const options = buildKeheTypeOptions(values);
+    return hasBlankType ? [BLANK_TYPE_OPTION, ...options] : options;
   }, [rows, uploadMap]);
   
   const uniqueDeductionTypeOptions = useMemo(() => {
-    const values = new Set<string>(KEHE_KSOLVE_TYPE_OPTIONS);
-    for (const record of deductionTypes) {
-      const type = normalizeKsolveInvoiceTypeForStorage(record.deduction_type);
-      if (type) values.add(type);
-    }
-    return Array.from(values).sort((a, b) => a.localeCompare(b));
+    return buildKeheTypeOptions(deductionTypes.map((record) => record.deduction_type));
   }, [deductionTypes]);
   
   const documentFilterLabel = useMemo(() => {
@@ -2487,7 +2582,8 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
       const liveType = normalizeKsolveInvoiceTypeForStorage(rawType);
       return (
         (monthFilter === "Month" || row.month === monthFilter) &&
-        (typeFilter === "Type" || liveType === typeFilter) &&
+        (typeFilter === "Type" ||
+          (typeFilter === BLANK_TYPE_OPTION ? !liveType : liveType === typeFilter)) &&
         (documentFilter === "Documents" ||
           (documentFilter === "With Document" && hasDoc) ||
           (documentFilter === "Without Document" && !hasDoc)) &&
@@ -2502,6 +2598,129 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
     }),
     [rows, searchTerm, monthFilter, typeFilter, documentFilter, uploadMap]
   );
+
+  const rowEditTypeOptions = useMemo(
+    () => buildKeheTypeOptions([editingInvoice?.type, ...typeOptions]),
+    [editingInvoice?.type, typeOptions]
+  );
+
+  const updateEditingInvoice = (
+    field: keyof Omit<InvoiceEditDraft, "id">,
+    value: string
+  ) => {
+    setEditingInvoice((current) => (current ? { ...current, [field]: value } : current));
+  };
+
+  const startEditInvoice = (row: InvoiceRecord) => {
+    const invoiceKey = normalizeInvoiceNumber(row.invoice_number || "");
+    const upload = invoiceKey ? uploadMap.get(invoiceKey) : undefined;
+    setEditingInvoice({
+      id: row.id,
+      originalInvoiceNumber: row.invoice_number || "",
+      month: formatMonthShort(row.check_date) || row.month || "",
+      check_date: row.check_date || "",
+      check_number: row.check_number || "",
+      check_amt: row.check_amt == null ? "" : String(row.check_amt),
+      invoice_number: row.invoice_number || "",
+      invoice_amt: row.invoice_amt == null ? "" : String(row.invoice_amt),
+      dc_name: row.dc_name || "",
+      status: row.status || "",
+      type: normalizeKsolveInvoiceTypeForStorage(upload?.category || row.type || ""),
+    });
+    setOpenActionMenuId(null);
+  };
+
+  const handleSaveInvoiceEdit = async () => {
+    if (!editingInvoice) return;
+    const invoiceNumber = editingInvoice.invoice_number.trim();
+    if (!invoiceNumber) {
+      showToast("Invoice # is required.", "error");
+      return;
+    }
+
+    const normalizedType = normalizeKsolveInvoiceTypeForStorage(editingInvoice.type);
+    const nextMonth =
+      editingInvoice.month.trim() ||
+      formatMonthShort(editingInvoice.check_date) ||
+      "";
+    const checkAmount = parseAmount(editingInvoice.check_amt);
+    const invoiceAmount = parseAmount(editingInvoice.invoice_amt);
+
+    try {
+      setSavingInvoiceEdit(true);
+      const invoicePayload = {
+        month: nextMonth,
+        check_date: editingInvoice.check_date.trim() || null,
+        check_number: editingInvoice.check_number.trim(),
+        check_amt: checkAmount,
+        invoice_number: invoiceNumber,
+        invoice_amt: invoiceAmount,
+        dc_name: editingInvoice.dc_name.trim(),
+        status: editingInvoice.status.trim(),
+        type: normalizedType,
+      };
+
+      const { error: invoiceError } = await supabase
+        .from("invoices")
+        .update(invoicePayload)
+        .eq("id", editingInvoice.id);
+
+      if (invoiceError) throw invoiceError;
+
+      const invoiceKeys = new Set(
+        [editingInvoice.originalInvoiceNumber, invoiceNumber]
+          .map((value) => normalizeInvoiceNumber(value))
+          .filter(Boolean)
+      );
+      const uploadIds = uploads
+        .filter((upload) => invoiceKeys.has(normalizeInvoiceNumber(upload.invoice || "")))
+        .map((upload) => upload.id);
+
+      if (uploadIds.length > 0) {
+        const { error: uploadError } = await supabase
+          .from("uploads")
+          .update({
+            category: normalizedType,
+            invoice: invoiceNumber,
+          })
+          .in("id", uploadIds);
+
+        if (uploadError) throw uploadError;
+      }
+
+      const datasetInvoice = normalizeInvoiceNumber(invoiceNumber) || invoiceNumber;
+      const datasetCandidates = Array.from(
+        new Set([
+          editingInvoice.originalInvoiceNumber,
+          normalizeInvoiceNumber(editingInvoice.originalInvoiceNumber),
+          invoiceNumber,
+          datasetInvoice,
+        ].filter(Boolean))
+      );
+
+      for (const candidate of datasetCandidates) {
+        const { error: datasetError } = await supabase
+          .from("broker_commission_datasets")
+          .update({
+            invoice: datasetInvoice,
+            month: nextMonth,
+            check_date: editingInvoice.check_date.trim() || null,
+            type: normalizedType,
+          })
+          .eq("invoice", candidate);
+
+        if (datasetError) throw datasetError;
+      }
+
+      setEditingInvoice(null);
+      await loadData(true);
+      showToast("Invoice updated.", "success");
+    } catch (e: any) {
+      showToast(e.message || "Failed to update invoice.", "error");
+    } finally {
+      setSavingInvoiceEdit(false);
+    }
+  };
 
   const openDocumentByInvoice = async (invoiceNumber: string | null) => {
     if (!invoiceNumber) return;
@@ -2687,11 +2906,11 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
           const matchedInvoice = invoiceLookup.get(ni);
           if (!matchedInvoice) { showToast(`${file.name}: invoice ${meta.invoice} not in invoices file.`, "error"); skip++; continue; }
 
-          const knownTypes = [
-            ...deductionTypes.map((t) => t.deduction_type.toLowerCase()),
-            ...Array.from(KNOWN_DEDUCTION_TYPES).map((type) => type.toLowerCase()),
-          ];
-          const isUnknownType = !meta.category || meta.category === "Unknown" || !knownTypes.includes(meta.category.toLowerCase());
+          const storedMetaCategory = normalizeKsolveInvoiceTypeForStorage(meta.category);
+          const isKnownBlankType = isKsolveKnownBlankType(meta.category);
+          const isUnknownType =
+            !isKnownBlankType &&
+            (!storedMetaCategory || meta.category === "Unknown");
 
           if (isUnknownType) {
             const { data: dup2 } = await supabase.from("uploads").select("*").eq("invoice", matchedInvoice.invoice_number).limit(1);
@@ -2835,6 +3054,7 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
     setSelectedIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const handleDeleteRow = async (row: InvoiceRecord) => {
+    setOpenActionMenuId(null);
     if (!window.confirm(`Delete invoice row ${row.invoice_number || ""}?`)) return;
   
     try {
@@ -3061,6 +3281,120 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
         </div>
       )}
 
+      {editingInvoice && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-3xl rounded-3xl bg-white p-6 shadow-2xl">
+            <h3 className="mb-1 text-lg font-semibold text-slate-900">Edit Ksolve Invoice</h3>
+            <p className="mb-5 text-sm text-slate-500">
+              Update the invoice row and its matching upload/dataset type.
+            </p>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Type</label>
+                <select
+                  value={editingInvoice.type}
+                  onChange={(e) => updateEditingInvoice("type", e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
+                >
+                  <option value="">{BLANK_TYPE_OPTION}</option>
+                  {rowEditTypeOptions.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Month</label>
+                <Input
+                  value={editingInvoice.month}
+                  onChange={(e) => updateEditingInvoice("month", e.target.value)}
+                  placeholder="July '26"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Check Date</label>
+                <Input
+                  value={editingInvoice.check_date}
+                  onChange={(e) => updateEditingInvoice("check_date", e.target.value)}
+                  placeholder="07/31/2026"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Check #</label>
+                <Input
+                  value={editingInvoice.check_number}
+                  onChange={(e) => updateEditingInvoice("check_number", e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Check Amt</label>
+                <Input
+                  value={editingInvoice.check_amt}
+                  onChange={(e) => updateEditingInvoice("check_amt", e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Invoice #</label>
+                <Input
+                  value={editingInvoice.invoice_number}
+                  onChange={(e) => updateEditingInvoice("invoice_number", e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Invoice Amt</label>
+                <Input
+                  value={editingInvoice.invoice_amt}
+                  onChange={(e) => updateEditingInvoice("invoice_amt", e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Status</label>
+                <Input
+                  value={editingInvoice.status}
+                  onChange={(e) => updateEditingInvoice("status", e.target.value)}
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-xs font-medium text-slate-600">DC Name</label>
+                <Input
+                  value={editingInvoice.dc_name}
+                  onChange={(e) => updateEditingInvoice("dc_name", e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setEditingInvoice(null)}
+                disabled={savingInvoiceEdit}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveInvoiceEdit}
+                disabled={savingInvoiceEdit}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+              >
+                {savingInvoiceEdit ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-6 xl:grid-cols-[1fr]">
         <Card className="relative overflow-visible rounded-3xl">
           <CardContent className="overflow-visible pt-6">
@@ -3170,6 +3504,7 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
                     <th className="px-4 py-3 text-left font-semibold">Status</th>
                     <th className="px-4 py-3 text-left font-semibold">Type</th>
                     <th className="px-4 py-3 text-left font-semibold">Documents</th>
+                    <th className="px-4 py-3 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3202,15 +3537,45 @@ const [pendingUnknownDeductions, setPendingUnknownDeductions] = useState<Pending
                               {docType === "excel" ? <FileSpreadsheet className="h-5 w-5" /> : <FileText className="h-5 w-5" />}
                             </button>
                           ) : (
-                            <button
-  type="button"
-  onClick={() => handleDeleteRow(row)}
-  className="text-slate-300 hover:text-red-600"
-  title="Delete row"
->
-  <XCircle className="h-5 w-5" />
-</button>
+                            <span className="text-slate-300">-</span>
                           )}
+                        </td>
+                        <td className="relative px-4 py-3 text-right">
+                          <div
+                            className="relative inline-block text-left"
+                            ref={openActionMenuId === row.id ? actionMenuRef : null}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setOpenActionMenuId((current) => (current === row.id ? null : row.id))}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                              title="More actions"
+                              aria-label="More actions"
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </button>
+
+                            {openActionMenuId === row.id && (
+                              <div className="absolute right-0 z-30 mt-2 w-36 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+                                <button
+                                  type="button"
+                                  onClick={() => startEditInvoice(row)}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteRow(row)}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

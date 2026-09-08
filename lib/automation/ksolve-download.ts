@@ -262,7 +262,47 @@ function isSupportingDocument(document: KsolveDocument) {
   return document.DocumentType?.toLowerCase().trim() === "supporting document";
 }
 
-const KEHE_NEW_ITEM_SETUP_TYPE = "KeHE New Item Setup Fee";
+const KEHE_CUSTOMER_SPOILS_TYPE = "Kehe Customer Spoils Allowance";
+const KEHE_WM_INVOICE_TYPE = "Kehe WM Invoice";
+const KEHE_TPR_FUNDING_TYPE = "Kehe TPR Funding";
+const KEHE_DISTRIBUTION_MCB_TYPE = "Kehe Distribution (MCB) Allowances";
+const KEHE_NEW_ITEM_SETUP_TYPE = "Kehe New Item Setup Fee";
+const KEHE_LEGACY_NEW_ITEM_SETUP_TYPE = "KeHE New Item Setup Fee";
+const KEHE_INTRODUCTION_ALLOWANCE_TYPE = "Kehe Introduction Allowance";
+
+function normalizeTypeKey(raw: string | null | undefined) {
+  return String(raw || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/&/g, "and")
+    .replace(/[^A-Za-z0-9]+/g, "")
+    .toLowerCase();
+}
+
+const KEHE_TYPE_BY_KEY = new Map<string, string>([
+  ["kehecustomerspoilsallowance", KEHE_CUSTOMER_SPOILS_TYPE],
+  ["customerspoilsallowance", KEHE_CUSTOMER_SPOILS_TYPE],
+  ["customerspoilagenatural", KEHE_CUSTOMER_SPOILS_TYPE],
+  ["customerspoilage", KEHE_CUSTOMER_SPOILS_TYPE],
+  ["kehewminvoice", KEHE_WM_INVOICE_TYPE],
+  ["targetswminvoice", KEHE_WM_INVOICE_TYPE],
+  ["wminvoice", KEHE_WM_INVOICE_TYPE],
+  ["promoandplacementfund", KEHE_TPR_FUNDING_TYPE],
+  ["promoandplacementfunds", KEHE_TPR_FUNDING_TYPE],
+  ["1promotion", KEHE_TPR_FUNDING_TYPE],
+  ["1dollarpromotion", KEHE_TPR_FUNDING_TYPE],
+  ["distributorcharge", KEHE_TPR_FUNDING_TYPE],
+  ["kehetprfunding", KEHE_TPR_FUNDING_TYPE],
+  ["mcbpromotion", KEHE_DISTRIBUTION_MCB_TYPE],
+  ["kehedistributionmcballowances", KEHE_DISTRIBUTION_MCB_TYPE],
+  ["distributionmcballowances", KEHE_DISTRIBUTION_MCB_TYPE],
+  ["newitemsetupfee", KEHE_NEW_ITEM_SETUP_TYPE],
+  ["newitemsetup", KEHE_NEW_ITEM_SETUP_TYPE],
+  ["kehenewitemsetupfee", KEHE_NEW_ITEM_SETUP_TYPE],
+  ["introductionallowance", KEHE_INTRODUCTION_ALLOWANCE_TYPE],
+  ["introallowanceaudit", KEHE_INTRODUCTION_ALLOWANCE_TYPE],
+  ["introductoryfee", KEHE_INTRODUCTION_ALLOWANCE_TYPE],
+  ["keheintroductionallowance", KEHE_INTRODUCTION_ALLOWANCE_TYPE],
+]);
 
 function isNewItemSetupText(raw: string) {
   return /new\s+item\s+(?:setup|set\s*[-\u2010-\u2015]?\s*up|allowances?)(?:\s+fee)?/i.test(
@@ -278,6 +318,8 @@ function normalizeType(raw: string) {
   }
 
   if (/distributor\s+charge/i.test(c)) return "$1 Promotion";
+  if (/promo\s+(?:and|&)\s+placement\s+funds?/i.test(c)) return "Promo and Placement Fund";
+  if (/\bmcb\s+promotion\b/i.test(c)) return "MCB Promotion";
   if (/customer\s+spoils\s+allowance/i.test(c)) return "Customer Spoils Allowance";
   if (/customer\s+spoilage\s+natural/i.test(c)) return "Customer Spoils Allowance";
   if (/customer\s+spoilage/i.test(c)) return "Customer Spoils Allowance";
@@ -287,11 +329,29 @@ function normalizeType(raw: string) {
   if (/fresh\s+thyme\s+ppf/i.test(c)) return "Pass Thru Deduction";
   if (/kroger\s+disc/i.test(c) || /kroger\s+discount/i.test(c)) return "Pass Thru Deduction";
   if (isNewItemSetupText(c)) return KEHE_NEW_ITEM_SETUP_TYPE;
-  if (/intro\s+allowance\s+audit/i.test(c)) return "Intro Allowance Audit";
-  if (/introductory\s+fee/i.test(c)) return "Introductory Fee";
+  if (/intro\s+allowance\s+audit/i.test(c)) return "Introduction Allowance";
+  if (/introduction\s+allowance/i.test(c)) return "Introduction Allowance";
+  if (/introductory\s+fee/i.test(c)) return "Introduction Allowance";
   if (/wm\s+invoice/i.test(c)) return "WM Invoice";
 
   return String(raw || "").replace(/\s+/g, " ").trim() || "Unknown";
+}
+
+function normalizeKsolveInvoiceTypeForStorage(raw: string | null | undefined) {
+  const trimmed = String(raw || "").replace(/\s+/g, " ").trim();
+  if (!trimmed) return "";
+  if (trimmed.toLowerCase() === "blank") return "";
+  if (/^KeHE\s*New\s*Item\s*Setup\s*Fee$/i.test(trimmed) && /^KeHE/.test(trimmed)) {
+    return KEHE_LEGACY_NEW_ITEM_SETUP_TYPE;
+  }
+  const normalized = normalizeType(trimmed);
+  const mappedType =
+    KEHE_TYPE_BY_KEY.get(normalizeTypeKey(trimmed)) ||
+    KEHE_TYPE_BY_KEY.get(normalizeTypeKey(normalized));
+  if (mappedType) return mappedType;
+  if (normalized === "Pass Thru Deduction") return "";
+  if (normalized === "Unknown") return "";
+  return trimmed;
 }
 
 function normalizeInvoiceNumber(raw: string | null | undefined) {
@@ -465,13 +525,23 @@ function normalizeForMatch(raw: string | null | undefined) {
 const KNOWN_DEDUCTION_TYPES = new Set([
   "$1 Promotion",
   "Customer Spoils Allowance",
+  KEHE_CUSTOMER_SPOILS_TYPE,
   "Pass Thru Deduction",
   "New Item Setup Fee",
   "New Item Setup",
   KEHE_NEW_ITEM_SETUP_TYPE,
+  KEHE_LEGACY_NEW_ITEM_SETUP_TYPE,
   "Intro Allowance Audit",
   "Introductory Fee",
+  "Introduction Allowance",
+  "Promo and Placement Fund",
+  "Promo and Placement Funds",
+  "MCB Promotion",
+  KEHE_TPR_FUNDING_TYPE,
+  KEHE_DISTRIBUTION_MCB_TYPE,
+  KEHE_INTRODUCTION_ALLOWANCE_TYPE,
   "WM Invoice",
+  KEHE_WM_INVOICE_TYPE,
 ]);
 
 function getKnownDeductionType(raw: string | null | undefined) {
@@ -651,7 +721,7 @@ async function replaceAutomationExcelDatasetRows({
     return 0;
   }
 
-  const finalType = normalizeType(category || getInvoiceType(row) || "Unknown");
+  const finalType = normalizeKsolveInvoiceTypeForStorage(category || getInvoiceType(row) || "Unknown");
   const productLookup = await fetchProductLookupForDatasets();
   const inserts: BrokerDatasetInsert[] = detailRows.map((detailRow) => {
     const upc = normalizeSku(detailRow.upc);
@@ -722,7 +792,7 @@ function resolveAutomatedDeductionType({
   });
 
   if (exactMatch?.deduction_type) {
-    return normalizeType(exactMatch.deduction_type);
+    return normalizeKsolveInvoiceTypeForStorage(exactMatch.deduction_type);
   }
 
   const containsMatch = deductionTypes.find((record) => {
@@ -735,15 +805,15 @@ function resolveAutomatedDeductionType({
   });
 
   if (containsMatch?.deduction_type) {
-    return normalizeType(containsMatch.deduction_type);
+    return normalizeKsolveInvoiceTypeForStorage(containsMatch.deduction_type);
   }
 
   for (const candidate of candidates) {
     const knownType = getKnownDeductionType(candidate);
-    if (knownType) return knownType;
+    if (knownType) return normalizeKsolveInvoiceTypeForStorage(knownType);
   }
 
-  if (invoiceType !== "Unknown") return invoiceType;
+  if (invoiceType !== "Unknown") return normalizeKsolveInvoiceTypeForStorage(invoiceType);
 
   console.warn(
     `No deduction type mapping found for invoice ${row.InvoiceNumber || "Unknown"}. ` +
@@ -813,11 +883,12 @@ async function insertUploadRecord({
   fileType: string;
 }) {
   const supabase = getSupabaseClient();
+  const storedCategory = normalizeKsolveInvoiceTypeForStorage(category);
 
   const { error } = await supabase.from("uploads").insert({
     file_name: fileName,
     file_path: storagePath,
-    category,
+    category: storedCategory,
     invoice,
     pdf_date: pdfDate,
     file_type: fileType,
@@ -875,7 +946,7 @@ async function upsertInvoiceRows(rows: KsolveSearchRow[]) {
     invoice_amt: row.InvoiceAmount ?? 0,
     dc_name: row.DcNameDisplayable || "",
     status: row.PayStatusCode || "",
-    type: getInvoiceType(row),
+    type: normalizeKsolveInvoiceTypeForStorage(getInvoiceType(row)),
     doc_status: row.HasDocuments ? "true" : "false",
     check_amt: row.CheckAmount ?? 0,
     deduction_type: row.ChargeTypeCode || null,
@@ -955,13 +1026,14 @@ async function uploadBufferToSupabase({
 }
 
 async function syncInvoiceTypeFromUpload(invoice: string, type: string) {
-  if (!invoice || invoice === "Unknown" || !type || type === "Unknown") return;
+  if (!invoice || invoice === "Unknown" || type === "Unknown") return;
 
   const supabase = getSupabaseClient();
+  const storedType = normalizeKsolveInvoiceTypeForStorage(type);
 
   const { error } = await supabase
     .from("invoices")
-    .update({ type, doc_status: true })
+    .update({ type: storedType, doc_status: true })
     .eq("invoice_number", invoice);
 
   if (error) {

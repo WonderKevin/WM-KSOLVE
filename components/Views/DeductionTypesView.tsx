@@ -20,6 +20,64 @@ type DeductionTypesCache = {
   rows: DeductionTypeRow[];
 };
 
+const KEHE_DEDUCTION_TYPE_OPTIONS = [
+  "Kehe Customer Spoils Allowance",
+  "Kehe WM Invoice",
+  "Kehe TPR Funding",
+  "Kehe Distribution (MCB) Allowances",
+  "Kehe New Item Setup Fee",
+  "KeHE New Item Setup Fee",
+  "Kehe Introduction Allowance",
+] as const;
+
+function normalizeTypeKey(raw: string | null | undefined) {
+  return String(raw || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/&/g, "and")
+    .replace(/[^A-Za-z0-9]+/g, "")
+    .toLowerCase();
+}
+
+const KEHE_DEDUCTION_TYPE_BY_KEY = new Map<string, string>([
+  ["kehecustomerspoilsallowance", "Kehe Customer Spoils Allowance"],
+  ["customerspoilsallowance", "Kehe Customer Spoils Allowance"],
+  ["customerspoilagenatural", "Kehe Customer Spoils Allowance"],
+  ["customerspoilage", "Kehe Customer Spoils Allowance"],
+  ["kehewminvoice", "Kehe WM Invoice"],
+  ["targetswminvoice", "Kehe WM Invoice"],
+  ["wminvoice", "Kehe WM Invoice"],
+  ["promoandplacementfund", "Kehe TPR Funding"],
+  ["promoandplacementfunds", "Kehe TPR Funding"],
+  ["1promotion", "Kehe TPR Funding"],
+  ["1dollarpromotion", "Kehe TPR Funding"],
+  ["distributorcharge", "Kehe TPR Funding"],
+  ["kehetprfunding", "Kehe TPR Funding"],
+  ["mcbpromotion", "Kehe Distribution (MCB) Allowances"],
+  ["kehedistributionmcballowances", "Kehe Distribution (MCB) Allowances"],
+  ["distributionmcballowances", "Kehe Distribution (MCB) Allowances"],
+  ["newitemsetupfee", "Kehe New Item Setup Fee"],
+  ["newitemsetup", "Kehe New Item Setup Fee"],
+  ["kehenewitemsetupfee", "Kehe New Item Setup Fee"],
+  ["introductionallowance", "Kehe Introduction Allowance"],
+  ["introallowanceaudit", "Kehe Introduction Allowance"],
+  ["introductoryfee", "Kehe Introduction Allowance"],
+  ["keheintroductionallowance", "Kehe Introduction Allowance"],
+]);
+
+function normalizeKeheDeductionType(raw: string) {
+  const trimmed = String(raw || "").replace(/\s+/g, " ").trim();
+  if (/^KeHE\s*New\s*Item\s*Setup\s*Fee$/i.test(trimmed) && /^KeHE/.test(trimmed)) return "KeHE New Item Setup Fee";
+  if (/promo\s+(?:and|&)\s+placement\s+funds?/i.test(trimmed)) return "Kehe TPR Funding";
+  if (/\$\s*1\s*promotion/i.test(trimmed) || /\b1\s*dollar\s*promotion\b/i.test(trimmed)) return "Kehe TPR Funding";
+  if (/distributor\s+charge/i.test(trimmed)) return "Kehe TPR Funding";
+  if (/\bmcb\s+promotion\b/i.test(trimmed)) return "Kehe Distribution (MCB) Allowances";
+  if (/new\s+item\s+(?:setup|set\s*[-\u2010-\u2015]?\s*up|allowances?)(?:\s+fee)?/i.test(trimmed)) return "Kehe New Item Setup Fee";
+  if (/intro\s+allowance\s+audit/i.test(trimmed) || /introduction\s+allowance/i.test(trimmed) || /introductory\s+fee/i.test(trimmed)) return "Kehe Introduction Allowance";
+  if (/customer\s+spoil(?:s|age)/i.test(trimmed)) return "Kehe Customer Spoils Allowance";
+  if (/wm\s+invoice/i.test(trimmed)) return "Kehe WM Invoice";
+  return KEHE_DEDUCTION_TYPE_BY_KEY.get(normalizeTypeKey(trimmed)) || trimmed;
+}
+
 export default function DeductionTypesView() {
   const [startupCache] = useState<DeductionTypesCache | null>(() =>
     readBrowserCache<DeductionTypesCache>(DEDUCTION_TYPES_CACHE_KEY)
@@ -134,7 +192,7 @@ export default function DeductionTypesView() {
       setError(null);
 
       const cleanedDocumentType = documentType.trim();
-      const cleanedDeductionType = deductionType.trim();
+      const cleanedDeductionType = normalizeKeheDeductionType(deductionType);
 
       if (!cleanedDocumentType || !cleanedDeductionType) {
         setError("Document Type and Deduction Type are required.");
@@ -274,11 +332,17 @@ export default function DeductionTypesView() {
                 Deduction Type
               </label>
               <Input
+                list="kehe-deduction-type-options"
                 value={deductionType}
                 onChange={(e) => setDeductionType(e.target.value)}
-                placeholder="e.g. Customer Spoils Allowance"
+                placeholder="Choose or type a Kehe deduction type"
                 className="rounded-xl"
               />
+              <datalist id="kehe-deduction-type-options">
+                {KEHE_DEDUCTION_TYPE_OPTIONS.map((option) => (
+                  <option key={option} value={option} />
+                ))}
+              </datalist>
             </div>
           </div>
 
