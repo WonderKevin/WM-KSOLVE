@@ -1,5 +1,6 @@
 "use client";
 
+import { CHARGE_TYPES, retailerChargeTypes } from "@/lib/charge-types";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { Search, Upload } from "lucide-react";
@@ -43,6 +44,7 @@ type ParsedTargetFile = {
 const TARGET_INVOICES_CACHE_KEY = "wmksolve:report-cache:target-invoices";
 
 const DEFAULT_TARGET_DEDUCTION_TYPES: DeductionTypeRecord[] = [
+  ...CHARGE_TYPES.map((type) => ({ document_type: type, deduction_type: `Target's ${type}` })),
   {
     document_type: "Vendor Income Funding",
     deduction_type: "Target's TPR Funding",
@@ -502,7 +504,7 @@ export default function TargetView() {
 
   const typeOptions = useMemo(() => {
     return Array.from(
-      new Set(rows.map((row) => row.type || "Unmapped").filter(Boolean))
+      new Set([...retailerChargeTypes("Target's"), ...rows.map((row) => row.type || "Unmapped").filter(Boolean)])
     ).sort((a, b) => a.localeCompare(b));
   }, [rows]);
 

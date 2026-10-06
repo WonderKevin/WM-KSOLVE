@@ -1,5 +1,6 @@
 "use client";
 
+import { retailerChargeTypes } from "@/lib/charge-types";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import {
@@ -76,6 +77,7 @@ const UNFI_INVOICES_CACHE_KEY = "wmksolve:report-cache:unfi-invoices";
 const UNFI_WM_INVOICE_TYPE = "UNFI WM Invoice";
 const UNFI_MCB_TYPE = "UNFI Distribution (MCB) Allowances";
 const UNFI_TYPE_OPTIONS = [
+  ...retailerChargeTypes("UNFI"),
   UNFI_WM_INVOICE_TYPE,
   "UNFI EDLC Allowances",
   "UNFI Ad Fees",

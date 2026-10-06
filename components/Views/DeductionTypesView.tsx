@@ -1,5 +1,6 @@
 "use client";
 
+import { CHARGE_TYPE_RETAILERS, retailerChargeTypes, standardChargeType } from "@/lib/charge-types";
 import React, { useEffect, useRef, useState } from "react";
 import { Plus, RefreshCw, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
@@ -21,6 +22,7 @@ type DeductionTypesCache = {
 };
 
 const KEHE_DEDUCTION_TYPE_OPTIONS = [
+  ...CHARGE_TYPE_RETAILERS.flatMap(retailerChargeTypes),
   "Kehe Customer Spoils Allowance",
   "Kehe WM Invoice",
   "Kehe TPR Funding",
@@ -71,6 +73,8 @@ const KEHE_DEDUCTION_TYPE_BY_KEY = new Map<string, string>([
 
 function normalizeKeheDeductionType(raw: string) {
   const trimmed = String(raw || "").replace(/\s+/g, " ").trim();
+  const chargeType = standardChargeType(trimmed);
+  if (chargeType && !/^(?:Tony|Target|UNFI|Hy-Vee|Wegmans)/i.test(trimmed)) return `Kehe ${chargeType}`;
   const mapped = KEHE_DEDUCTION_TYPE_BY_KEY.get(normalizeTypeKey(trimmed));
   if (mapped) return mapped;
   if (/edlc\s+allowance/i.test(trimmed)) return "Kehe EDLC Allowance";
@@ -343,7 +347,7 @@ export default function DeductionTypesView() {
                 list="kehe-deduction-type-options"
                 value={deductionType}
                 onChange={(e) => setDeductionType(e.target.value)}
-                placeholder="Choose or type a Kehe deduction type"
+                placeholder="Choose or type a deduction type"
                 className="rounded-xl"
               />
               <datalist id="kehe-deduction-type-options">

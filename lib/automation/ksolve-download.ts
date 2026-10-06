@@ -1,3 +1,4 @@
+import { retailerChargeTypes, standardChargeType } from "@/lib/charge-types";
 import { createClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
 
@@ -316,6 +317,8 @@ function isNewItemSetupText(raw: string) {
 }
 
 function normalizeType(raw: string) {
+  const chargeType = standardChargeType(raw);
+  if (chargeType) return `Kehe ${chargeType}`;
   const c = String(raw || "").replace(/\s+/g, " ").trim().toLowerCase();
 
   if (/\$\s*1\s*promotion/i.test(c) || /\b1\s*dollar\s*promotion\b/i.test(c)) {
@@ -351,6 +354,8 @@ function normalizeKsolveInvoiceTypeForStorage(raw: string | null | undefined) {
     KEHE_TYPE_BY_KEY.get(normalizeTypeKey(trimmed)) ||
     KEHE_TYPE_BY_KEY.get(normalizeTypeKey(normalized));
   if (mappedType) return mappedType;
+  const chargeType = standardChargeType(trimmed);
+  if (chargeType) return `Kehe ${chargeType}`;
   if (normalized === "Pass Thru Deduction") return "";
   if (normalized === "Unknown") return "";
   return trimmed;
@@ -525,6 +530,7 @@ function normalizeForMatch(raw: string | null | undefined) {
 }
 
 const KNOWN_DEDUCTION_TYPES = new Set([
+  ...retailerChargeTypes("Kehe"),
   "$1 Promotion",
   "Customer Spoils Allowance",
   KEHE_CUSTOMER_SPOILS_TYPE,

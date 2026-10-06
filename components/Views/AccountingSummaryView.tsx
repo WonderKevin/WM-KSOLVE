@@ -1,5 +1,6 @@
 "use client";
 
+import { CHARGE_TYPES, standardChargeType } from "@/lib/charge-types";
 import React, { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Filter } from "lucide-react";
 
@@ -156,6 +157,7 @@ const PAGE_SIZE = 1000;
 const ACCOUNTING_SUMMARY_CACHE_KEY = "wmksolve:report-cache:accounting-summary";
 const WEGMANS_EDLC_TYPE = "Wegmans' EDLC Allowance";
 const STANDARD_ACCOUNTING_TYPES = [
+  ...CHARGE_TYPES,
   "WM Invoice",
   "EDLC Allowances",
   "Ad Fees",
@@ -339,6 +341,8 @@ function normalizeType(value: string | null | undefined) {
 }
 
 function getStandardAccountingType(value: string | null | undefined) {
+  const chargeType = standardChargeType(value);
+  if (chargeType) return chargeType;
   const cleaned = normalizeType(value).replace(/\u00a0/g, " ");
   const compact = cleaned.replace(/[^a-z0-9$]/g, "");
 
@@ -391,6 +395,7 @@ function getStandardAccountingType(value: string | null | undefined) {
 }
 
 function getRetailerTypeLabel(retailer: SourceRetailer, typeName: string) {
+  if (retailer === "kehe" && CHARGE_TYPES.some((type) => type === typeName)) return `Kehe ${typeName}`;
   if (retailer === "wegmans" && typeName === "EDLC Allowances") {
     return WEGMANS_EDLC_TYPE;
   }

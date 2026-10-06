@@ -1,5 +1,6 @@
 "use client";
 
+import { retailerChargeTypes, standardChargeType } from "@/lib/charge-types";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Search,
@@ -202,6 +203,7 @@ const KEHE_PROMO_PLACEMENT_FUNDS_TYPE = "Kehe Promo & Placement Funds";
 const KEHE_NEW_ITEM_SETUP_TYPE = "Kehe New Item Setup Fee";
 const KEHE_INTRODUCTION_ALLOWANCE_TYPE = "Kehe Introduction Allowance";
 const KEHE_KSOLVE_TYPE_OPTIONS = [
+  ...retailerChargeTypes("Kehe"),
   KEHE_CUSTOMER_SPOILS_TYPE,
   KEHE_WM_INVOICE_TYPE,
   KEHE_TPR_FUNDING_TYPE,
@@ -257,6 +259,8 @@ function isNewItemSetupText(raw: string) {
 }
 
 function normalizeType(raw: string) {
+  const chargeType = standardChargeType(raw);
+  if (chargeType) return `Kehe ${chargeType}`;
   const c = raw.replace(/\s+/g, " ").trim().toLowerCase();
   if (/\$\s*1\s*promotion/i.test(c) || /\b1\s*dollar\s*promotion\b/i.test(c)) return "$1 Promotion";
   if (/distributor\s+charge/i.test(c)) return "$1 Promotion";
@@ -277,6 +281,7 @@ function normalizeType(raw: string) {
 }
 
 const KNOWN_DEDUCTION_TYPES = new Set([
+  ...retailerChargeTypes("Kehe"),
   "$1 Promotion",
   "Customer Spoils Allowance",
   KEHE_CUSTOMER_SPOILS_TYPE,
@@ -320,6 +325,8 @@ function normalizeKsolveInvoiceTypeForStorage(raw: string | null | undefined) {
     KEHE_TYPE_BY_KEY.get(normalizeTypeKey(trimmed)) ||
     KEHE_TYPE_BY_KEY.get(normalizeTypeKey(normalized));
   if (mappedType) return mappedType;
+  const chargeType = standardChargeType(trimmed);
+  if (chargeType) return `Kehe ${chargeType}`;
   if (normalized === "Pass Thru Deduction") return "";
   if (normalized === "Unknown") return "";
   return trimmed;

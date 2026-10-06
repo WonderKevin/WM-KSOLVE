@@ -1,5 +1,6 @@
 "use client";
 
+import { retailerChargeTypes } from "@/lib/charge-types";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { Download, FileImage, Search, Upload, X } from "lucide-react";
@@ -78,6 +79,7 @@ const PAGE_SIZE = 1000;
 const DOCUMENT_BUCKET = "ksolve-documents";
 const HYVEE_INVOICES_CACHE_KEY = "wmksolve:report-cache:hyvee-invoices";
 const HYVEE_TYPE_OPTIONS = [
+  ...retailerChargeTypes("Hy-Vee"),
   "Hy-Vee WM Invoice",
   "Hy-Vee EDLC Allowances",
   "Hy-Vee Ad Fees",

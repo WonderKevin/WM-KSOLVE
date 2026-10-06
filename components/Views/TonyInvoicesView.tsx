@@ -1,5 +1,6 @@
 "use client";
 
+import { retailerChargeTypes } from "@/lib/charge-types";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import {
@@ -60,6 +61,7 @@ type ParsedTonyInvoiceFile = {
 const PAGE_SIZE = 1000;
 const TONY_INVOICES_CACHE_KEY = "wmksolve:report-cache:tony-invoices";
 const STANDARD_TONY_INVOICE_TYPES = [
+  ...retailerChargeTypes("Tony's"),
   "EDLC Allowances",
   "Ad Fees",
   "Distribution (MCB) Allowances",
