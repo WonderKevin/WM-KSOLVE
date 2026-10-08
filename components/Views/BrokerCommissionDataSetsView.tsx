@@ -1,5 +1,6 @@
 "use client";
 
+import { isKeheWmInvoiceType, normalizeKeheWmInvoiceType } from "@/lib/kehe-invoice-type";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
@@ -75,12 +76,10 @@ const EDITABLE_RETAILERS = [
 
 const PAGE_SIZE = 1000;
 const WRITE_BATCH_SIZE = 500;
-const BROKER_DATA_SETS_REPORT_KEY = "broker-data-sets";
-const BROKER_DATA_SETS_CACHE_KEY = "wmksolve:report-cache:broker-data-sets:v3";
+const BROKER_DATA_SETS_REPORT_KEY = "broker-data-sets:v2";
+const BROKER_DATA_SETS_CACHE_KEY = "wmksolve:report-cache:broker-data-sets:v4";
 const BROKER_DATA_SETS_CACHE_FALLBACK_KEYS = [
   BROKER_DATA_SETS_CACHE_KEY,
-  "wmksolve:report-cache:broker-data-sets:v2",
-  "wmksolve:report-cache:broker-data-sets:v1",
 ] as const;
 
 type BrokerDataSetsCache = {
@@ -168,10 +167,7 @@ function normalizeType(value: string) {
   return String(value || "").trim().toUpperCase();
 }
 
-function isWmInvoiceType(value: string) {
-  const t = normalizeType(value);
-  return t === "WM INVOICE" || t === "WMINVOICE";
-}
+const isWmInvoiceType = isKeheWmInvoiceType;
 
 /**
  * Normalize a raw type string from the DB — strips non-breaking spaces,
@@ -179,10 +175,7 @@ function isWmInvoiceType(value: string) {
  * and comparing type values so the filter always matches correctly.
  */
 function cleanType(value: string | null | undefined): string {
-  return String(value ?? "")
-    .replace(/\u00a0/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeKeheWmInvoiceType(value);
 }
 
 /**
@@ -491,7 +484,6 @@ async function fetchAllInvoiceRows(): Promise<InvoiceRow[]> {
     const { data, error } = await supabase
       .from("invoices")
       .select("invoice_number, check_date, check_number, invoice_amt, type")
-      .ilike("type", "WM Invoice")
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
@@ -506,7 +498,7 @@ async function fetchAllInvoiceRows(): Promise<InvoiceRow[]> {
     }
   }
 
-  return allRows;
+  return allRows.filter((row) => isWmInvoiceType(row.type ?? ""));
 }
 
 async function fetchAllLocations(): Promise<LocationRow[]> {

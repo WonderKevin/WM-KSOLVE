@@ -1,5 +1,6 @@
 "use client";
 
+import { KEHE_WM_INVOICE_TYPE, isKeheWmInvoiceType, normalizeKeheWmInvoiceType } from "@/lib/kehe-invoice-type";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check,
@@ -87,8 +88,8 @@ type TransferAllocationRow = {
   invoice_numbers: string[] | null;
 };
 
-const BROKER_SUMMARY_CACHE_KEY = "wmksolve:report-cache:broker-commission-summary:v3";
-const BROKER_SUMMARY_REPORT_KEY = "broker-commission-summary";
+const BROKER_SUMMARY_CACHE_KEY = "wmksolve:report-cache:broker-commission-summary:v4";
+const BROKER_SUMMARY_REPORT_KEY = "broker-commission-summary:v2";
 
 type BrokerSummaryCache = {
   rows: DatasetRow[];
@@ -447,10 +448,7 @@ function inferRetailer(
   return categorizeRetailerName(match.retailer);
 }
 
-function isWmInvoiceType(type: string) {
-  const t = normalizeText(type);
-  return t === "WMINVOICE" || t === "WM INVOICE";
-}
+const isWmInvoiceType = isKeheWmInvoiceType;
 
 function getTypeLabel(type: string) {
   return String(type || "").trim() || "Deduction";
@@ -651,7 +649,6 @@ async function fetchAllInvoiceRows(): Promise<InvoiceRow[]> {
     const { data, error } = await supabase
       .from("invoices")
       .select("invoice_number, invoice_amt, type")
-      .eq("type", "WM Invoice")
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) throw error;
@@ -666,7 +663,7 @@ async function fetchAllInvoiceRows(): Promise<InvoiceRow[]> {
     }
   }
 
-  return allRows;
+  return allRows.filter((row) => isWmInvoiceType(row.type ?? ""));
 }
 
 async function fetchAllVelocityRows(): Promise<VelocityRow[]> {
@@ -1036,7 +1033,7 @@ export default function BrokerCommissionSummaryView() {
         month: derivedMonth,
         check_date: r.check_date ?? "",
         invoice: normalizeInvoice(r.invoice ?? ""),
-        type: r.type ?? "",
+        type: normalizeKeheWmInvoiceType(r.type),
         upc: r.upc ?? "",
         item: r.item ?? "",
         cust_name: r.cust_name ?? "",
@@ -1361,12 +1358,12 @@ export default function BrokerCommissionSummaryView() {
 
       block.wmInvoiceTotal = round2(block.wmInvoiceTotal + amount);
       block.details.push({
-        label: "WM Invoice",
+        label: KEHE_WM_INVOICE_TYPE,
         amount,
         kind: "invoice-summary",
         children: [
           {
-            label: `WM Invoice ${invoice}`,
+            label: `${KEHE_WM_INVOICE_TYPE} ${invoice}`,
             amount,
             kind: "invoice-detail",
             invoice,
@@ -1397,7 +1394,7 @@ export default function BrokerCommissionSummaryView() {
         if (!hasDc19) {
           const firstInvoice = firstWmInvoiceByMonth.get(row.month);
           if (firstInvoice) {
-            typeLabel = `${typeLabel} (allocated to WM Invoice ${firstInvoice})`;
+            typeLabel = `${typeLabel} (allocated to Kehe WM Invoice ${firstInvoice})`;
           }
         } else {
           typeLabel = `${typeLabel} (DC19)`;
@@ -1610,7 +1607,7 @@ export default function BrokerCommissionSummaryView() {
     );
 
     if (!targetRows.length) {
-      alert(`No WM Invoice rows found for ${invoiceNorm}.`);
+      alert(`No Kehe WM Invoice rows found for ${invoiceNorm}.`);
       return;
     }
 
@@ -1645,7 +1642,7 @@ export default function BrokerCommissionSummaryView() {
       cancelInvoiceRetailerEdit();
       await load(true, true);
     } catch (error) {
-      console.error("Failed to update WM Invoice retailer:", error);
+      console.error("Failed to update Kehe WM Invoice retailer:", error);
       const message = error instanceof Error ? error.message : String(error);
       alert(`Failed to update retailer: ${message}`);
     } finally {
@@ -1781,7 +1778,7 @@ export default function BrokerCommissionSummaryView() {
 
                 <div className="grid flex-1 grid-cols-2 items-end gap-4 text-right md:grid-cols-[repeat(4,minmax(100px,1fr))_170px]">
                   <div>
-                    <div className="text-xs text-slate-500">WM Invoice</div>
+                    <div className="text-xs text-slate-500">Kehe WM Invoice</div>
                     <div className="font-semibold text-slate-900">
                       {formatMoney(monthSummary.grandWmInvoiceTotal)}
                     </div>
@@ -1874,7 +1871,7 @@ export default function BrokerCommissionSummaryView() {
                           </div>
                         </div>
                         <div>
-                          <div className="text-xs text-slate-500">WM Invoice Total</div>
+                          <div className="text-xs text-slate-500">Kehe WM Invoice Total</div>
                           <div className="font-semibold text-slate-900">
                             {formatMoney(block.wmInvoiceTotal)}
                           </div>
@@ -2087,7 +2084,7 @@ export default function BrokerCommissionSummaryView() {
                 </h3>
                 <p className="mt-1 text-sm text-slate-500">
                   Select the Kroger WM invoices for {formatMonthShort(allocationModal.month)}.
-                  The transfer will deduct from selected Kroger invoices in invoice-number order and move the same amount to {allocationModal.targetRetailer}, so the monthly WM Invoice total stays unchanged.
+                  The transfer will deduct from selected Kroger invoices in invoice-number order and move the same amount to {allocationModal.targetRetailer}, so the monthly Kehe WM Invoice total stays unchanged.
                 </p>
               </div>
               <button
@@ -2142,7 +2139,7 @@ export default function BrokerCommissionSummaryView() {
                 <thead className="sticky top-0 bg-slate-50">
                   <tr>
                     <th className="px-4 py-3 text-left font-semibold text-slate-700">Use</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Kroger WM Invoice</th>
+                    <th className="px-4 py-3 text-left font-semibold text-slate-700">Kroger Kehe WM Invoice</th>
                     <th className="px-4 py-3 text-right font-semibold text-slate-700">Available Amount</th>
                   </tr>
                 </thead>
@@ -2161,7 +2158,7 @@ export default function BrokerCommissionSummaryView() {
                           />
                         </td>
                         <td className="px-4 py-3 font-medium text-slate-900">
-                          WM Invoice {option.invoice}
+                          Kehe WM Invoice {option.invoice}
                           {option.invoice === allocationModal.firstInvoice && (
                             <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
                               First invoice
