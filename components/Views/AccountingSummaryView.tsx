@@ -171,6 +171,7 @@ const STANDARD_ACCOUNTING_TYPES = [
   "Display Fees",
   "New Item Setup Fee",
   "SSA 1%",
+  "Credit",
 ] as const;
 
 const RETAILER_POSSESSIVE_LABELS: Record<SourceRetailer, string> = {
@@ -350,6 +351,7 @@ function getStandardAccountingType(value: string | null | undefined) {
   if (!compact) return "";
 
   if (/^(?:unfi)?ssa1%$/.test(cleaned.replace(/\s+/g, ""))) return "SSA 1%";
+  if (cleaned === "unfi credit") return "Credit";
 
   if (compact.includes("wminvoice")) return "WM Invoice";
 
