@@ -23,6 +23,7 @@ type DeductionTypesCache = {
 
 const KEHE_DEDUCTION_TYPE_OPTIONS = [
   ...CHARGE_TYPE_RETAILERS.flatMap(retailerChargeTypes),
+  "UNFI SSA 1%",
   "Kehe Customer Spoils Allowance",
   "Kehe WM Invoice",
   "Kehe TPR Funding",

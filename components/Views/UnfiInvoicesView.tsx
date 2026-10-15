@@ -90,6 +90,7 @@ const UNFI_TYPE_OPTIONS = [
   "UNFI Slotting Fees",
   "UNFI Display Fees",
   "UNFI New Item Setup Fee",
+  "UNFI SSA 1%",
 ] as const;
 
 type UnfiInvoicesCache = {
