@@ -1,6 +1,7 @@
 "use client";
 
 import { CHARGE_TYPES, standardChargeType } from "@/lib/charge-types";
+import { normalizeTargetInvoiceRow } from "@/lib/target-invoice-type";
 import React, { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Filter } from "lucide-react";
 
@@ -627,7 +628,7 @@ export default function AccountingSummaryView() {
     () => startupCache?.invoiceRows || []
   );
   const [targetRows, setTargetRows] = useState<TargetInvoiceRow[]>(
-    () => startupCache?.targetRows || []
+    () => (startupCache?.targetRows || []).map(normalizeTargetInvoiceRow)
   );
   const [unfiRows, setUnfiRows] = useState<UnfiInvoiceRow[]>(
     () => startupCache?.unfiRows || []
@@ -754,7 +755,7 @@ export default function AccountingSummaryView() {
         } else {
           nextTargetRows = ((rawTargetRes.data || []) as TargetInvoiceRow[]).map(
             (row) => ({
-              ...row,
+              ...normalizeTargetInvoiceRow(row),
               retailer: "target",
             })
           );

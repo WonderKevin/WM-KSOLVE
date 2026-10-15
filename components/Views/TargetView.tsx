@@ -1,6 +1,7 @@
 "use client";
 
 import { CHARGE_TYPES, retailerChargeTypes } from "@/lib/charge-types";
+import { isTargetInvoiceHeader, normalizeTargetInvoiceRow } from "@/lib/target-invoice-type";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { Search, Upload } from "lucide-react";
@@ -41,7 +42,7 @@ type ParsedTargetFile = {
   unmappedDocumentTypes: string[];
 };
 
-const TARGET_INVOICES_CACHE_KEY = "wmksolve:report-cache:target-invoices";
+const TARGET_INVOICES_CACHE_KEY = "wmksolve:report-cache:target-invoices:v2";
 
 const DEFAULT_TARGET_DEDUCTION_TYPES: DeductionTypeRecord[] = [
   ...CHARGE_TYPES.map((type) => ({ document_type: type, deduction_type: `Target's ${type}` })),
@@ -188,7 +189,7 @@ function formatCurrency(value: number | null | undefined) {
 function resolveReasonDescription(docHeaderText: string | null) {
   const doc = clean(docHeaderText).toUpperCase();
 
-  if (/^\d{4}$/.test(doc)) return "WM Invoice";
+  if (isTargetInvoiceHeader(doc)) return "WM Invoice";
 
   const match = REASON_PREFIXES
     .sort((a, b) => b.prefix.length - a.prefix.length)
@@ -200,11 +201,11 @@ function resolveReasonDescription(docHeaderText: string | null) {
 function buildDeductionTypeLookup(records: DeductionTypeRecord[]) {
   const map = new Map<string, string>();
 
-  for (const record of [...DEFAULT_TARGET_DEDUCTION_TYPES, ...records]) {
+  for (const record of [...records, ...DEFAULT_TARGET_DEDUCTION_TYPES]) {
     const documentType = normalizeLookupValue(record.document_type);
     const deductionType = clean(record.deduction_type);
 
-    if (documentType && deductionType) map.set(documentType, deductionType);
+    if (documentType && /^Target(?:['’]s)?\s/i.test(deductionType)) map.set(documentType, deductionType);
   }
 
   return map;
@@ -464,9 +465,8 @@ export default function TargetView() {
       if (error) throw error;
 
       const nextRows = ((data || []) as TargetInvoiceRow[]).map((row) => ({
-        ...row,
+        ...normalizeTargetInvoiceRow(row),
         month: formatMonthLabel(row.month),
-        type: row.type || null,
       }));
       setRows(nextRows);
       writeBrowserCache<TargetInvoicesCache>(TARGET_INVOICES_CACHE_KEY, {

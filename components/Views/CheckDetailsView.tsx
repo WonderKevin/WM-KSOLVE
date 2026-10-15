@@ -1,5 +1,6 @@
 "use client";
 
+import { normalizeTargetInvoiceRow } from "@/lib/target-invoice-type";
 import React, { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Search } from "lucide-react";
 
@@ -339,7 +340,7 @@ export default function CheckDetailsView() {
             retailer: "kehe",
           }));
 
-        const rawTargetRows = (targetRes.data || []) as TargetInvoiceRow[];
+        const rawTargetRows = ((targetRes.data || []) as TargetInvoiceRow[]).map(normalizeTargetInvoiceRow);
         const targetCheckAmounts = getTargetCheckAmounts(rawTargetRows);
 
         const targetRows: InvoiceRecord[] = rawTargetRows.map((row) => {

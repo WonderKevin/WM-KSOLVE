@@ -77,6 +77,7 @@ function normalizeKeheDeductionType(raw: string) {
   const trimmed = String(raw || "").replace(/\s+/g, " ").trim();
   const chargeType = standardChargeType(trimmed);
   if (chargeType && !/^(?:Tony|Target|UNFI|Hy-Vee|Wegmans)/i.test(trimmed)) return `Kehe ${chargeType}`;
+  if (/^(?:Target(?:['’]s)?|UNFI|Hy-Vee|Tony['’]s|Wegmans['’]?)\s/i.test(trimmed)) return trimmed;
   const mapped = KEHE_DEDUCTION_TYPE_BY_KEY.get(normalizeTypeKey(trimmed));
   if (mapped) return mapped;
   if (/edlc\s+allowance/i.test(trimmed)) return "Kehe EDLC Allowance";

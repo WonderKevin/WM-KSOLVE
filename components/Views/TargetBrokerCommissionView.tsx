@@ -1,5 +1,6 @@
 "use client";
 
+import { normalizeTargetInvoiceRow } from "@/lib/target-invoice-type";
 import React, { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
@@ -66,7 +67,8 @@ function isWMInvoice(reason: string | null | undefined) {
 }
 
 function getTargetLineType(row: TargetInvoiceRow) {
-  return row.type || row.reason_code_description || "Unknown";
+  const normalized = normalizeTargetInvoiceRow(row);
+  return normalized.type || normalized.reason_code_description || "Unknown";
 }
 
 function monthSortValue(month: string | null | undefined) {
