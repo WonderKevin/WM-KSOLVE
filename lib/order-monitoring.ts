@@ -85,25 +85,22 @@ export function materialSchedule(m: Material, productionStart: string, today = b
   if (/\b(?:delayed|overdue|unconfirmed)\b/i.test(m.status)) return { ready: false, covered: false, reason: `${name}: material status is ${m.status}.` };
   return { ready: false, covered: true, reason: `${name}: incoming covers the stock shortage by production (${dateLabel(m.eta)}); not yet available stock.` };
 }
-export function orderRiskReasons(o: Order, today = businessToday()): string[] {
-  if (o.status === "Delivered") return [];
+export function orderRiskReasons(o: Order): string[] {
+  if (o.status === "Delivered" || !o.productionStart) return [];
   const reasons: string[] = [];
-  if (o.status === "Delayed") reasons.push("PO status is Delayed.");
-  if (!o.actualDelivery && o.expectedDelivery && o.expectedDelivery < today) reasons.push(`Expected delivery ${dateLabel(o.expectedDelivery)} has passed without an actual delivery date.`);
-  if (o.expectedDelivery && o.requiredDelivery && o.expectedDelivery > o.requiredDelivery) reasons.push(`Expected delivery ${dateLabel(o.expectedDelivery)} is later than required ${dateLabel(o.requiredDelivery)}.`);
   for (const m of o.materials) {
-    const coverage = materialSchedule(m, o.productionStart, today);
-    // Unknown quantities remain unknown, not an invented positive shortage.
-    if ((calculatedShortage(m) ?? 0) > 0 && !coverage.covered) reasons.push(coverage.reason);
+    // Already-available materials do not depend on a later replenishment.
+    // Unknown ETAs stay To confirm; only a known arrival after production flags risk.
+    if (calculatedShortage(m) !== 0 && m.eta && m.eta > o.productionStart) {
+      reasons.push(`${m.description || m.itemNumber || "Material"}: ETA ${dateLabel(m.eta)} is after the production date ${dateLabel(o.productionStart)}.`);
+    }
   }
-  for (const a of o.actions) if (!a.completed && a.dueDate && a.dueDate < today) reasons.push(`Overdue action: ${a.description} (due ${dateLabel(a.dueDate)}).`);
-  if (o.coaRequired === true && !o.coaActual && o.coaExpected && o.coaExpected < today) reasons.push(`COA expected release ${dateLabel(o.coaExpected)} is overdue.`);
   return reasons;
 }
 export function orderHealth(o: Order, today = businessToday()): "Delivered" | "Delayed" | "At risk" | "On track" {
   if (o.status === "Delivered") return "Delivered";
   if (o.status === "Delayed" || (!o.actualDelivery && !!o.expectedDelivery && o.expectedDelivery < today)) return "Delayed";
-  if (orderRiskReasons(o, today).length) return "At risk";
+  if (orderRiskReasons(o).length) return "At risk";
   return "On track";
 }
 export function orderDates(o: Order) {

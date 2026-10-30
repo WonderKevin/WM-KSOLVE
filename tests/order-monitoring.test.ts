@@ -55,7 +55,7 @@ test("validation requires order identity and valid quantities, preserves unknown
 });
 test("risk and delivery distinguish PO status, material shortages and required vs expected dates", () => {
   const o = { ...blankOrder(), requiredDelivery: "2026-11-05", expectedDelivery: "2026-11-06" };
-  assert.equal(orderHealth(o, "2026-10-30"), "At risk");
+  assert.equal(orderHealth(o, "2026-10-30"), "On track");
   assert.equal(orderHealth({ ...o, status: "In transit" }, "2026-11-07"), "Delayed");
   assert.equal(orderHealth({ ...o, status: "Delivered" }, "2026-11-07"), "Delivered");
   assert.equal(orderHealth({ ...o, expectedDelivery: "2026-11-04" }, "2026-10-30"), "On track");
@@ -67,11 +67,15 @@ test("scheduled incoming can cover production without becoming available stock",
   assert.equal(materialSchedule(material, order.productionStart, "2026-10-30").ready, false);
   assert.equal(materialSchedule(material, order.productionStart, "2026-10-30").covered, true);
   assert.equal(orderHealth(order, "2026-10-30"), "On track");
-  assert.ok(orderRiskReasons({ ...order, materials: [{ ...material, incoming: 74 }] }, "2026-10-30")[0].includes("does not cover"));
-  assert.ok(orderRiskReasons({ ...order, materials: [{ ...material, eta: "2026-11-07" }] }, "2026-10-30")[0].includes("after production"));
-  assert.ok(orderRiskReasons(order, "2026-11-06")[0].includes("has passed"));
-  assert.ok(orderRiskReasons({ ...order, materials: [{ ...material, eta: "" }] }, "2026-10-30")[0].includes("ETA is to confirm"));
-  assert.ok(orderRiskReasons({ ...order, materials: [{ ...material, status: "Unconfirmed" }] }, "2026-10-30")[0].includes("Unconfirmed"));
+  assert.deepEqual(orderRiskReasons({ ...order, materials: [{ ...material, incoming: 0 }] }), []);
+  assert.ok(orderRiskReasons({ ...order, materials: [{ ...material, eta: "2026-11-07" }] })[0].includes("after the production date"));
+  assert.deepEqual(orderRiskReasons({ ...order, materials: [{ ...material, eta: order.productionStart }] }), []);
+  assert.deepEqual(orderRiskReasons({ ...order, materials: [{ ...material, eta: "" }] }), []);
+  assert.deepEqual(orderRiskReasons({ ...order, materials: [{ ...material, status: "Unconfirmed" }] }), []);
+  assert.deepEqual(orderRiskReasons({ ...order, materials: [{ ...material, available: 100, eta: "2026-11-07" }] }), []);
+  assert.deepEqual(orderRiskReasons({ ...order, productionStart: "" }), []);
+  assert.equal(orderHealth({ ...order, materials: [{ ...material, eta: "2026-11-07" }] }, "2026-10-30"), "At risk");
+  assert.equal(orderHealth({ ...order, coaRequired: true, coaExpected: "2026-10-01", requiredDelivery: "2026-11-01", expectedDelivery: "2026-11-10", actions: [{ id: "test", description: "Old action", owner: "", dueDate: "2026-10-01", completed: false }] }, "2026-10-30"), "On track");
 });
 test("timeline always excludes past columns while preserving historical order dates", () => {
   const order = { ...blankOrder(), orderDate: "2026-10-19", productionStart: "2026-11-10", expectedDelivery: "2026-12-07" };

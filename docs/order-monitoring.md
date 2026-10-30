@@ -26,7 +26,7 @@ Bars use saved dates only, in one compact lane. The calendar begins on today's N
 
 Pickup/Shipment is optional on each order, editable in both the summary row and PO form. Legacy records remain To confirm until a user chooses a method. Summary cards count active pickups and shipments, and the method filter scopes the cards and rows.
 
-Cards follow the current filters. Delayed includes explicit Delayed status or an overdue expected delivery without actual delivery. At risk includes uncovered, overdue or late material arrivals, overdue actions or COA, and expected delivery later than required. Incoming stock that fully covers the current shortage with a non-overdue ETA on/before production and no delayed/unconfirmed material status is planned coverage, not available stock; this alone does not trigger At risk. Missing quantities remain unknown. Each row exposes exact risk reasons in its tooltip and expanded details. No imported facts or Arctanis records are automatically changed by these classifications.
+Cards follow the current filters. Delayed includes explicit Delayed status or an overdue expected delivery without actual delivery. At risk is flagged only when a needed material has a saved ETA later than production start. An ETA on or before the production date is on time. A shortage, missing ETA, insufficient incoming quantity, unconfirmed material status, overdue action/COA or expected delivery later than required does not independently flag At risk. Materials already covered by available stock do not depend on later replenishment. Unknown dates remain To confirm. Stock readiness and incoming quantities remain separate from this date-only risk rule. Exact late-material reasons appear in the row tooltip and expanded details.
 
 ## Validation
 
