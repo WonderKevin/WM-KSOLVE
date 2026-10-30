@@ -10,7 +10,7 @@ Each PO is stored as an individual JSON document in the existing `public.report_
 
 The server-only endpoint `/api/order-monitoring` uses the deployment's existing `SUPABASE_SERVICE_ROLE_KEY` after verifying the user's bearer token and application permission. Credentials are never sent to the browser or downloaded. Direct client access to these keys is denied by the existing report snapshot policy. There is no database migration or new permission column. The endpoint returns a clear configuration error if deployment storage is not configured, and requires the existing report_snapshots schema.
 
-`GET` lists all monitoring documents with pagination. `POST` creates a unique PO. `PATCH` supports complete replacement, a status change, or a next-action completion change. All successful saves return database-confirmed records. Database failures leave the editor open with all unsaved values retained. UI state is never presented as saved before acknowledgement.
+`GET` lists all monitoring documents with pagination. `POST` creates a unique PO. `PATCH` supports complete replacement, PO or material status changes, pickup/shipment changes, and next-action completion. All successful saves return database-confirmed records. Database failures leave the editor open with all unsaved values retained. UI state is never presented as saved before acknowledgement.
 
 ## Workbook import
 
@@ -18,7 +18,7 @@ The actual `Order Monitoring.xlsx` file was not supplied with the implementation
 
 Preview never writes. Customer, status and other details can be supplied before confirmation. Invalid source values are listed for explicit review; required identity/quantity fields must still pass validation. Missing material columns block import. Updates to an existing PO require an explicit checkbox and retain saved fields not supplied by the workbook, preserve next actions, and replace the material table shown in the preview. Every sheet is reviewed and confirmed separately; cancel stops the remaining queue. Already confirmed sheets remain saved.
 
-Calculated shortage is `max(required - available after reservations, 0)`. Incoming never counts as available. Unknown inputs produce unknown shortage. Uploaded shortages remain separate; discrepancies require acknowledgement. Material status is independent of PO status.
+Calculated shortage is `max(required - available after reservations, 0)`. Incoming never counts as available. Unknown inputs produce unknown shortage. Uploaded shortages remain separate; discrepancies require acknowledgement. Material status is independent of PO status. Each expanded material row has an immediately saved dropdown with Sent, Confirmed, Delayed, In transit and Delivered, also available in Edit materials. Legacy imported labels remain visible until explicitly changed. Status changes do not receive stock or alter quantities, ETAs or PO status. Failed saves retain the previous saved selection.
 
 ## Timeline
 

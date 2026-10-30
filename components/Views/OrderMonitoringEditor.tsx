@@ -4,6 +4,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import { ORDER_STATUSES, calculatedShortage, quantityLabel, shortageDiscrepancy, blankMaterial, type Order, type Material, type NextAction } from "@/lib/order-monitoring";
 
+import MaterialStatusSelect from "./MaterialStatusSelect";
+
 export type EditorTab = "po" | "materials" | "actions";
 export type EditorState = {
   order: Order; originalPo?: string; version?: number; tab: EditorTab;
@@ -91,7 +93,7 @@ export default function OrderMonitoringEditor({ state, saving, error, onClose, o
               <div><p className="text-xs text-slate-500">Calculated shortage</p><p className={`mt-3 text-sm font-semibold ${(calculatedShortage(m) ?? 0) > 0 ? "text-amber-700" : "text-slate-700"}`}>{quantityLabel(calculatedShortage(m), m.unit)}</p></div>
               <TextField label="Supplier PO (material order)" value={m.supplierPo} onChange={v => material(m.id, { supplierPo: v })} />
               <TextField label="Material ETA" type="date" value={m.eta} onChange={v => material(m.id, { eta: v })} />
-              <TextField label="Material status (separate from PO)" value={m.status} onChange={v => material(m.id, { status: v })} />
+              <Field label="Material status (separate from PO)"><MaterialStatusSelect label={`Material status for ${m.description || m.itemNumber || m.id}`} value={m.status} onChange={status => material(m.id, { status })} /></Field>
               <button type="button" onClick={() => set("materials", order.materials.filter(row => row.id !== m.id))} className="mt-5 flex items-center gap-2 text-sm text-red-700"><Trash2 className="h-4 w-4" />Remove material</button>
             </div>
             {m.sourceValues && <details className="mt-3 text-xs text-slate-500"><summary className="cursor-pointer">Original workbook quantities</summary><p className="mt-2">{Object.entries(m.sourceValues).map(([k, v]) => `${k}: ${v || "Unknown"}`).join(" · ")}</p></details>}

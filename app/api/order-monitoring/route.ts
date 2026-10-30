@@ -89,6 +89,9 @@ export async function PATCH(request: Request) {
     } else if (input.operation === "fulfillment") {
       if (!["", "Pickup", "Shipment"].includes(input.fulfillmentMode)) throw new HttpError(400, "Choose Pickup or Shipment.");
       order = { ...order, fulfillmentMode: input.fulfillmentMode };
+    } else if (input.operation === "material-status") {
+      if (!ORDER_STATUSES.includes(input.status) || typeof input.materialId !== "string" || !order.materials.some(m => m.id === input.materialId)) throw new HttpError(400, "Invalid material or material status.");
+      order = { ...order, materials: order.materials.map(m => m.id === input.materialId ? { ...m, status: input.status } : m) };
     } else if (input.operation === "complete-action") {
       if (typeof input.completed !== "boolean" || !order.actions.some(a => a.id === input.actionId)) throw new HttpError(400, "Invalid action.");
       order = { ...order, actions: order.actions.map(a => a.id === input.actionId ? { ...a, completed: input.completed } : a) };

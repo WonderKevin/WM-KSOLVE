@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { GET, POST, PATCH } from "../app/api/order-monitoring/route";
-import { blankOrder } from "../lib/order-monitoring";
+import { blankOrder, blankMaterial } from "../lib/order-monitoring";
 
 test("authenticated storage, exact duplicates, atomic children, status-only patches and stale-version protection", async () => {
   const oldFetch = globalThis.fetch;
@@ -43,7 +43,7 @@ test("authenticated storage, exact duplicates, atomic children, status-only patc
     assert.equal((await GET(request("GET"))).status, 403);
     allowed = true;
     assert.deepEqual(await (await GET(request("GET"))).json(), { orders: [] });
-    const order = { ...blankOrder(), poNumber: "PO-QA-API", customer: "Synthetic QA", cases: 12, actions: [{ id: "a1", description: "QA action", owner: "", dueDate: "", completed: false }] };
+    const order = { ...blankOrder(), poNumber: "PO-QA-API", customer: "Synthetic QA", cases: 12, materials: [{ ...blankMaterial(), id: "m1", description: "QA material", status: "Ready" }], actions: [{ id: "a1", description: "QA action", owner: "", dueDate: "", completed: false }] };
     const created = await POST(request("POST", { order })); assert.equal(created.status, 201);
     assert.equal(records.size, 1);
     assert.equal((await POST(request("POST", { order: { ...order, poNumber: " po-qa-api " } }))).status, 409);
@@ -59,6 +59,15 @@ test("authenticated storage, exact duplicates, atomic children, status-only patc
     const mode = await PATCH(request("PATCH", { poNumber: order.poNumber, version: final.orders[0].version, operation: "fulfillment", fulfillmentMode: "Pickup" }));
     assert.equal(mode.status, 200); const modeResult = await mode.json(); assert.equal(modeResult.saved.order.fulfillmentMode, "Pickup"); assert.equal(modeResult.saved.order.status, "Confirmed");
     assert.equal((await PATCH(request("PATCH", { poNumber: order.poNumber, version: modeResult.saved.version, operation: "fulfillment", fulfillmentMode: "Other" }))).status, 400);
+    const material = await PATCH(request("PATCH", { poNumber: order.poNumber, version: modeResult.saved.version, operation: "material-status", materialId: "m1", status: "In transit" }));
+    assert.equal(material.status, 200); const materialResult = await material.json();
+    assert.equal(materialResult.saved.order.materials[0].status, "In transit");
+    assert.equal(materialResult.saved.order.status, "Confirmed");
+    assert.equal(materialResult.saved.order.materials[0].available, null);
+    for (const fields of [{ materialId: "m1", status: "Ready" }, { materialId: "missing", status: "Sent" }]) {
+      assert.equal((await PATCH(request("PATCH", { poNumber: order.poNumber, version: materialResult.saved.version, operation: "material-status", ...fields }))).status, 400);
+    }
+    const reloaded = await (await GET(request("GET"))).json(); assert.equal(reloaded.orders[0].order.materials[0].status, "In transit");
   } finally {
     globalThis.fetch = oldFetch;
     for (const [key, value] of [["NEXT_PUBLIC_SUPABASE_URL", previous.url], ["NEXT_PUBLIC_SUPABASE_ANON_KEY", previous.anon], ["SUPABASE_SERVICE_ROLE_KEY", previous.role]]) if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
