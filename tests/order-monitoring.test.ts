@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as XLSX from "xlsx";
-import { blankMaterial, blankOrder, calculatedShortage, shortageDiscrepancy, validateOrder, orderHealth, orderRiskReasons, materialSchedule, validDate, poKey } from "../lib/order-monitoring";
+import { blankMaterial, blankOrder, materialRows, calculatedShortage, shortageDiscrepancy, validateOrder, orderHealth, orderRiskReasons, materialSchedule, validDate, poKey } from "../lib/order-monitoring";
 import { timelineWindow, timelineStages, fromDay } from "../lib/order-monitoring-timeline";
 import { parseOrderWorkbook, parseQuantity, parseExcelDate } from "../lib/order-monitoring-import";
 
@@ -130,4 +130,16 @@ test("known PO items populate on import and To confirm supplier POs remain blank
   const result = parseOrderWorkbook(workbook([["PO number", "PO-10118"], ["Cases", 10], headers, ["Lids", 10, 10, null, 0, "To confirm", null, "Ready"]]), "items.xlsx")[0];
   assert.equal(result.order.product, "ITM-10349 · Factor US Double Chocolate");
   assert.equal(result.order.materials[0].supplierPo, "");
+});
+
+test("material rows prioritize shortages or PO references and only hide zero-shortage rows without deleting", () => {
+  const routine = { ...blankMaterial(), id: "routine", required: 10, available: 10, supplierPo: "To confirm" };
+  const unknown = { ...blankMaterial(), id: "unknown" };
+  const short = { ...blankMaterial(), id: "short", required: 10, available: 5 };
+  const referenced = { ...routine, id: "referenced", supplierPo: "PO-QA" };
+  const discrepancy = { ...routine, id: "review", uploadedShortage: 5 };
+  const materials = [routine, unknown, short, referenced, discrepancy], original = structuredClone(materials);
+  assert.deepEqual(materialRows(materials).map(m => m.id), ["short", "referenced", "unknown", "review"]);
+  assert.equal(materialRows(materials, true).length, materials.length);
+  assert.deepEqual(materials, original);
 });

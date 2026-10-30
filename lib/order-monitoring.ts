@@ -39,6 +39,13 @@ export function shortageDiscrepancy(m: Material) {
   const calculated = calculatedShortage(m);
   return calculated !== null && m.uploadedShortage !== null && Math.abs(calculated - m.uploadedShortage) > 0.00001;
 }
+export function hasSupplierPo(m: Material) {
+  return !!m.supplierPo.trim() && !/^to\s*confirm$/i.test(m.supplierPo.trim());
+}
+export function materialRows(materials: Material[], showAll = false) {
+  return materials.filter(m => showAll || calculatedShortage(m) !== 0 || hasSupplierPo(m) || shortageDiscrepancy(m))
+    .sort((a, b) => Number((calculatedShortage(b) ?? 0) > 0 || hasSupplierPo(b)) - Number((calculatedShortage(a) ?? 0) > 0 || hasSupplierPo(a)));
+}
 export function validDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const d = new Date(value + "T00:00:00Z");
