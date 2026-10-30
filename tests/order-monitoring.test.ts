@@ -97,3 +97,15 @@ test("timeline always excludes past columns while preserving historical order da
   assert.equal(timelineStages({ ...pickup, coaRequired: false })[2].na, true);
   assert.ok(validateOrder({ ...blankOrder(), poNumber: "PO-1", customer: "QA", cases: 1, fulfillmentMode: "Pickup" }).length === 0);
 });
+
+test("pickup or shipment with only an expected pickup date is a complete timeline milestone", () => {
+  for (const fulfillmentMode of ["", "Pickup", "Shipment"] as const) {
+    const order = { ...blankOrder(), fulfillmentMode, pickupDate: "2026-11-25" };
+    const stage = timelineStages(order).at(-1)!;
+    assert.equal(stage.start, "2026-11-25"); assert.equal(stage.end, "2026-11-25");
+    const range = timelineWindow([order], "", "", "2026-10-30"); assert.ok(fromDay(range.end) >= order.pickupDate);
+  }
+  for (const label of ["Expected pickup / ship date", "Expected pickup date", "Expected ship date"]) {
+    assert.equal(parseOrderWorkbook(workbook([["PO number", "PO-PICKUP"], ["Cases", 1], [label, "11/25/2026"], headers]), "pickup.xlsx")[0].order.pickupDate, "2026-11-25");
+  }
+});

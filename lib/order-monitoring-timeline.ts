@@ -15,6 +15,6 @@ export function timelineStages(o: Order) {
     { name: "Materials", start: o.orderDate, end: knownEtas.at(-1) || "", na: false },
     { name: "Production", start: o.productionStart, end: o.productionFinish, na: false },
     { name: "COA", start: o.coaRequired === true ? o.productionFinish : "", end: o.coaActual || o.coaExpected, na: o.coaRequired === false },
-    { name: o.fulfillmentMode === "Pickup" ? "Pickup" : "Shipping", start: o.pickupDate, end: o.fulfillmentMode === "Pickup" ? o.pickupDate : o.actualDelivery || o.expectedDelivery, na: false },
+    { name: o.fulfillmentMode === "Pickup" ? "Pickup" : "Shipping", start: o.pickupDate, end: o.pickupDate, na: false },
   ];
 }

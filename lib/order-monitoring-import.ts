@@ -38,7 +38,7 @@ const aliases: Record<string, string[]> = {
   poNumber: ["po", "ponumber", "productionpo", "customerpo", "purchaseorder", "purchaseordernumber"],
   cases: ["cases", "totalcases", "quantitycases"], productionStart: ["productiondate", "productionstart"],
   productionFinish: ["productionfinish", "productionend"], coaRequired: ["coarequired", "coa"],
-  pickupDate: ["pickupdate", "pickup", "shipdate", "expectedpickupshipdate"], customer: ["customer", "customername"], product: ["product", "sku", "productsku"],
+  pickupDate: ["pickupdate", "pickup", "shipdate", "expectedpickupshipdate", "expectedpickupdate", "expectedshipdate", "expectedpickupshipmentdate"], customer: ["customer", "customername"], product: ["product", "sku", "productsku"],
 };
 export function parseOrderWorkbook(workbook: XLSX.WorkBook, sourceFile: string): ImportResult[] {
   const results: ImportResult[] = [];

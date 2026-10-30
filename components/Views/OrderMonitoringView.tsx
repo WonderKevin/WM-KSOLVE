@@ -1,5 +1,6 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, ClipboardList, List, RefreshCw, Search, Upload } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -32,14 +33,13 @@ function Timeline({ order, start, end }: { order: Order; start: number; end: num
       return <div key={stage.name} title={stage.name + ": " + dateLabel(stage.start) + " → " + dateLabel(stage.end)} className={"absolute top-[19px] h-6 truncate rounded-md px-2 text-center text-[11px] font-semibold leading-6 " + stageColors[i] + (point ? " border border-dashed border-current" : "")} style={{ left, width: Math.max(1, barWidth) }}>{stage.name}</div>;
     })}
     {(() => {
-      const primary = order.actualDelivery || order.expectedDelivery || order.requiredDelivery;
-      const label = order.actualDelivery ? "Actual" : order.expectedDelivery ? "Expected" : "Required";
+      const primary = order.pickupDate;
+      const label = "Expected pickup / ship";
       const visible = primary && dayNumber(primary) >= start && dayNumber(primary) <= end;
       return <>
-        {visible && <div title={label + " delivery: " + dateLabel(primary)} className="absolute top-[23px] flex items-center gap-2 whitespace-nowrap text-[11px] font-semibold text-indigo-950" style={{ left: position(primary) + 10 }}><span className="h-2.5 w-2.5 rotate-45 bg-indigo-800" /><span>{dateLabel(primary).replace(/, \d{4}$/, "")}</span></div>}
-        {order.requiredDelivery && order.requiredDelivery !== primary && dayNumber(order.requiredDelivery) >= start && dayNumber(order.requiredDelivery) <= end && <div title={"Required delivery: " + dateLabel(order.requiredDelivery)} className="absolute top-[48px] flex items-center gap-1 text-[10px] text-violet-800" style={{ left: position(order.requiredDelivery) + 10 }}><span className="h-2 w-2 rotate-45 border border-violet-700 bg-white" />Required</div>}
-        {!primary && <span className="absolute left-3 top-[49px] text-[10px] text-slate-400">Delivery: To confirm</span>}
-        {primary && dayNumber(primary) < start && <span className="absolute left-3 top-[49px] text-[10px] text-slate-400">No upcoming delivery date</span>}
+        {visible && <div data-pickup-marker={primary} title={label + ": " + dateLabel(primary)} className="absolute top-[48px] flex items-center gap-2 whitespace-nowrap text-[11px] font-semibold text-indigo-950" style={{ left: position(primary) + 10 }}><span className="h-2.5 w-2.5 rotate-45 bg-indigo-800" /><span className="absolute" style={width - position(primary) < 250 ? { right: 16 } : { left: 16 }}>{label}: {dateLabel(primary).replace(/, \d{4}$/, "")}</span></div>}
+        {!primary && <span className="absolute left-3 top-[49px] text-[10px] text-slate-400">Expected pickup / ship: To confirm</span>}
+        {primary && dayNumber(primary) < start && <span className="absolute left-3 top-[49px] text-[10px] text-slate-400">No upcoming pickup / ship date</span>}
       </>;
     })()}
     <p className="absolute left-3 top-[68px] truncate text-[9px] text-slate-400" style={{ maxWidth: Math.min(width - 20, 650) }}>{missing.join(" · ")}</p>
@@ -62,7 +62,7 @@ function Details({ saved, busy, onEdit, onAction, onMaterialStatus }: { saved: S
     <div className="h-fit rounded-2xl border border-slate-200 bg-white p-4"><div className="mb-4 flex justify-between"><h3 className="font-bold text-slate-900">Next actions</h3><button onClick={() => onEdit("actions")} className="text-xs font-semibold text-violet-700">Edit actions</button></div>
       {!o.actions.length && <p className="py-3 text-sm text-slate-400">No next actions saved.</p>}
       <div className="space-y-4">{o.actions.map(a => <label key={a.id} className="flex items-start gap-3 text-sm"><input type="checkbox" checked={a.completed} disabled={busy} onChange={e => onAction(a.id, e.target.checked)} className="mt-1 accent-violet-600" /><span><span className={a.completed ? "text-slate-400 line-through" : "text-slate-800"}>{a.description}</span><span className="mt-1 block text-[11px] text-slate-400">{a.owner || "Owner to confirm"} · {dateLabel(a.dueDate)}</span></span></label>)}</div>
-      <div className="mt-5 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4"><div><p className="text-[11px] text-slate-400">Required delivery</p><p className="mt-1 text-sm font-bold">{dateLabel(o.requiredDelivery)}</p></div><div><p className="text-[11px] text-slate-400">Expected delivery</p><p className="mt-1 text-sm font-bold">{dateLabel(o.expectedDelivery)}</p></div></div>
+      <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-[11px] text-slate-400">Expected pickup / ship date</p><p className="mt-1 text-sm font-bold">{dateLabel(o.pickupDate)}</p></div>
     </div>
   </div>;
 }
@@ -70,6 +70,7 @@ export default function OrderMonitoringView() {
   const [records, setRecords] = useState<SavedOrder[]>([]), [loading, setLoading] = useState(true), [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState(""), [status, setStatus] = useState("all"), [from, setFrom] = useState(""), [to, setTo] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set()), [menu, setMenu] = useState<string | null>(null);
+  const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0 });
   const [editor, setEditor] = useState<EditorState | null>(null), [editorError, setEditorError] = useState(""), [saving, setSaving] = useState(false);
   const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set()), [notice, setNotice] = useState(""), [error, setError] = useState("");
   const [imports, setImports] = useState<ImportResult[]>([]), [importIndex, setImportIndex] = useState(0), [importFile, setImportFile] = useState("");
@@ -92,7 +93,7 @@ export default function OrderMonitoringView() {
     finally { setLoading(false); }
   }, [api]);
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { if (!menu) return; const close = () => setMenu(null); const key = (e: KeyboardEvent) => { if (e.key === "Escape") close(); }; document.addEventListener("click", close); document.addEventListener("keydown", key); return () => { document.removeEventListener("click", close); document.removeEventListener("keydown", key); }; }, [menu]);
+  useEffect(() => { if (!menu) return; const close = () => setMenu(null); const key = (e: KeyboardEvent) => { if (e.key === "Escape") close(); }; window.addEventListener("resize", close); document.addEventListener("scroll", close, true); document.addEventListener("click", close); document.addEventListener("keydown", key); return () => { window.removeEventListener("resize", close); document.removeEventListener("scroll", close, true); document.removeEventListener("click", close); document.removeEventListener("keydown", key); }; }, [menu]);
   function replace(saved: SavedOrder) { setRecords(prev => [saved, ...prev.filter(r => poKey(r.order.poNumber) !== poKey(saved.order.poNumber))]); }
   async function immediate(saved: SavedOrder, operation: object) {
     const key = poKey(saved.order.poNumber); if (locks.current.has(key)) return;
@@ -169,7 +170,7 @@ export default function OrderMonitoringView() {
       <p className="w-full text-[10px] text-slate-400">As of {today}. Timeline shows today onward; historical dates remain in order details. At risk only means a needed material has a saved ETA later than production. Arrival on the production date is on time; missing dates remain To confirm.</p>
     </div>
     <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-label="Order timeline">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4"><h3 className="text-lg font-bold">Order timeline <span className="ml-2 text-xs font-normal text-slate-400">{filtered.length} orders</span></h3><div className="flex flex-wrap gap-4 text-[10px] text-slate-500">{["Materials", "Production", "COA", "Shipping"].map((label, i) => <span className="flex items-center gap-1" key={label}><span className={`h-2.5 w-2.5 rounded-full ${stageColors[i]}`} />{label}</span>)}<span>◇ Required delivery</span><span>◆ Expected / actual delivery</span></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4"><h3 className="text-lg font-bold">Order timeline <span className="ml-2 text-xs font-normal text-slate-400">{filtered.length} orders</span></h3><div className="flex flex-wrap gap-4 text-[10px] text-slate-500">{["Materials", "Production", "COA", "Shipping"].map((label, i) => <span className="flex items-center gap-1" key={label}><span className={`h-2.5 w-2.5 rounded-full ${stageColors[i]}`} />{label}</span>)}<span>◆ Expected pickup / ship date</span></div></div>
       {loading && <div className="p-12 text-center text-sm text-slate-500">Loading saved orders…</div>}
       {!loading && !filtered.length && !loadError && <div className="px-6 py-16 text-center"><ClipboardList className="mx-auto mb-4 h-9 w-9 text-violet-300" /><h4 className="text-lg font-bold">{records.length ? "No matching orders" : "Your order timeline starts here"}</h4><p className="mx-auto mt-2 max-w-md text-sm text-slate-500">{records.length ? "Adjust the search or filters to see your saved orders." : "Upload your monitoring workbook. Materials, production, COA, shipping and delivery will appear as dates are confirmed."}</p></div>}
       {!loading && filtered.length > 0 && <div className="overflow-auto"><div style={{ minWidth: 355 + days * 30 }}>
@@ -181,8 +182,8 @@ export default function OrderMonitoringView() {
               <button aria-label={`${open ? "Collapse" : "Expand"} ${o.poNumber}`} aria-expanded={open} aria-controls={`order-details-${key}`} onClick={() => toggle(key)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100">{open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button>
               <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold" title={o.customer}>{o.customer}</p><button className="mt-1 text-left text-xs font-medium text-violet-800 hover:underline" onClick={() => toggle(key)} aria-expanded={open}>{o.poNumber}</button><span className="ml-1 text-[10px] text-slate-400">· {quantityLabel(o.cases, "cases")}</span><br /><span title={orderRiskReasons(o).join("\n") || "No late material ETA flagged. Unknown arrival or production dates remain To confirm."} className={`mt-2 inline-block rounded-full px-2 py-0.5 text-[9px] font-semibold ${healthColors[health]}`}>{health}</span></div>
               <div className="grid gap-1"><select aria-label={`Status for ${o.poNumber}`} className={`max-w-[112px] rounded-xl border px-2 py-2 text-[11px] font-semibold ${STATUS_COLORS[o.status as OrderStatus] || ""} disabled:opacity-50`} value={o.status} disabled={busy} onChange={e => void immediate(saved, { operation: "status", status: e.target.value })}>{ORDER_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}</select><select aria-label={`Pickup or shipment for ${o.poNumber}`} className="max-w-[112px] rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-600" value={o.fulfillmentMode || ""} disabled={busy} onChange={e => void immediate(saved, { operation: "fulfillment", fulfillmentMode: e.target.value })}><option value="">To confirm</option><option value="Pickup">Pickup</option><option value="Shipment">Shipment</option></select></div>
-              <div className="relative"><button aria-label={`Actions for ${o.poNumber}`} aria-haspopup="menu" aria-expanded={menu === key} onClick={e => { e.stopPropagation(); setMenu(prev => prev === key ? null : key); }} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"><List className="h-4 w-4" /></button>
-                {menu === key && <div role="menu" className="absolute right-0 top-8 z-40 w-44 rounded-xl border border-slate-200 bg-white py-1 shadow-xl" onClick={e => e.stopPropagation()}>{([['View details', null], ['Edit PO', 'po'], ['Edit materials', 'materials'], ['Edit next actions', 'actions']] as const).map(([label, tab]) => <button key={label} role="menuitem" className="block w-full px-4 py-2 text-left text-xs hover:bg-violet-50 disabled:opacity-50" disabled={busy} onClick={() => { if (tab) edit(saved, tab); else { setExpanded(prev => new Set(prev).add(key)); setMenu(null); } }}>{label}</button>)}</div>}
+              <div className="relative"><button aria-label={`Actions for ${o.poNumber}`} aria-haspopup="menu" aria-expanded={menu === key} onClick={e => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); setMenuPosition({ left: Math.max(8, Math.min(rect.right - 176, window.innerWidth - 184)), top: rect.bottom + 164 > window.innerHeight ? Math.max(8, rect.top - 160) : rect.bottom + 4 }); setMenu(prev => prev === key ? null : key); }} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"><List className="h-4 w-4" /></button>
+                {menu === key && createPortal(<div role="menu" aria-label={`Actions for ${o.poNumber}`} style={menuPosition} className="fixed z-[9999] w-44 rounded-xl border border-slate-200 bg-white py-1 shadow-xl" onClick={e => e.stopPropagation()}>{([['View details', null], ['Edit PO', 'po'], ['Edit materials', 'materials'], ['Edit next actions', 'actions']] as const).map(([label, tab]) => <button key={label} role="menuitem" className="block w-full px-4 py-2 text-left text-xs hover:bg-violet-50 disabled:opacity-50" disabled={busy} onClick={() => { if (tab) edit(saved, tab); else { setExpanded(prev => new Set(prev).add(key)); setMenu(null); } }}>{label}</button>)}</div>, document.body)}
               </div>
             </div><Timeline order={o} start={range.start} end={end} />
           </div>
