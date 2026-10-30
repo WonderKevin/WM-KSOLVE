@@ -125,3 +125,9 @@ test("Order Date imports with Customer, supports Excel date systems and flags in
   const invalid = parseOrderWorkbook(workbook([["Order Date:", "02/30/2026"], headers]), "invalid.xlsx")[0];
   assert.equal(invalid.order.orderDate, ""); assert.ok(invalid.errors.some(e => e.startsWith("orderDate:")));
 });
+
+test("known PO items populate on import and To confirm supplier POs remain blank", () => {
+  const result = parseOrderWorkbook(workbook([["PO number", "PO-10118"], ["Cases", 10], headers, ["Lids", 10, 10, null, 0, "To confirm", null, "Ready"]]), "items.xlsx")[0];
+  assert.equal(result.order.product, "ITM-10349 · Factor US Double Chocolate");
+  assert.equal(result.order.materials[0].supplierPo, "");
+});

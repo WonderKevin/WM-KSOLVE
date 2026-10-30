@@ -1,3 +1,4 @@
+import productReferences from "./order-monitoring-products.json";
 import * as XLSX from "xlsx";
 import { blankMaterial, blankOrder, validDate, type Order } from "./order-monitoring";
 
@@ -79,6 +80,8 @@ export function parseOrderWorkbook(workbook: XLSX.WorkBook, sourceFile: string):
         if (v && order.coaRequired === null) errors.push(`Invalid COA required: ${text(value)}`);
       } else (order as unknown as Record<string, unknown>)[field] = text(value);
     }
+    const productReference = productReferences[order.poNumber.trim().toUpperCase() as keyof typeof productReferences];
+    if (!order.product && productReference) order.product = `${productReference.itemNumber} · ${productReference.description}`;
     const headers = rows[headerIndex];
     const index = (names: string[]) => headers.findIndex(h => names.includes(key(h)));
     const col = { description: index(["wmmaterial"]), required: index(["required"]), available: index(["availablereserved", "availableafterreservations"]), incoming: index(["incoming"]), shortage: index(["shortage"]), supplierPo: index(["po", "supplierpo"]), eta: index(["eta"]), status: index(["status"]), itemNumber: index(["itemnumber", "item", "sku"]), unit: index(["unit", "uom"]) };
@@ -100,7 +103,7 @@ export function parseOrderWorkbook(workbook: XLSX.WorkBook, sourceFile: string):
       }
       if (units.size > 1) errors.push(`Row ${r + 1}: mixed quantity units (${[...units].join(", ")}); review before importing.`);
       m.unit ||= [...units][0] || "";
-      m.supplierPo = text(row[col.supplierPo]); m.status = text(row[col.status]);
+      m.supplierPo = /^to\s*confirm$/i.test(text(row[col.supplierPo])) ? "" : text(row[col.supplierPo]); m.status = text(row[col.status]);
       const eta = parseExcelDate(row[col.eta], date1904); m.eta = eta.date;
       if (eta.error) errors.push(`Row ${r + 1}, ETA: ${eta.error}`);
       order.materials.push(m);
