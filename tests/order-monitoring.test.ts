@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as XLSX from "xlsx";
 import { blankMaterial, blankOrder, materialRows, calculatedShortage, shortageDiscrepancy, validateOrder, orderHealth, orderRiskReasons, materialSchedule, validDate, poKey } from "../lib/order-monitoring";
 import { timelineWindow, timelineStages, fromDay } from "../lib/order-monitoring-timeline";
-import { parseOrderWorkbook, parseQuantity, parseExcelDate } from "../lib/order-monitoring-import";
+import { importReviewIssues, parseOrderWorkbook, parseQuantity, parseExcelDate } from "../lib/order-monitoring-import";
 
 const headers = ["WM material", "Required", "Available - Reserved", "Incoming", "Shortage", "PO", "ETA", "Status"];
 function workbook(rows: unknown[][], date1904 = false) {
@@ -142,4 +142,18 @@ test("material rows prioritize shortages or PO references and only hide zero-sho
   assert.deepEqual(materialRows(materials).map(m => m.id), ["short", "referenced", "unknown", "review"]);
   assert.equal(materialRows(materials, true).length, materials.length);
   assert.deepEqual(materials, original);
+});
+
+test("import review clears corrected fields and quantities without inventing values", () => {
+  const result = parseOrderWorkbook(workbook([["PO number", "PO-REVIEW"], ["Production date", "bad date"], ["COA required", "maybe"], ["Pickup date", "bad date"], ["WM material", "Required", "Shortage", "PO", "ETA", "Status"], ["Lids", 10, 0, "SUP-QA", null, "Confirmed"]]), "review.xlsx")[0];
+  assert.equal(result.order.materials[0].available, null); assert.equal(result.order.materials[0].incoming, null);
+  assert.equal(importReviewIssues(result, result.order).length, 5);
+  const fixed = { ...result.order, productionStart: "2026-11-13", coaRequired: false, pickupDate: "2026-11-20", materials: result.order.materials.map(m => ({ ...m, available: 10, incoming: 0 })) };
+  assert.deepEqual(importReviewIssues(result, fixed), []);
+  assert.equal(result.errors.length, 5, "Original file findings remain available for reference");
+});
+test("common quantity headings and unknown workbook labels are supported", () => {
+  const result = parseOrderWorkbook(workbook([["Production date", "Not recorded"], ["COA required", "Not specified"], ["Pickup date", "Not recorded"], ["WM material", "Required", "Available", "Incoming Quantity", "Shortage", "PO", "ETA", "Status"], ["Lids", 10, "Not specified", "Not recorded", 0, "SUP-QA", "Not recorded", "Confirmed"]]), "unknown.xlsx")[0];
+  assert.deepEqual(result.errors, []); assert.equal(result.order.productionStart, ""); assert.equal(result.order.coaRequired, null);
+  assert.equal(result.order.materials[0].available, null); assert.equal(result.order.materials[0].incoming, null);
 });

@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
 import { businessToday, calculatedShortage, dateLabel, orderHealth, materialSchedule, materialRows, orderRiskReasons, ORDER_STATUSES, poKey, quantityLabel, shortageDiscrepancy, STATUS_COLORS, validateOrder, type Order, type OrderStatus, type SavedOrder } from "@/lib/order-monitoring";
 import { dayNumber, fromDay, timelineWindow, timelineStages } from "@/lib/order-monitoring-timeline";
-import { parseOrderWorkbook, type ImportResult } from "@/lib/order-monitoring-import";
+import { importReviewIssues, parseOrderWorkbook, type ImportResult } from "@/lib/order-monitoring-import";
 import OrderMonitoringEditor, { type EditorState, type EditorTab } from "./OrderMonitoringEditor";
 
 import productReferences from "@/lib/order-monitoring-products.json";
@@ -134,7 +134,7 @@ export default function OrderMonitoringView() {
   async function save(order: Order, importReviewed: boolean, updateExisting: boolean) {
     if (!editor || saving) return;
     const errors = validateOrder(order);
-    if (editor.importInfo && (editor.importInfo.errors.length || editor.importInfo.warnings.length) && !importReviewed) errors.push("Review the import issues before saving.");
+    if (editor.importInfo && importReviewIssues(editor.importInfo, order).length && !importReviewed) errors.push("Review the import issues before saving.");
     if (editor.importInfo && editor.originalPo && !updateExisting) errors.push("Choose Update existing PO or cancel.");
     if (errors.length) { setEditorError(errors.join("\n")); return; }
     setSaving(true); setEditorError("");

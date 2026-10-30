@@ -4,16 +4,17 @@ import { blankMaterial, blankOrder, validDate, type Order } from "./order-monito
 
 export type ImportResult = { order: Order; errors: string[]; warnings: string[]; sheet: string };
 const text = (v: unknown) => String(v ?? "").replace(/\u00a0/g, " ").trim();
+const unknownValue = (v: unknown) => /^(?:unknown|tbc|to confirm|not recorded|not specified|n\/?a|—|-)$/i.test(text(v));
 const key = (v: unknown) => text(v).toLowerCase().replace(/[^a-z0-9]/g, "");
 export function parseQuantity(value: unknown): { quantity: number | null; unit: string; error?: string } {
   const raw = text(value);
-  if (!raw || /^(?:n\/?a|unknown|tbc|to confirm|—|-)$/i.test(raw)) return { quantity: null, unit: "" };
+  if (!raw || unknownValue(raw)) return { quantity: null, unit: "" };
   const match = raw.match(/^([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|[-+]?\.\d+)\s*([a-zA-Z][a-zA-Z\s/.-]*)?$/);
   if (!match) return { quantity: null, unit: "", error: `Invalid quantity: ${raw}` };
   return { quantity: Number(match[1].replace(/,/g, "")), unit: text(match[2]) };
 }
 export function parseExcelDate(value: unknown, date1904 = false): { date: string; error?: string } {
-  if (value === null || value === undefined || text(value) === "" || /^(?:unknown|tbc|to confirm|n\/?a|—|-)$/i.test(text(value))) return { date: "" };
+  if (value === null || value === undefined || text(value) === "" || unknownValue(value)) return { date: "" };
   if (typeof value === "number") {
     const parsed = XLSX.SSF.parse_date_code(value, { date1904 });
     const date = parsed ? `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}` : "";
@@ -77,14 +78,14 @@ export function parseOrderWorkbook(workbook: XLSX.WorkBook, sourceFile: string):
       } else if (field === "coaRequired") {
         const v = key(value);
         order.coaRequired = ["yes", "true", "required", "1"].includes(v) ? true : ["no", "false", "notrequired", "0", "na"].includes(v) ? false : null;
-        if (v && order.coaRequired === null) errors.push(`Invalid COA required: ${text(value)}`);
+        if (v && !unknownValue(value) && order.coaRequired === null) errors.push(`Invalid COA required: ${text(value)}`);
       } else (order as unknown as Record<string, unknown>)[field] = text(value);
     }
     const productReference = productReferences[order.poNumber.trim().toUpperCase() as keyof typeof productReferences];
     if (!order.product && productReference) order.product = `${productReference.itemNumber} · ${productReference.description}`;
     const headers = rows[headerIndex];
     const index = (names: string[]) => headers.findIndex(h => names.includes(key(h)));
-    const col = { description: index(["wmmaterial"]), required: index(["required"]), available: index(["availablereserved", "availableafterreservations"]), incoming: index(["incoming"]), shortage: index(["shortage"]), supplierPo: index(["po", "supplierpo"]), eta: index(["eta"]), status: index(["status"]), itemNumber: index(["itemnumber", "item", "sku"]), unit: index(["unit", "uom"]) };
+    const col = { description: index(["wmmaterial"]), required: index(["required"]), available: index(["availablereserved", "availableafterreservations", "available", "availableqty", "availablequantity", "availableminusreserved", "availablereservedqty", "availablereservedquantity"]), incoming: index(["incoming", "incomingqty", "incomingquantity", "incomingstock"]), shortage: index(["shortage"]), supplierPo: index(["po", "supplierpo"]), eta: index(["eta"]), status: index(["status"]), itemNumber: index(["itemnumber", "item", "sku"]), unit: index(["unit", "uom"]) };
     for (const [name, i] of Object.entries(col)) if (i < 0 && !["itemNumber", "unit"].includes(name)) errors.push(`Missing material column: ${name}.`);
     for (let r = headerIndex + 1; r < rows.length; r++) {
       const row = rows[r]; if (row.every(v => !text(v))) continue;
@@ -112,4 +113,21 @@ export function parseOrderWorkbook(workbook: XLSX.WorkBook, sourceFile: string):
   }
   if (!results.length) throw new Error('No materials table found. The workbook must contain "WM material" and "Required" headers below its PO information.');
   return results;
+}
+
+// Source-file findings must not remain blockers after the preview has been corrected.
+export function importReviewIssues(info: Pick<ImportResult, "errors" | "warnings">, order: Order): string[] {
+  return [...info.errors, ...info.warnings].filter(issue => {
+    const field = issue.match(/^(orderDate|productionStart|productionFinish|pickupDate):/)?.[1];
+    if (field && validDate(order[field as "orderDate" | "productionStart" | "productionFinish" | "pickupDate"])) return false;
+    if (issue.startsWith("Invalid COA required:") && typeof order.coaRequired === "boolean") return false;
+    if (issue.startsWith("Cases:") && order.cases !== null && Number.isFinite(order.cases) && order.cases > 0) return false;
+    const missing = issue.match(/^Missing material column: (\w+)\./)?.[1];
+    if (missing && order.materials.length) {
+      const fields: Record<string, keyof Order["materials"][number]> = { required: "required", available: "available", incoming: "incoming", shortage: "uploadedShortage", supplierPo: "supplierPo", eta: "eta", status: "status", description: "description" };
+      const target = fields[missing];
+      if (target && order.materials.every(m => m[target] !== null && m[target] !== "" && m[target] !== undefined)) return false;
+    }
+    return true;
+  });
 }

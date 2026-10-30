@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import { ORDER_STATUSES, calculatedShortage, quantityLabel, shortageDiscrepancy, blankMaterial, type Order, type Material, type NextAction } from "@/lib/order-monitoring";
 
+import { importReviewIssues } from "@/lib/order-monitoring-import";
 import MaterialStatusSelect from "./MaterialStatusSelect";
 
 export type EditorTab = "po" | "materials" | "actions";
@@ -36,8 +37,8 @@ export default function OrderMonitoringEditor({ state, saving, error, onClose, o
   }
   function action(id: string, changes: Partial<NextAction>) { setOrder(o => ({ ...o, actions: o.actions.map(a => a.id === id ? { ...a, ...changes } : a) })); }
   const info = state.importInfo;
-  const importIssues = !!info && (info.errors.length > 0 || info.warnings.length > 0);
-  const missingColumns = info?.errors.some(e => e.startsWith("Missing material column"));
+  const issues = info ? importReviewIssues(info, order) : [];
+  const importIssues = issues.length > 0;
   const discrepancies = order.materials.filter(shortageDiscrepancy);
   const close = () => { if (!saving) onClose(); };
   return <dialog ref={dialog} aria-labelledby="order-editor-title" className="m-auto max-h-[92vh] w-[min(1100px,96vw)] overflow-hidden rounded-3xl border border-slate-200 p-0 shadow-2xl backdrop:bg-slate-950/40" onCancel={e => { e.preventDefault(); close(); }}>
@@ -55,8 +56,8 @@ export default function OrderMonitoringEditor({ state, saving, error, onClose, o
           <p><strong>{order.poNumber || "PO number missing"}</strong> · {quantityLabel(order.cases, "cases")} · {order.materials.length} materials. Check all three tabs before confirming.</p>
           <p className="text-xs">Incoming quantities are separate from available stock. Uploaded shortages are retained alongside calculated shortages. Excel dates use the workbook date system.</p>
           {state.originalPo && <label className="flex items-start gap-2"><input type="checkbox" checked={updateExisting} onChange={e => setUpdateExisting(e.target.checked)} className="mt-1" />Update existing {state.originalPo}. Replace its materials with this preview; retain other saved details and next actions unless edited here. Cancel keeps the saved record unchanged.</label>}
-          {importIssues && <><ul className="list-disc space-y-1 pl-5 text-xs text-amber-900">{[...info.errors, ...info.warnings].map((issue, i) => <li key={i}>{issue}</li>)}</ul>
-            {missingColumns ? <p className="font-semibold text-red-800">Correct the missing workbook columns and upload again.</p> : <label className="flex items-start gap-2"><input type="checkbox" checked={reviewed} onChange={e => setReviewed(e.target.checked)} className="mt-1" />I reviewed these import issues and corrected the fields below, or intentionally left unknown values blank.</label>}</>}
+          {importIssues && <><ul className="list-disc space-y-1 pl-5 text-xs text-amber-900">{issues.map((issue, i) => <li key={i}>{issue}</li>)}</ul>
+            <p className="text-xs">These notes are from the uploaded file. Fill missing values in PO details or Materials, or acknowledge values that should stay unknown.</p><label className="flex items-start gap-2"><input type="checkbox" checked={reviewed} onChange={e => setReviewed(e.target.checked)} className="mt-1" />I reviewed these import issues and corrected the fields below, or intentionally left unknown values blank.</label></>}
         </div>}
         {tab === "po" && <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <TextField label="Customer *" value={order.customer} onChange={v => set("customer", v)} />
@@ -107,7 +108,7 @@ export default function OrderMonitoringEditor({ state, saving, error, onClose, o
       </div>
       <div className="space-y-3 border-t border-slate-100 bg-slate-50 px-6 py-4">
         {discrepancies.length > 0 && <label className="flex items-start gap-2 text-xs text-amber-900"><input className="mt-0.5" type="checkbox" checked={!!order.shortageReviewed} onChange={e => set("shortageReviewed", e.target.checked)} />I reviewed {discrepancies.length} uploaded shortage discrepancies. Save both uploaded and calculated values for reference.</label>}
-        <div className="flex justify-end gap-3"><button type="button" onClick={close} disabled={saving} className="rounded-xl border border-slate-200 bg-white px-5 py-2 text-sm font-semibold disabled:opacity-50">Cancel</button><button disabled={saving || !!missingColumns || (importIssues && !reviewed) || (!!info && !!state.originalPo && !updateExisting)} className="rounded-xl bg-slate-900 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : info ? state.originalPo ? "Confirm update" : "Confirm import" : "Save"}</button></div>
+        <div className="flex justify-end gap-3"><button type="button" onClick={close} disabled={saving} className="rounded-xl border border-slate-200 bg-white px-5 py-2 text-sm font-semibold disabled:opacity-50">Cancel</button><button disabled={saving || (importIssues && !reviewed) || (!!info && !!state.originalPo && !updateExisting)} className="rounded-xl bg-slate-900 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : info ? state.originalPo ? "Confirm update" : "Confirm import" : "Save"}</button></div>
       </div>
     </form>
   </dialog>;
