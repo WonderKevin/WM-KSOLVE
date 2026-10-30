@@ -14,6 +14,7 @@ import {
   Menu,
   LogOut,
   Shield,
+  ClipboardList,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -46,6 +47,7 @@ import UnfiInvoicesView from "@/components/Views/UnfiInvoicesView";
 import HyveeInvoicesView from "@/components/Views/HyveeInvoicesView";
 import HyveeBrokerCommissionView from "@/components/Views/HyveeBrokerCommissionView";
 import WegmansView from "@/components/Views/WegmansView";
+import OrderMonitoringView from "@/components/Views/OrderMonitoringView";
 
 const APP_NAME = "WM Brokers & Deductions";
 
@@ -448,6 +450,10 @@ export default function WMKsolveApp() {
       });
     }
 
+    if (permissions.can_view_user_account || permissions.can_view_admin_automation || userEmail.toLowerCase() === "kevin@wondermonday.com") {
+      items.push({ label: "Order Monitoring", icon: ClipboardList, key: "order-monitoring" });
+    }
+
     return items;
   }, [permissions, userEmail]);
 
@@ -494,6 +500,9 @@ export default function WMKsolveApp() {
 
   const renderContent = (key: string) => {
     switch (key) {
+      case "order-monitoring":
+        return permissions?.can_view_user_account || permissions?.can_view_admin_automation || userEmail.toLowerCase() === "kevin@wondermonday.com"
+          ? <OrderMonitoringView /> : <HomeView />;
       case "dashboard-kehe":
         return <KeheDashboardView />;
       case "dashboard-tony":
