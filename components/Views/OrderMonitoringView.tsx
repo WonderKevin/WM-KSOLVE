@@ -151,7 +151,7 @@ export default function OrderMonitoringView() {
     if (fulfillment !== "all" && o.fulfillmentMode !== fulfillment) return false;
     if (from || to) { const dates = orderDates(o); if (!dates.length) return false; if (from && dates[dates.length - 1] < from) return false; if (to && dates[0] > to) return false; }
     return true;
-  }).sort((a, b) => (a.order.requiredDelivery || a.order.expectedDelivery || "9999").localeCompare(b.order.requiredDelivery || b.order.expectedDelivery || "9999") || a.order.poNumber.localeCompare(b.order.poNumber)), [records, search, status, from, to, fulfillment]);
+  }).sort((a, b) => (a.order.pickupDate || "9999").localeCompare(b.order.pickupDate || "9999") || a.order.poNumber.localeCompare(b.order.poNumber)), [records, search, status, from, to, fulfillment]);
   const range = useMemo(() => timelineWindow(filtered.map(r => r.order), from, to, today), [filtered, from, to, today]);
   const { days, end } = range;
   const dayWidth = Math.max(30, (boardWidth - 355) / days);

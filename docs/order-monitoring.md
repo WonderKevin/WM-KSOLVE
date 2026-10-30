@@ -39,3 +39,5 @@ The timeline diamond represents Expected pickup / ship date, including when no d
 Success notices clear automatically after four seconds; errors stay visible. The board fills the available width by stretching day columns on wide screens (minimum 30px per day), has taller timeline rows and a viewport-based minimum height. Narrow screens retain horizontal scrolling.
 
 Order Date or Order Date: in the workbook PO information section fills Order date on import, alongside Customer. It supports Excel serial dates and explicit calendar dates, preserves unknown dates as blank, and flags invalid dates for review.
+
+Timeline rows sort by Expected pickup / ship date, earliest first. Unknown dates sort last; orders on the same date sort by PO number.
