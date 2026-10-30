@@ -30,19 +30,19 @@ function Timeline({ order, start, end, dayWidth }: { order: Order; start: number
       const left = Math.max(0, first), barWidth = Math.min(width, last) - left;
       const point = !stage.start || !stage.end;
       if (point) return null;
-      return <div key={stage.name} title={stage.name + ": " + dateLabel(stage.start) + " → " + dateLabel(stage.end)} className={"absolute top-[19px] h-6 truncate rounded-md px-2 text-center text-[11px] font-semibold leading-6 " + stageColors[i] + (point ? " border border-dashed border-current" : "")} style={{ left, width: Math.max(1, barWidth) }}>{stage.name}</div>;
+      return <div key={stage.name} title={stage.name + ": " + dateLabel(stage.start) + " → " + dateLabel(stage.end)} className={"absolute top-[19px] h-9 truncate rounded-lg px-2 text-center text-xs font-semibold leading-9 " + stageColors[i] + (point ? " border border-dashed border-current" : "")} style={{ left, width: Math.max(1, barWidth) }}>{stage.name}</div>;
     })}
     {(() => {
       const primary = order.pickupDate;
       const label = "Expected pickup / ship";
       const visible = primary && dayNumber(primary) >= start && dayNumber(primary) <= end;
       return <>
-        {visible && <div data-pickup-marker={primary} title={label + ": " + dateLabel(primary)} className="absolute top-[48px] flex items-center gap-2 whitespace-nowrap text-[11px] font-semibold text-indigo-950" style={{ left: position(primary) + 10 }}><span className="h-2.5 w-2.5 rotate-45 bg-indigo-800" /><span className="absolute" style={width - position(primary) < 250 ? { right: 16 } : { left: 16 }}>{label}: {dateLabel(primary).replace(/, \d{4}$/, "")}</span></div>}
-        {!primary && <span className="absolute left-3 top-[49px] text-[10px] text-slate-400">Expected pickup / ship: To confirm</span>}
-        {primary && dayNumber(primary) < start && <span className="absolute left-3 top-[49px] text-[10px] text-slate-400">No upcoming pickup / ship date</span>}
+        {visible && <div data-pickup-marker={primary} title={label + ": " + dateLabel(primary)} className="absolute top-[64px] flex items-center gap-2 whitespace-nowrap text-xs font-semibold text-indigo-950" style={{ left: position(primary) + 10 }}><span className="h-2.5 w-2.5 rotate-45 bg-indigo-800" /><span className="absolute" style={width - position(primary) < 250 ? { right: 16 } : { left: 16 }}>{label}: {dateLabel(primary).replace(/, \d{4}$/, "")}</span></div>}
+        {!primary && <span className="absolute left-3 top-[65px] text-[10px] text-slate-400">Expected pickup / ship: To confirm</span>}
+        {primary && dayNumber(primary) < start && <span className="absolute left-3 top-[65px] text-[10px] text-slate-400">No upcoming pickup / ship date</span>}
       </>;
     })()}
-    <p className="absolute left-3 top-[68px] truncate text-[9px] text-slate-400" style={{ maxWidth: Math.min(width - 20, 650) }}>{missing.join(" · ")}</p>
+    <p className="absolute left-3 top-[88px] truncate text-[10px] text-slate-400" style={{ maxWidth: Math.min(width - 20, 650) }}>{missing.join(" · ")}</p>
   </div>;
 }
 function Details({ saved, busy, onEdit, onAction, onMaterialStatus }: { saved: SavedOrder; busy: boolean; onEdit: (tab: EditorTab) => void; onAction: (id: string, value: boolean) => void; onMaterialStatus: (id: string, status: string) => void }) {
