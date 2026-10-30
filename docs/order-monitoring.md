@@ -31,3 +31,5 @@ Order rows follow the current filters. Delayed includes explicit Delayed status 
 ## Validation
 
 Run `node --import tsx --test tests/order-monitoring.test.ts tests/order-monitoring-api.test.ts` for parser, calculation, permission, persistence, duplicate and concurrency regressions, and `npm run build` for production compilation and TypeScript checks. `node scripts/qa-order-monitoring.cjs` checks browser flows against a local production server on port 3017. Browser checks use synthetic isolated records and mocked endpoints, never production business data.
+
+The PO details editor omits Product/SKU, Pickup/shipment, required/expected/actual delivery, Destination and PO Owner fields. Existing saved values remain stored. Customer or Customer name in the workbook PO information section prepopulates Customer on upload, with manual correction available before confirmation.

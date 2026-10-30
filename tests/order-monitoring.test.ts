@@ -36,6 +36,14 @@ test("horizontal metadata, multiple sheets, dates and mixed units are handled ex
   assert.equal(parseExcelDate(null).date, ""); assert.equal(parseQuantity("1,234.50 LB").quantity, 1234.5);
   assert.equal(parseQuantity("-").quantity, null); assert.ok(parseQuantity("1.2.3 LB").error);
 });
+test("customer metadata populates uploads in vertical and horizontal layouts", () => {
+  for (const label of ["Customer", "Customer name", "Customer:"]) {
+    const vertical = parseOrderWorkbook(workbook([[label, "Factor75 - Lake Zurich"], ["PO number", "PO-CUSTOMER"], ["Cases", 204], headers]), "customer.xlsx")[0];
+    assert.equal(vertical.order.customer, "Factor75 - Lake Zurich");
+    const horizontal = parseOrderWorkbook(workbook([["PO number", label, "Cases"], ["PO-CUSTOMER", "Factor75 - Lake Zurich", 204], headers]), "customer.xlsx")[0];
+    assert.equal(horizontal.order.customer, "Factor75 - Lake Zurich");
+  }
+});
 test("unknown quantities stay unknown and incoming stock never satisfies a shortage", () => {
   const m = { ...blankMaterial(), description: "Material", required: 100, available: null, incoming: 200 };
   assert.equal(calculatedShortage(m), null);

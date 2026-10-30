@@ -61,22 +61,15 @@ export default function OrderMonitoringEditor({ state, saving, error, onClose, o
         {tab === "po" && <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <TextField label="Customer *" value={order.customer} onChange={v => set("customer", v)} />
           <TextField label={state.originalPo ? "PO number (record identifier)" : "PO number *"} value={order.poNumber} onChange={v => set("poNumber", v)} disabled={!!state.originalPo} />
-          <TextField label="Product / SKU" value={order.product} onChange={v => set("product", v)} />
           <Quantity label="Cases *" value={order.cases} min={0} onChange={v => set("cases", v)} />
           <TextField label="Order date" type="date" value={order.orderDate} onChange={v => set("orderDate", v)} />
           <Field label="PO status *"><select className={inputClass} value={order.status} onChange={e => set("status", e.target.value as Order["status"])}><option value="">Select status</option>{ORDER_STATUSES.map(s => <option key={s}>{s}</option>)}</select></Field>
-          <Field label="Pickup / shipment"><select className={inputClass} value={order.fulfillmentMode || ""} onChange={e => set("fulfillmentMode", e.target.value as Order["fulfillmentMode"])}><option value="">To confirm</option><option value="Pickup">Pickup</option><option value="Shipment">Shipment</option></select></Field>
           <TextField label="Production start" type="date" value={order.productionStart} onChange={v => set("productionStart", v)} />
           <TextField label="Production finish" type="date" value={order.productionFinish} onChange={v => set("productionFinish", v)} />
           <Field label="COA required"><select className={inputClass} value={order.coaRequired === null ? "" : String(order.coaRequired)} onChange={e => { setOrder(o => ({ ...o, coaRequired: e.target.value === "" ? null : e.target.value === "true", ...(e.target.value === "false" ? { coaExpected: "", coaActual: "" } : {}) })); }}><option value="">To confirm</option><option value="true">Yes</option><option value="false">No — not applicable</option></select></Field>
           <TextField label="COA expected release" type="date" value={order.coaExpected} disabled={order.coaRequired === false} onChange={v => set("coaExpected", v)} />
           <TextField label="COA actual release" type="date" value={order.coaActual} disabled={order.coaRequired === false} onChange={v => set("coaActual", v)} />
           <TextField label="Expected pickup / ship date" type="date" value={order.pickupDate} onChange={v => set("pickupDate", v)} />
-          <TextField label="Required delivery date" type="date" value={order.requiredDelivery} onChange={v => set("requiredDelivery", v)} />
-          <TextField label="Expected delivery / ETA" type="date" value={order.expectedDelivery} onChange={v => set("expectedDelivery", v)} />
-          <TextField label="Actual delivery date" type="date" value={order.actualDelivery} onChange={v => set("actualDelivery", v)} />
-          <TextField label="Destination" value={order.destination} onChange={v => set("destination", v)} />
-          <TextField label="Owner" value={order.owner} onChange={v => set("owner", v)} />
           <div className="sm:col-span-2 lg:col-span-3"><Field label="Notes"><textarea aria-label="Notes" className={inputClass} rows={4} value={order.notes} onChange={e => set("notes", e.target.value)} /></Field></div>
         </div>}
         {tab === "materials" && <div className="space-y-4">
