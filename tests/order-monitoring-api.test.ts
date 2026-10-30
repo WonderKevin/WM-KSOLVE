@@ -67,6 +67,10 @@ test("authenticated storage, exact duplicates, atomic children, status-only patc
     for (const fields of [{ materialId: "m1", status: "Ready" }, { materialId: "missing", status: "Sent" }]) {
       assert.equal((await PATCH(request("PATCH", { poNumber: order.poNumber, version: materialResult.saved.version, operation: "material-status", ...fields }))).status, 400);
     }
+    const notes = await PATCH(request("PATCH", { poNumber: order.poNumber, version: materialResult.saved.version, operation: "action-notes", actionNotes: "Typed notes" }));
+    assert.equal(notes.status, 200); const notesResult = await notes.json();
+    assert.equal(notesResult.saved.order.actionNotes, "Typed notes"); assert.equal(notesResult.saved.order.materials[0].status, "In transit");
+    assert.equal((await PATCH(request("PATCH", { poNumber: order.poNumber, version: notesResult.saved.version, operation: "action-notes", actionNotes: 123 }))).status, 400);
     const reloaded = await (await GET(request("GET"))).json(); assert.equal(reloaded.orders[0].order.materials[0].status, "In transit");
   } finally {
     globalThis.fetch = oldFetch;

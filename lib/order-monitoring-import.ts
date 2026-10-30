@@ -1,3 +1,4 @@
+import { applyCbfSource } from "./order-monitoring-cbf.cjs";
 import productReferences from "./order-monitoring-products.json";
 import * as XLSX from "xlsx";
 import { blankMaterial, blankOrder, validDate, type Order } from "./order-monitoring";
@@ -109,7 +110,7 @@ export function parseOrderWorkbook(workbook: XLSX.WorkBook, sourceFile: string):
       if (eta.error) errors.push(`Row ${r + 1}, ETA: ${eta.error}`);
       order.materials.push(m);
     }
-    results.push({ order, errors, warnings, sheet });
+    results.push({ order: applyCbfSource(order).order, errors, warnings, sheet });
   }
   if (!results.length) throw new Error('No materials table found. The workbook must contain "WM material" and "Required" headers below its PO information.');
   return results;

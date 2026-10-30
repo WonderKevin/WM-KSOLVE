@@ -46,7 +46,9 @@ function Timeline({ order, start, end, dayWidth }: { order: Order; start: number
     <p className="absolute left-3 top-[88px] truncate text-[10px] text-slate-400" style={{ maxWidth: Math.min(width - 20, 650) }}>{missing.join(" · ")}</p>
   </div>;
 }
-function Details({ saved, busy, onEdit, onAction, onMaterialStatus }: { saved: SavedOrder; busy: boolean; onEdit: (tab: EditorTab) => void; onAction: (id: string, value: boolean) => void; onMaterialStatus: (id: string, status: string) => void }) {
+function Details({ saved, busy, onEdit, onAction, onMaterialStatus, onNotes }: { saved: SavedOrder; busy: boolean; onEdit: (tab: EditorTab) => void; onAction: (id: string, value: boolean) => void; onMaterialStatus: (id: string, status: string) => void; onNotes: (notes: string) => void }) {
+  const [actionNotes, setActionNotes] = useState(saved.order.actionNotes || "");
+  useEffect(() => setActionNotes(saved.order.actionNotes || ""), [saved.order.actionNotes]);
   const [showAllMaterials, setShowAllMaterials] = useState(false);
   const rows = materialRows(saved.order.materials, showAllMaterials);
   const hiddenCount = saved.order.materials.length - materialRows(saved.order.materials).length;
@@ -66,6 +68,7 @@ function Details({ saved, busy, onEdit, onAction, onMaterialStatus }: { saved: S
     <div className="h-fit rounded-2xl border border-slate-200 bg-white p-4"><div className="mb-4 flex justify-between"><h3 className="font-bold text-slate-900">Next actions</h3><button onClick={() => onEdit("actions")} className="text-xs font-semibold text-violet-700">Edit actions</button></div>
       {!o.actions.length && <p className="py-3 text-sm text-slate-400">No next actions saved.</p>}
       <div className="space-y-4">{o.actions.map(a => <label key={a.id} className="flex items-start gap-3 text-sm"><input type="checkbox" checked={a.completed} disabled={busy} onChange={e => onAction(a.id, e.target.checked)} className="mt-1 accent-violet-600" /><span><span className={a.completed ? "text-slate-400 line-through" : "text-slate-800"}>{a.description}</span><span className="mt-1 block text-[11px] text-slate-400">{a.owner || "Owner to confirm"} · {dateLabel(a.dueDate)}</span></span></label>)}</div>
+      <div className="mt-5 space-y-2"><label className="block text-xs font-semibold text-slate-600" htmlFor={`action-notes-${o.poNumber}`}>Notes</label><textarea id={`action-notes-${o.poNumber}`} aria-label="Next action notes" maxLength={10000} rows={4} className={fieldClass + " w-full resize-y"} value={actionNotes} onChange={e => setActionNotes(e.target.value)} placeholder="Type notes for this order…" disabled={busy} /><div className="flex justify-end gap-3"><button disabled={busy || actionNotes === (o.actionNotes || "")} onClick={() => setActionNotes(o.actionNotes || "")} className="text-xs text-slate-500 disabled:opacity-50">Cancel notes</button><button disabled={busy || actionNotes === (o.actionNotes || "")} onClick={() => onNotes(actionNotes)} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Save notes</button></div></div>
       <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-[11px] text-slate-400">Expected pickup / ship date</p><p className="mt-1 text-sm font-bold">{dateLabel(o.pickupDate)}</p></div>
     </div>
   </div>;
@@ -114,7 +117,9 @@ export default function OrderMonitoringView() {
     let order = structuredClone(result.order);
     if (existing) {
       const imported = Object.fromEntries(Object.entries(order).filter(([key, value]) => !["actions", "materials", "status", "shortageReviewed"].includes(key) && value !== "" && value !== null && value !== undefined));
+      const importedNotes = order.actionNotes || "";
       order = { ...existing.order, ...imported, materials: order.materials, shortageReviewed: false, sourceFile: file };
+      order.actionNotes = existing.order.actionNotes && importedNotes && !existing.order.actionNotes.includes(importedNotes) ? existing.order.actionNotes + "\n" + importedNotes : existing.order.actionNotes || importedNotes;
       if (order.coaRequired === false) { order.coaExpected = ""; order.coaActual = ""; }
     }
     setEditorError(""); setEditor({ order, originalPo: existing?.order.poNumber, version: existing?.version, tab: "po", importInfo: { sheet: result.sheet, errors: result.errors, warnings: result.warnings, file } });
@@ -181,7 +186,7 @@ export default function OrderMonitoringView() {
               </div>
             </div><Timeline order={o} start={range.start} end={end} dayWidth={dayWidth} />
           </div>
-          {open && <div id={`order-details-${key}`} className="sticky left-0" style={{ maxWidth: "calc(100vw - 100px)" }}><Details saved={saved} busy={busy} onEdit={tab => edit(saved, tab)} onMaterialStatus={(materialId, status) => void immediate(saved, { operation: "material-status", materialId, status })} onAction={(id, completed) => void immediate(saved, { operation: "complete-action", actionId: id, completed })} /></div>}
+          {open && <div id={`order-details-${key}`} className="sticky left-0" style={{ maxWidth: "calc(100vw - 100px)" }}><Details saved={saved} busy={busy} onNotes={actionNotes => void immediate(saved, { operation: "action-notes", actionNotes })} onEdit={tab => edit(saved, tab)} onMaterialStatus={(materialId, status) => void immediate(saved, { operation: "material-status", materialId, status })} onAction={(id, completed) => void immediate(saved, { operation: "complete-action", actionId: id, completed })} /></div>}
         </React.Fragment>; })}
       </div></div>}
       {range.truncated && <p className="border-t p-3 text-xs text-slate-500">Showing the first 366 days. Dates beyond this window remain available in order details.</p>}

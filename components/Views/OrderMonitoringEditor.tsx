@@ -96,6 +96,7 @@ export default function OrderMonitoringEditor({ state, saving, error, onClose, o
           <button type="button" onClick={() => set("materials", [...order.materials, blankMaterial()])} className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold"><Plus className="h-4 w-4" />Add material</button>
         </div>}
         {tab === "actions" && <div className="space-y-4">
+          <Field label="Next action notes"><textarea aria-label="Next action notes" maxLength={10000} className={inputClass} rows={4} value={order.actionNotes || ""} onChange={e => set("actionNotes", e.target.value)} placeholder="Type notes for this order…" /></Field>
           {!order.actions.length && <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No next actions yet.</p>}
           {order.actions.map((a, index) => <fieldset key={a.id} className="rounded-2xl border border-slate-200 p-4"><legend className="px-2 text-sm font-semibold">Action {index + 1}</legend><div className="grid gap-3 sm:grid-cols-2">
             <TextField label="Action description" value={a.description} onChange={v => action(a.id, { description: v })} />

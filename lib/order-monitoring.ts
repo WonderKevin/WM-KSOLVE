@@ -15,6 +15,7 @@ export type Material = {
 };
 export type NextAction = { id: string; description: string; owner: string; dueDate: string; completed: boolean };
 export type Order = {
+  actionNotes?: string;
   fulfillmentMode?: "Pickup" | "Shipment" | "";
   poNumber: string; customer: string; product: string; cases: number | null;
   orderDate: string; status: OrderStatus | ""; productionStart: string; productionFinish: string;
@@ -26,7 +27,7 @@ export type Order = {
 export type SavedOrder = { order: Order; version: number; updatedAt: string };
 export const DATE_FIELDS = ["orderDate", "productionStart", "productionFinish", "coaExpected", "coaActual", "pickupDate", "requiredDelivery", "expectedDelivery", "actualDelivery"] as const;
 export function blankOrder(): Order {
-  return { poNumber: "", customer: "", product: "", cases: null, orderDate: "", status: "Sent", productionStart: "", productionFinish: "", coaRequired: null, coaExpected: "", coaActual: "", pickupDate: "", requiredDelivery: "", expectedDelivery: "", actualDelivery: "", destination: "", owner: "", notes: "", materials: [], actions: [] };
+  return { poNumber: "", customer: "", product: "", cases: null, orderDate: "", status: "Sent", productionStart: "", productionFinish: "", coaRequired: null, coaExpected: "", coaActual: "", pickupDate: "", requiredDelivery: "", expectedDelivery: "", actualDelivery: "", destination: "", owner: "", notes: "", actionNotes: "", materials: [], actions: [] };
 }
 export function blankMaterial(): Material {
   return { id: crypto.randomUUID(), description: "", itemNumber: "", unit: "", required: null, available: null, incoming: null, uploadedShortage: null, supplierPo: "", eta: "", status: "" };
@@ -56,6 +57,7 @@ export function validateOrder(o: Order): string[] {
   if (!o.poNumber.trim()) errors.push("PO number is required.");
   if (!o.customer.trim()) errors.push("Customer is required.");
   if (o.cases === null || !Number.isFinite(o.cases) || o.cases <= 0) errors.push("Cases must be greater than zero.");
+  if (o.actionNotes !== undefined && (typeof o.actionNotes !== "string" || o.actionNotes.length > 10000)) errors.push("Next action notes must be text of at most 10,000 characters.");
   if (!ORDER_STATUSES.includes(o.status as OrderStatus)) errors.push("Select a PO status.");
   if (o.fulfillmentMode !== undefined && !["", "Pickup", "Shipment"].includes(o.fulfillmentMode)) errors.push("Choose Pickup or Shipment.");
   for (const field of DATE_FIELDS) if (o[field] && !validDate(o[field])) errors.push(`Invalid ${field} date.`);

@@ -157,3 +157,10 @@ test("common quantity headings and unknown workbook labels are supported", () =>
   assert.deepEqual(result.errors, []); assert.equal(result.order.productionStart, ""); assert.equal(result.order.coaRequired, null);
   assert.equal(result.order.materials[0].available, null); assert.equal(result.order.materials[0].incoming, null);
 });
+
+test("importing PO-10077 material references uses CBF-Sell and appends the delay note", () => {
+  const result = parseOrderWorkbook(workbook([["PO number", "PO-IMPORT-CBF"], headers, ["Lids", 10, 0, 10, 10, "PO-10077", "11/02/2026", "Confirmed"]]), "cbf.xlsx")[0];
+  assert.equal(result.order.materials[0].supplierPo, "CBF-Sell");
+  assert.equal(result.order.materials[0].eta, "2026-11-02");
+  assert.equal(result.order.actionNotes, "PO-10077 was delayed, Delivery on 11/9.");
+});
