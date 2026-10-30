@@ -35,3 +35,5 @@ Run `node --import tsx --test tests/order-monitoring.test.ts tests/order-monitor
 The PO details editor omits Product/SKU, Pickup/shipment, required/expected/actual delivery, Destination and PO Owner fields. Existing saved values remain stored. Customer or Customer name in the workbook PO information section prepopulates Customer on upload, with manual correction available before confirmation.
 
 The timeline diamond represents Expected pickup / ship date, including when no delivery date or fulfillment mode is saved. A shipping/pickup milestone uses that saved date without requiring a delivery end date. The action menu is portaled above page content to avoid clipping by the timeline, and repositions above its trigger near the bottom of the viewport.
+
+Success notices clear automatically after four seconds; errors stay visible. The board fills the available width by stretching day columns on wide screens (minimum 30px per day), has taller timeline rows and a viewport-based minimum height. Narrow screens retain horizontal scrolling.

@@ -15,17 +15,17 @@ import MaterialStatusSelect from "./MaterialStatusSelect";
 const fieldClass = "rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-violet-100";
 const healthColors = { "On track": "bg-emerald-50 text-emerald-800", "At risk": "bg-amber-50 text-amber-900", Delayed: "bg-red-50 text-red-800", Delivered: "bg-teal-50 text-teal-800" };
 const stageColors = ["bg-amber-200 text-amber-950", "bg-violet-200 text-violet-950", "bg-blue-200 text-blue-950", "bg-emerald-200 text-emerald-950"];
-function Timeline({ order, start, end }: { order: Order; start: number; end: number }) {
-  const width = (end - start + 1) * 30;
-  const position = (date: string) => (dayNumber(date) - start) * 30;
+function Timeline({ order, start, end, dayWidth }: { order: Order; start: number; end: number; dayWidth: number }) {
+  const width = (end - start + 1) * dayWidth;
+  const position = (date: string) => (dayNumber(date) - start) * dayWidth;
   const missing: string[] = [];
-  return <div className="relative h-[92px]" style={{ width, backgroundImage: "linear-gradient(to right, #f1f5f9 1px, transparent 1px)", backgroundSize: "30px 100%" }}>
+  return <div className="relative h-[120px]" style={{ width, backgroundImage: "linear-gradient(to right, #f1f5f9 1px, transparent 1px)", backgroundSize: `${dayWidth}px 100%` }}>
     {timelineStages(order).map((stage, i) => {
       if (stage.na) { missing.push("COA: not applicable"); return null; }
       const a = stage.start || stage.end, b = stage.end || stage.start;
       if (!a || !b) { missing.push(stage.name + ": to confirm"); return null; }
       if (!stage.start || !stage.end) missing.push(stage.name + ": remaining date to confirm");
-      const first = Math.min(position(a), position(b)), last = Math.max(position(a), position(b)) + 30;
+      const first = Math.min(position(a), position(b)), last = Math.max(position(a), position(b)) + dayWidth;
       if (last <= 0 || first >= width) return null;
       const left = Math.max(0, first), barWidth = Math.min(width, last) - left;
       const point = !stage.start || !stage.end;
@@ -76,6 +76,10 @@ export default function OrderMonitoringView() {
   const [imports, setImports] = useState<ImportResult[]>([]), [importIndex, setImportIndex] = useState(0), [importFile, setImportFile] = useState("");
   const [reading, setReading] = useState(false);
   const [today, setToday] = useState(businessToday);
+  const boardRef = useRef<HTMLElement>(null);
+  const [boardWidth, setBoardWidth] = useState(0);
+  useEffect(() => { const board = boardRef.current; if (!board) return; const observer = new ResizeObserver(entries => setBoardWidth(entries[0].contentRect.width)); observer.observe(board); return () => observer.disconnect(); }, []);
+  useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(""), 4000); return () => window.clearTimeout(timer); }, [notice]);
   const [fulfillment, setFulfillment] = useState("all");
   useEffect(() => { const tick = () => setToday(businessToday()); const timer = window.setInterval(tick, 60000); window.addEventListener("focus", tick); return () => { window.clearInterval(timer); window.removeEventListener("focus", tick); }; }, []);
   const fileInput = useRef<HTMLInputElement>(null), locks = useRef(new Set<string>());
@@ -150,10 +154,11 @@ export default function OrderMonitoringView() {
   }).sort((a, b) => (a.order.requiredDelivery || a.order.expectedDelivery || "9999").localeCompare(b.order.requiredDelivery || b.order.expectedDelivery || "9999") || a.order.poNumber.localeCompare(b.order.poNumber)), [records, search, status, from, to, fulfillment]);
   const range = useMemo(() => timelineWindow(filtered.map(r => r.order), from, to, today), [filtered, from, to, today]);
   const { days, end } = range;
+  const dayWidth = Math.max(30, (boardWidth - 355) / days);
   const monthGroups: { label: string; count: number }[] = [];
   for (let i = 0; i < days; i++) { const d = fromDay(range.start + i); const label = new Date(d + "T00:00:00Z").toLocaleDateString("en-US", { timeZone: "UTC", month: "short", year: "numeric" }); const group = monthGroups.at(-1); if (group?.label === label) group.count++; else monthGroups.push({ label, count: 1 }); }
   function toggle(key: string) { setExpanded(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; }); }
-  return <div className="space-y-5 text-slate-900">
+  return <div className="space-y-4 text-slate-900">
     <header className="flex flex-wrap items-start justify-between gap-4"><div><h2 className="text-3xl font-extrabold tracking-tight">Order Monitoring</h2><p className="mt-1 text-sm text-slate-500">From order confirmation to customer delivery</p></div><div className="flex flex-wrap gap-2">
       <button onClick={() => void load()} disabled={loading || !!editor || busyKeys.size > 0} className={`${fieldClass} disabled:opacity-50`} aria-label="Refresh orders"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
       <button onClick={() => fileInput.current?.click()} disabled={reading || loading || !!loadError} className={`${fieldClass} flex items-center gap-2 disabled:opacity-50`}><Upload className="h-4 w-4" />{reading ? "Reading…" : "Upload Excel"}</button>
@@ -169,12 +174,12 @@ export default function OrderMonitoringView() {
       {(search || status !== "all" || fulfillment !== "all" || from || to) && <button className="py-2 text-xs font-semibold text-violet-700" onClick={() => { setSearch(""); setStatus("all"); setFrom(""); setTo(""); setFulfillment("all"); }}>Clear filters</button>}
       <p className="w-full text-[10px] text-slate-400">As of {today}. Timeline shows today onward; historical dates remain in order details. At risk only means a needed material has a saved ETA later than production. Arrival on the production date is on time; missing dates remain To confirm.</p>
     </div>
-    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-label="Order timeline">
+    <section ref={boardRef} style={{ minHeight: "max(420px, calc(100dvh - 330px))" }} className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-label="Order timeline">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4"><h3 className="text-lg font-bold">Order timeline <span className="ml-2 text-xs font-normal text-slate-400">{filtered.length} orders</span></h3><div className="flex flex-wrap gap-4 text-[10px] text-slate-500">{["Materials", "Production", "COA", "Shipping"].map((label, i) => <span className="flex items-center gap-1" key={label}><span className={`h-2.5 w-2.5 rounded-full ${stageColors[i]}`} />{label}</span>)}<span>◆ Expected pickup / ship date</span></div></div>
       {loading && <div className="p-12 text-center text-sm text-slate-500">Loading saved orders…</div>}
       {!loading && !filtered.length && !loadError && <div className="px-6 py-16 text-center"><ClipboardList className="mx-auto mb-4 h-9 w-9 text-violet-300" /><h4 className="text-lg font-bold">{records.length ? "No matching orders" : "Your order timeline starts here"}</h4><p className="mx-auto mt-2 max-w-md text-sm text-slate-500">{records.length ? "Adjust the search or filters to see your saved orders." : "Upload your monitoring workbook. Materials, production, COA, shipping and delivery will appear as dates are confirmed."}</p></div>}
-      {!loading && filtered.length > 0 && <div className="overflow-auto"><div style={{ minWidth: 355 + days * 30 }}>
-        <div className="flex border-b border-slate-200 bg-slate-50"><div className="sticky left-0 z-20 flex w-[355px] shrink-0 items-center justify-between border-r border-slate-200 bg-slate-50 px-5 text-[11px] font-semibold text-slate-500"><span>Customer / PO / Cases</span><span>PO status</span></div><div><div className="flex border-b border-slate-200">{monthGroups.map(g => <div key={g.label} className="shrink-0 border-l border-slate-200 px-1 py-1 text-[10px] whitespace-nowrap font-semibold text-slate-600" style={{ width: g.count * 30 }}>{g.label}</div>)}</div><div className="flex">{Array.from({ length: days }, (_, i) => fromDay(range.start + i)).map(date => <div data-timeline-date={date} key={date} className={"w-[30px] shrink-0 border-l border-slate-100 py-2 text-center text-[10px] " + (date === today ? "bg-violet-100 font-bold text-violet-900" : "text-slate-500")}>{date.slice(-2)}</div>)}</div></div></div>
+      {!loading && filtered.length > 0 && <div className="overflow-auto"><div style={{ minWidth: 355 + days * dayWidth }}>
+        <div className="flex border-b border-slate-200 bg-slate-50"><div className="sticky left-0 z-20 flex w-[355px] shrink-0 items-center justify-between border-r border-slate-200 bg-slate-50 px-5 text-[11px] font-semibold text-slate-500"><span>Customer / PO / Cases</span><span>PO status</span></div><div><div className="flex border-b border-slate-200">{monthGroups.map(g => <div key={g.label} className="shrink-0 border-l border-slate-200 px-1 py-1 text-[10px] whitespace-nowrap font-semibold text-slate-600" style={{ width: g.count * dayWidth }}>{g.label}</div>)}</div><div className="flex">{Array.from({ length: days }, (_, i) => fromDay(range.start + i)).map(date => <div data-timeline-date={date} key={date} style={{ width: dayWidth }} className={"shrink-0 border-l border-slate-100 py-2 text-center text-[10px] " + (date === today ? "bg-violet-100 font-bold text-violet-900" : "text-slate-500")}>{date.slice(-2)}</div>)}</div></div></div>
 
         {filtered.map(saved => { const o = saved.order, key = poKey(o.poNumber), open = expanded.has(key), busy = busyKeys.has(key), health = orderHealth(o, today); return <React.Fragment key={key}>
           <div className={`flex border-b border-slate-100 ${open ? "bg-violet-50/40" : "bg-white"}`}>
@@ -185,7 +190,7 @@ export default function OrderMonitoringView() {
               <div className="relative"><button aria-label={`Actions for ${o.poNumber}`} aria-haspopup="menu" aria-expanded={menu === key} onClick={e => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); setMenuPosition({ left: Math.max(8, Math.min(rect.right - 176, window.innerWidth - 184)), top: rect.bottom + 164 > window.innerHeight ? Math.max(8, rect.top - 160) : rect.bottom + 4 }); setMenu(prev => prev === key ? null : key); }} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"><List className="h-4 w-4" /></button>
                 {menu === key && createPortal(<div role="menu" aria-label={`Actions for ${o.poNumber}`} style={menuPosition} className="fixed z-[9999] w-44 rounded-xl border border-slate-200 bg-white py-1 shadow-xl" onClick={e => e.stopPropagation()}>{([['View details', null], ['Edit PO', 'po'], ['Edit materials', 'materials'], ['Edit next actions', 'actions']] as const).map(([label, tab]) => <button key={label} role="menuitem" className="block w-full px-4 py-2 text-left text-xs hover:bg-violet-50 disabled:opacity-50" disabled={busy} onClick={() => { if (tab) edit(saved, tab); else { setExpanded(prev => new Set(prev).add(key)); setMenu(null); } }}>{label}</button>)}</div>, document.body)}
               </div>
-            </div><Timeline order={o} start={range.start} end={end} />
+            </div><Timeline order={o} start={range.start} end={end} dayWidth={dayWidth} />
           </div>
           {open && <div id={`order-details-${key}`} className="sticky left-0" style={{ maxWidth: "calc(100vw - 100px)" }}><Details saved={saved} busy={busy} onEdit={tab => edit(saved, tab)} onMaterialStatus={(materialId, status) => void immediate(saved, { operation: "material-status", materialId, status })} onAction={(id, completed) => void immediate(saved, { operation: "complete-action", actionId: id, completed })} /></div>}
         </React.Fragment>; })}
