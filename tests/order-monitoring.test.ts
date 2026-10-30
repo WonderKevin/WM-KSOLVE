@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as XLSX from "xlsx";
-import { blankMaterial, blankOrder, calculatedShortage, shortageDiscrepancy, validateOrder, orderHealth, validDate, poKey } from "../lib/order-monitoring";
+import { blankMaterial, blankOrder, calculatedShortage, shortageDiscrepancy, validateOrder, orderHealth, orderRiskReasons, materialSchedule, validDate, poKey } from "../lib/order-monitoring";
+import { timelineWindow, timelineStages, fromDay } from "../lib/order-monitoring-timeline";
 import { parseOrderWorkbook, parseQuantity, parseExcelDate } from "../lib/order-monitoring-import";
 
 const headers = ["WM material", "Required", "Available - Reserved", "Incoming", "Shortage", "PO", "ETA", "Status"];
@@ -58,4 +59,29 @@ test("risk and delivery distinguish PO status, material shortages and required v
   assert.equal(orderHealth({ ...o, status: "In transit" }, "2026-11-07"), "Delayed");
   assert.equal(orderHealth({ ...o, status: "Delivered" }, "2026-11-07"), "Delivered");
   assert.equal(orderHealth({ ...o, expectedDelivery: "2026-11-04" }, "2026-10-30"), "On track");
+});
+test("scheduled incoming can cover production without becoming available stock", () => {
+  const material = { ...blankMaterial(), description: "Lids", required: 100, available: 25, incoming: 75, eta: "2026-11-05" };
+  const order = { ...blankOrder(), productionStart: "2026-11-06", materials: [material] };
+  assert.equal(calculatedShortage(material), 75);
+  assert.equal(materialSchedule(material, order.productionStart, "2026-10-30").ready, false);
+  assert.equal(materialSchedule(material, order.productionStart, "2026-10-30").covered, true);
+  assert.equal(orderHealth(order, "2026-10-30"), "On track");
+  assert.ok(orderRiskReasons({ ...order, materials: [{ ...material, incoming: 74 }] }, "2026-10-30")[0].includes("does not cover"));
+  assert.ok(orderRiskReasons({ ...order, materials: [{ ...material, eta: "2026-11-07" }] }, "2026-10-30")[0].includes("after production"));
+  assert.ok(orderRiskReasons(order, "2026-11-06")[0].includes("has passed"));
+  assert.ok(orderRiskReasons({ ...order, materials: [{ ...material, eta: "" }] }, "2026-10-30")[0].includes("ETA is to confirm"));
+  assert.ok(orderRiskReasons({ ...order, materials: [{ ...material, status: "Unconfirmed" }] }, "2026-10-30")[0].includes("Unconfirmed"));
+});
+test("timeline always excludes past columns while preserving historical order dates", () => {
+  const order = { ...blankOrder(), orderDate: "2026-10-19", productionStart: "2026-11-10", expectedDelivery: "2026-12-07" };
+  const range = timelineWindow([order], "", "", "2026-10-30");
+  assert.equal(fromDay(range.start), "2026-10-30"); assert.equal(order.orderDate, "2026-10-19");
+  assert.equal(fromDay(timelineWindow([order], "2026-10-01", "", "2026-10-30").start), "2026-10-30");
+  assert.equal(fromDay(timelineWindow([order], "2026-11-02", "", "2026-10-30").start), "2026-11-02");
+  assert.equal(fromDay(timelineWindow([order], "", "", "2026-10-31").start), "2026-10-31");
+  const pickup = { ...order, fulfillmentMode: "Pickup" as const, pickupDate: "2026-11-12" };
+  const stage = timelineStages(pickup).at(-1)!; assert.equal(stage.name, "Pickup"); assert.equal(stage.end, pickup.pickupDate);
+  assert.equal(timelineStages({ ...pickup, coaRequired: false })[2].na, true);
+  assert.ok(validateOrder({ ...blankOrder(), poNumber: "PO-1", customer: "QA", cases: 1, fulfillmentMode: "Pickup" }).length === 0);
 });

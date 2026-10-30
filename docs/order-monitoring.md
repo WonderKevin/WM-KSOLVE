@@ -22,9 +22,11 @@ Calculated shortage is `max(required - available after reservations, 0)`. Incomi
 
 ## Timeline
 
-Bars use saved dates only. A single known stage date appears as a point with its missing endpoint marked To confirm. Undated stages remain To confirm, and COA becomes Not applicable when not required. Production-date-only imports do not manufacture a finish date. Required, expected and actual delivery are distinct markers. Each of the four stage bars uses its own lane to prevent overlapping dates from concealing milestones. Up to 366 days are shown; filters can select later dates.
+Bars use saved dates only, in one compact lane. The calendar begins on today's New York business date (or a later selected From date), clips historical portions of bars, and advances on focus and at midnight. Historical source dates remain unchanged in details. Undated endpoints remain To confirm, and COA is Not applicable when not required. COA spans saved production finish to expected/actual COA release. Required and expected/actual delivery markers remain separate when their dates differ. Up to 366 future days are shown.
 
-Cards follow the current filters. Delayed includes explicit Delayed status or an overdue expected delivery without actual delivery; At risk includes stock shortages, overdue incomplete actions or COA, and expected delivery later than required. Delivered uses the saved PO status. Date range filters match the span of saved order/material milestone dates; undated orders remain visible without a date filter.
+Pickup/Shipment is optional on each order, editable in both the summary row and PO form. Legacy records remain To confirm until a user chooses a method. Summary cards count active pickups and shipments, and the method filter scopes the cards and rows.
+
+Cards follow the current filters. Delayed includes explicit Delayed status or an overdue expected delivery without actual delivery. At risk includes uncovered, overdue or late material arrivals, overdue actions or COA, and expected delivery later than required. Incoming stock that fully covers the current shortage with a non-overdue ETA on/before production and no delayed/unconfirmed material status is planned coverage, not available stock; this alone does not trigger At risk. Missing quantities remain unknown. Each row exposes exact risk reasons in its tooltip and expanded details. No imported facts or Arctanis records are automatically changed by these classifications.
 
 ## Validation
 

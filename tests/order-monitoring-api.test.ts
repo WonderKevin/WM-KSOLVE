@@ -56,6 +56,9 @@ test("authenticated storage, exact duplicates, atomic children, status-only patc
     assert.equal((await PATCH(request("PATCH", { poNumber: order.poNumber, version: 2, operation: "replace", order }))).status, 409);
     assert.equal((await POST(request("POST", { order: { ...order, poNumber: "NEW", cases: -1 } }))).status, 400);
     const final = await (await GET(request("GET"))).json(); assert.equal(final.orders[0].order.status, "Confirmed"); assert.equal(final.orders[0].order.actions[0].completed, false);
+    const mode = await PATCH(request("PATCH", { poNumber: order.poNumber, version: final.orders[0].version, operation: "fulfillment", fulfillmentMode: "Pickup" }));
+    assert.equal(mode.status, 200); const modeResult = await mode.json(); assert.equal(modeResult.saved.order.fulfillmentMode, "Pickup"); assert.equal(modeResult.saved.order.status, "Confirmed");
+    assert.equal((await PATCH(request("PATCH", { poNumber: order.poNumber, version: modeResult.saved.version, operation: "fulfillment", fulfillmentMode: "Other" }))).status, 400);
   } finally {
     globalThis.fetch = oldFetch;
     for (const [key, value] of [["NEXT_PUBLIC_SUPABASE_URL", previous.url], ["NEXT_PUBLIC_SUPABASE_ANON_KEY", previous.anon], ["SUPABASE_SERVICE_ROLE_KEY", previous.role]]) if (value === undefined) delete process.env[key!]; else process.env[key!] = value;

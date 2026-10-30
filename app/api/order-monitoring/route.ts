@@ -86,6 +86,9 @@ export async function PATCH(request: Request) {
     if (input.operation === "status") {
       if (!ORDER_STATUSES.includes(input.status)) throw new HttpError(400, "Invalid status.");
       order = { ...order, status: input.status };
+    } else if (input.operation === "fulfillment") {
+      if (!["", "Pickup", "Shipment"].includes(input.fulfillmentMode)) throw new HttpError(400, "Choose Pickup or Shipment.");
+      order = { ...order, fulfillmentMode: input.fulfillmentMode };
     } else if (input.operation === "complete-action") {
       if (typeof input.completed !== "boolean" || !order.actions.some(a => a.id === input.actionId)) throw new HttpError(400, "Invalid action.");
       order = { ...order, actions: order.actions.map(a => a.id === input.actionId ? { ...a, completed: input.completed } : a) };
