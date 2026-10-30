@@ -2,7 +2,7 @@
 
 The navigation item follows Admin. It is visible to the existing User Account or Automation administrators (including the application's administrator account). The API independently verifies the Supabase session and those same permissions on every request.
 
-Orders are application monitoring records entered manually or confirmed from Excel. This feature does not read or mutate Arctanis.
+Orders are application monitoring records confirmed from Excel. The summary card strip and Add PO button are intentionally omitted; Excel import is the entry point for new orders. This feature does not read or mutate Arctanis.
 
 ## Persistence
 
@@ -24,9 +24,9 @@ Calculated shortage is `max(required - available after reservations, 0)`. Incomi
 
 Bars use saved dates only, in one compact lane. The calendar begins on today's New York business date (or a later selected From date), clips historical portions of bars, and advances on focus and at midnight. Historical source dates remain unchanged in details. Undated endpoints remain To confirm, and COA is Not applicable when not required. COA spans saved production finish to expected/actual COA release. Required and expected/actual delivery markers remain separate when their dates differ. Up to 366 future days are shown.
 
-Pickup/Shipment is optional on each order, editable in both the summary row and PO form. Legacy records remain To confirm until a user chooses a method. Summary cards count active pickups and shipments, and the method filter scopes the cards and rows.
+Pickup/Shipment is optional on each order, editable in both the summary row and PO form. Legacy records remain To confirm until a user chooses a method. The method filter scopes the order rows.
 
-Cards follow the current filters. Delayed includes explicit Delayed status or an overdue expected delivery without actual delivery. At risk is flagged only when a needed material has a saved ETA later than production start. An ETA on or before the production date is on time. A shortage, missing ETA, insufficient incoming quantity, unconfirmed material status, overdue action/COA or expected delivery later than required does not independently flag At risk. Materials already covered by available stock do not depend on later replenishment. Unknown dates remain To confirm. Stock readiness and incoming quantities remain separate from this date-only risk rule. Exact late-material reasons appear in the row tooltip and expanded details.
+Order rows follow the current filters. Delayed includes explicit Delayed status or an overdue expected delivery without actual delivery. At risk is flagged only when a needed material has a saved ETA later than production start. An ETA on or before the production date is on time. A shortage, missing ETA, insufficient incoming quantity, unconfirmed material status, overdue action/COA or expected delivery later than required does not independently flag At risk. Materials already covered by available stock do not depend on later replenishment. Unknown dates remain To confirm. Stock readiness and incoming quantities remain separate from this date-only risk rule. Exact late-material reasons appear in the row tooltip and expanded details.
 
 ## Validation
 
