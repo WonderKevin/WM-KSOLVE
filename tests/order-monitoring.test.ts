@@ -109,3 +109,19 @@ test("pickup or shipment with only an expected pickup date is a complete timelin
     assert.equal(parseOrderWorkbook(workbook([["PO number", "PO-PICKUP"], ["Cases", 1], [label, "11/25/2026"], headers]), "pickup.xlsx")[0].order.pickupDate, "2026-11-25");
   }
 });
+
+test("Order Date imports with Customer, supports Excel date systems and flags invalid dates", () => {
+  for (const label of ["Order Date", "Order Date:"]) {
+    const vertical = parseOrderWorkbook(workbook([["Customer:", "QA Customer"], [label, "10/13/2026"], ["PO number", "PO-DATE"], ["Cases", 204], headers]), "order-date.xlsx")[0];
+    assert.equal(vertical.order.customer, "QA Customer"); assert.equal(vertical.order.orderDate, "2026-10-13"); assert.deepEqual(vertical.errors, []);
+    const horizontal = parseOrderWorkbook(workbook([["Customer", label, "PO number", "Cases"], ["QA Customer", "2026-10-13", "PO-DATE", 204], headers]), "order-date.xlsx")[0];
+    assert.equal(horizontal.order.orderDate, "2026-10-13"); assert.equal(horizontal.order.customer, "QA Customer");
+  }
+  for (const date1904 of [false, true]) {
+    const result = parseOrderWorkbook(workbook([["Order Date:", 45000], headers], date1904), "date.xlsx")[0];
+    assert.equal(result.order.orderDate, parseExcelDate(45000, date1904).date);
+  }
+  for (const blank of [null, "", "To confirm"]) assert.equal(parseOrderWorkbook(workbook([["Order Date:", blank], headers]), "blank.xlsx")[0].order.orderDate, "");
+  const invalid = parseOrderWorkbook(workbook([["Order Date:", "02/30/2026"], headers]), "invalid.xlsx")[0];
+  assert.equal(invalid.order.orderDate, ""); assert.ok(invalid.errors.some(e => e.startsWith("orderDate:")));
+});

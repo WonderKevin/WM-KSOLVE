@@ -36,6 +36,7 @@ export function parseExcelDate(value: unknown, date1904 = false): { date: string
 }
 const aliases: Record<string, string[]> = {
   poNumber: ["po", "ponumber", "productionpo", "customerpo", "purchaseorder", "purchaseordernumber"],
+  orderDate: ["orderdate"],
   cases: ["cases", "totalcases", "quantitycases"], productionStart: ["productiondate", "productionstart"],
   productionFinish: ["productionfinish", "productionend"], coaRequired: ["coarequired", "coa"],
   pickupDate: ["pickupdate", "pickup", "shipdate", "expectedpickupshipdate", "expectedpickupdate", "expectedshipdate", "expectedpickupshipmentdate"], customer: ["customer", "customername"], product: ["product", "sku", "productsku"],
@@ -68,7 +69,7 @@ export function parseOrderWorkbook(workbook: XLSX.WorkBook, sourceFile: string):
         const parsed = parseQuantity(value); order.cases = parsed.quantity;
         if (parsed.error) errors.push(`Cases: ${parsed.error}`);
         if (parsed.unit && !/^cases?$/i.test(parsed.unit)) errors.push(`Cases must be in cases, not ${parsed.unit}.`);
-      } else if (["productionStart", "productionFinish", "pickupDate"].includes(field)) {
+      } else if (["orderDate", "productionStart", "productionFinish", "pickupDate"].includes(field)) {
         const parsed = parseExcelDate(value, date1904);
         (order as unknown as Record<string, unknown>)[field] = parsed.date;
         if (parsed.error) errors.push(`${field}: ${parsed.error}`);

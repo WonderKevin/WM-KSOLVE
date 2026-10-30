@@ -37,3 +37,5 @@ The PO details editor omits Product/SKU, Pickup/shipment, required/expected/actu
 The timeline diamond represents Expected pickup / ship date, including when no delivery date or fulfillment mode is saved. A shipping/pickup milestone uses that saved date without requiring a delivery end date. The action menu is portaled above page content to avoid clipping by the timeline, and repositions above its trigger near the bottom of the viewport.
 
 Success notices clear automatically after four seconds; errors stay visible. The board fills the available width by stretching day columns on wide screens (minimum 30px per day), has taller timeline rows and a viewport-based minimum height. Narrow screens retain horizontal scrolling.
+
+Order Date or Order Date: in the workbook PO information section fills Order date on import, alongside Customer. It supports Excel serial dates and explicit calendar dates, preserves unknown dates as blank, and flags invalid dates for review.
