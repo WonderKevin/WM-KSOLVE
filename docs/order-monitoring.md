@@ -41,3 +41,7 @@ Success notices clear automatically after four seconds; errors stay visible. The
 Order Date or Order Date: in the workbook PO information section fills Order date on import, alongside Customer. It supports Excel serial dates and explicit calendar dates, preserves unknown dates as blank, and flags invalid dates for review.
 
 Timeline rows sort by Expected pickup / ship date, earliest first. Unknown dates sort last; orders on the same date sort by PO number.
+
+The search/status/date filter panel is removed. Expanding a PO (or choosing View details) focuses the board on that PO and hides the other rows; collapsing restores all orders in expected pickup/ship date order. Timeline dates stay stable during expansion.
+
+A one-time deployment correction, gated by ORDER_MONITORING_ETA_CORRECTION=po10077-20261102, changes only saved material ETAs of 2026-11-09 linked to supplier PO-10077 (or 10077) to 2026-11-02. It preserves quantities/statuses and other dates, uses version checks, and re-reads storage to verify no matching old ETAs remain. It uses existing deployment configuration without exporting credentials and does not write to Arctanis. Ordinary builds do not run the correction.

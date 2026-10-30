@@ -2,10 +2,10 @@
 
 import { createPortal } from "react-dom";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, ClipboardList, List, RefreshCw, Search, Upload } from "lucide-react";
+import { ChevronDown, ChevronRight, ClipboardList, List, RefreshCw, Upload } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
-import { businessToday, calculatedShortage, dateLabel, orderDates, orderHealth, materialSchedule, orderRiskReasons, ORDER_STATUSES, poKey, quantityLabel, shortageDiscrepancy, STATUS_COLORS, validateOrder, type Order, type OrderStatus, type SavedOrder } from "@/lib/order-monitoring";
+import { businessToday, calculatedShortage, dateLabel, orderHealth, materialSchedule, orderRiskReasons, ORDER_STATUSES, poKey, quantityLabel, shortageDiscrepancy, STATUS_COLORS, validateOrder, type Order, type OrderStatus, type SavedOrder } from "@/lib/order-monitoring";
 import { dayNumber, fromDay, timelineWindow, timelineStages } from "@/lib/order-monitoring-timeline";
 import { parseOrderWorkbook, type ImportResult } from "@/lib/order-monitoring-import";
 import OrderMonitoringEditor, { type EditorState, type EditorTab } from "./OrderMonitoringEditor";
@@ -68,7 +68,6 @@ function Details({ saved, busy, onEdit, onAction, onMaterialStatus }: { saved: S
 }
 export default function OrderMonitoringView() {
   const [records, setRecords] = useState<SavedOrder[]>([]), [loading, setLoading] = useState(true), [loadError, setLoadError] = useState("");
-  const [search, setSearch] = useState(""), [status, setStatus] = useState("all"), [from, setFrom] = useState(""), [to, setTo] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set()), [menu, setMenu] = useState<string | null>(null);
   const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0 });
   const [editor, setEditor] = useState<EditorState | null>(null), [editorError, setEditorError] = useState(""), [saving, setSaving] = useState(false);
@@ -80,7 +79,6 @@ export default function OrderMonitoringView() {
   const [boardWidth, setBoardWidth] = useState(0);
   useEffect(() => { const board = boardRef.current; if (!board) return; const observer = new ResizeObserver(entries => setBoardWidth(entries[0].contentRect.width)); observer.observe(board); return () => observer.disconnect(); }, []);
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(""), 4000); return () => window.clearTimeout(timer); }, [notice]);
-  const [fulfillment, setFulfillment] = useState("all");
   useEffect(() => { const tick = () => setToday(businessToday()); const timer = window.setInterval(tick, 60000); window.addEventListener("focus", tick); return () => { window.clearInterval(timer); window.removeEventListener("focus", tick); }; }, []);
   const fileInput = useRef<HTMLInputElement>(null), locks = useRef(new Set<string>());
   const api = useCallback(async (method: string, body?: unknown) => {
@@ -145,19 +143,14 @@ export default function OrderMonitoringView() {
     } catch (e) { setEditorError(e instanceof Error ? e.message : "Save failed. Your edits are still here."); }
     finally { setSaving(false); }
   }
-  const filtered = useMemo(() => records.filter(({ order: o }) => {
-    if (search && !`${o.poNumber} ${o.customer}`.toLowerCase().includes(search.toLowerCase())) return false;
-    if (status !== "all" && o.status !== status) return false;
-    if (fulfillment !== "all" && o.fulfillmentMode !== fulfillment) return false;
-    if (from || to) { const dates = orderDates(o); if (!dates.length) return false; if (from && dates[dates.length - 1] < from) return false; if (to && dates[0] > to) return false; }
-    return true;
-  }).sort((a, b) => (a.order.pickupDate || "9999").localeCompare(b.order.pickupDate || "9999") || a.order.poNumber.localeCompare(b.order.poNumber)), [records, search, status, from, to, fulfillment]);
-  const range = useMemo(() => timelineWindow(filtered.map(r => r.order), from, to, today), [filtered, from, to, today]);
+  const filtered = useMemo(() => [...records].sort((a, b) => (a.order.pickupDate || "9999").localeCompare(b.order.pickupDate || "9999") || a.order.poNumber.localeCompare(b.order.poNumber)), [records]);
+  const visible = filtered.filter(saved => expanded.size === 0 || expanded.has(poKey(saved.order.poNumber)));
+  const range = useMemo(() => timelineWindow(filtered.map(r => r.order), "", "", today), [filtered, today]);
   const { days, end } = range;
   const dayWidth = Math.max(30, (boardWidth - 355) / days);
   const monthGroups: { label: string; count: number }[] = [];
   for (let i = 0; i < days; i++) { const d = fromDay(range.start + i); const label = new Date(d + "T00:00:00Z").toLocaleDateString("en-US", { timeZone: "UTC", month: "short", year: "numeric" }); const group = monthGroups.at(-1); if (group?.label === label) group.count++; else monthGroups.push({ label, count: 1 }); }
-  function toggle(key: string) { setExpanded(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; }); }
+  function toggle(key: string) { setMenu(null); setExpanded(prev => prev.has(key) ? new Set() : new Set([key])); }
   return <div className="space-y-4 text-slate-900">
     <header className="flex flex-wrap items-start justify-between gap-4"><div><h2 className="text-3xl font-extrabold tracking-tight">Order Monitoring</h2><p className="mt-1 text-sm text-slate-500">From order confirmation to customer delivery</p></div><div className="flex flex-wrap gap-2">
       <button onClick={() => void load()} disabled={loading || !!editor || busyKeys.size > 0} className={`${fieldClass} disabled:opacity-50`} aria-label="Refresh orders"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
@@ -166,36 +159,28 @@ export default function OrderMonitoringView() {
     </div></header>
     {notice && <p role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</p>}
     {(error || loadError) && <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error || loadError}{loadError && <button onClick={() => void load()} className="ml-3 font-bold underline">Retry</button>}</div>}
-    <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white p-4">
-      <label className="min-w-[200px] flex-1 text-xs text-slate-500">Search PO or customer<div className="relative mt-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input className={`${fieldClass} w-full pl-9`} value={search} onChange={e => setSearch(e.target.value)} placeholder="PO number or customer…" /></div></label>
-      <label className="text-xs text-slate-500">PO status<select className={`${fieldClass} mt-1 block`} value={status} onChange={e => setStatus(e.target.value)}><option value="all">All statuses</option>{ORDER_STATUSES.map(s => <option key={s}>{s}</option>)}</select></label>
-      <label className="text-xs text-slate-500">Pickup / shipment<select className={fieldClass + " mt-1 block"} value={fulfillment} onChange={e => setFulfillment(e.target.value)}><option value="all">All</option><option value="Pickup">Pickup</option><option value="Shipment">Shipment</option></select></label>
-      <label className="text-xs text-slate-500">From<input min={today} type="date" className={`${fieldClass} mt-1 block`} value={from} onChange={e => setFrom(e.target.value)} /></label><label className="text-xs text-slate-500">Through<input type="date" className={`${fieldClass} mt-1 block`} value={to} min={from && from > today ? from : today} onChange={e => setTo(e.target.value)} /></label>
-      {(search || status !== "all" || fulfillment !== "all" || from || to) && <button className="py-2 text-xs font-semibold text-violet-700" onClick={() => { setSearch(""); setStatus("all"); setFrom(""); setTo(""); setFulfillment("all"); }}>Clear filters</button>}
-      <p className="w-full text-[10px] text-slate-400">As of {today}. Timeline shows today onward; historical dates remain in order details. At risk only means a needed material has a saved ETA later than production. Arrival on the production date is on time; missing dates remain To confirm.</p>
-    </div>
-    <section ref={boardRef} style={{ minHeight: "max(420px, calc(100dvh - 330px))" }} className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-label="Order timeline">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4"><h3 className="text-lg font-bold">Order timeline <span className="ml-2 text-xs font-normal text-slate-400">{filtered.length} orders</span></h3><div className="flex flex-wrap gap-4 text-[10px] text-slate-500">{["Materials", "Production", "COA", "Shipping"].map((label, i) => <span className="flex items-center gap-1" key={label}><span className={`h-2.5 w-2.5 rounded-full ${stageColors[i]}`} />{label}</span>)}<span>◆ Expected pickup / ship date</span></div></div>
+    <section ref={boardRef} style={{ minHeight: "max(420px, calc(100dvh - 210px))" }} className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-label="Order timeline">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4"><h3 className="text-lg font-bold">Order timeline <span className="ml-2 text-xs font-normal text-slate-400">{expanded.size ? `1 of ${filtered.length} orders` : `${filtered.length} orders`}</span></h3><div className="flex flex-wrap gap-4 text-[10px] text-slate-500">{["Materials", "Production", "COA", "Shipping"].map((label, i) => <span className="flex items-center gap-1" key={label}><span className={`h-2.5 w-2.5 rounded-full ${stageColors[i]}`} />{label}</span>)}<span>◆ Expected pickup / ship date</span></div></div>
       {loading && <div className="p-12 text-center text-sm text-slate-500">Loading saved orders…</div>}
-      {!loading && !filtered.length && !loadError && <div className="px-6 py-16 text-center"><ClipboardList className="mx-auto mb-4 h-9 w-9 text-violet-300" /><h4 className="text-lg font-bold">{records.length ? "No matching orders" : "Your order timeline starts here"}</h4><p className="mx-auto mt-2 max-w-md text-sm text-slate-500">{records.length ? "Adjust the search or filters to see your saved orders." : "Upload your monitoring workbook. Materials, production, COA, shipping and delivery will appear as dates are confirmed."}</p></div>}
+      {!loading && !filtered.length && !loadError && <div className="px-6 py-16 text-center"><ClipboardList className="mx-auto mb-4 h-9 w-9 text-violet-300" /><h4 className="text-lg font-bold">Your order timeline starts here</h4><p className="mx-auto mt-2 max-w-md text-sm text-slate-500">Upload your monitoring workbook. Materials, production, COA, shipping and delivery will appear as dates are confirmed.</p></div>}
       {!loading && filtered.length > 0 && <div className="overflow-auto"><div style={{ minWidth: 355 + days * dayWidth }}>
         <div className="flex border-b border-slate-200 bg-slate-50"><div className="sticky left-0 z-20 flex w-[355px] shrink-0 items-center justify-between border-r border-slate-200 bg-slate-50 px-5 text-[11px] font-semibold text-slate-500"><span>Customer / PO / Cases</span><span>PO status</span></div><div><div className="flex border-b border-slate-200">{monthGroups.map(g => <div key={g.label} className="shrink-0 border-l border-slate-200 px-1 py-1 text-[10px] whitespace-nowrap font-semibold text-slate-600" style={{ width: g.count * dayWidth }}>{g.label}</div>)}</div><div className="flex">{Array.from({ length: days }, (_, i) => fromDay(range.start + i)).map(date => <div data-timeline-date={date} key={date} style={{ width: dayWidth }} className={"shrink-0 border-l border-slate-100 py-2 text-center text-[10px] " + (date === today ? "bg-violet-100 font-bold text-violet-900" : "text-slate-500")}>{date.slice(-2)}</div>)}</div></div></div>
 
-        {filtered.map(saved => { const o = saved.order, key = poKey(o.poNumber), open = expanded.has(key), busy = busyKeys.has(key), health = orderHealth(o, today); return <React.Fragment key={key}>
+        {visible.map(saved => { const o = saved.order, key = poKey(o.poNumber), open = expanded.has(key), busy = busyKeys.has(key), health = orderHealth(o, today); return <React.Fragment key={key}>
           <div className={`flex border-b border-slate-100 ${open ? "bg-violet-50/40" : "bg-white"}`}>
             <div className="sticky left-0 z-10 flex w-[355px] shrink-0 items-center gap-2 border-r border-slate-200 bg-white px-4 py-4">
               <button aria-label={`${open ? "Collapse" : "Expand"} ${o.poNumber}`} aria-expanded={open} aria-controls={`order-details-${key}`} onClick={() => toggle(key)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100">{open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button>
               <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold" title={o.customer}>{o.customer}</p><button className="mt-1 text-left text-xs font-medium text-violet-800 hover:underline" onClick={() => toggle(key)} aria-expanded={open}>{o.poNumber}</button><span className="ml-1 text-[10px] text-slate-400">· {quantityLabel(o.cases, "cases")}</span><br /><span title={orderRiskReasons(o).join("\n") || "No late material ETA flagged. Unknown arrival or production dates remain To confirm."} className={`mt-2 inline-block rounded-full px-2 py-0.5 text-[9px] font-semibold ${healthColors[health]}`}>{health}</span></div>
               <div className="grid gap-1"><select aria-label={`Status for ${o.poNumber}`} className={`max-w-[112px] rounded-xl border px-2 py-2 text-[11px] font-semibold ${STATUS_COLORS[o.status as OrderStatus] || ""} disabled:opacity-50`} value={o.status} disabled={busy} onChange={e => void immediate(saved, { operation: "status", status: e.target.value })}>{ORDER_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}</select><select aria-label={`Pickup or shipment for ${o.poNumber}`} className="max-w-[112px] rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-600" value={o.fulfillmentMode || ""} disabled={busy} onChange={e => void immediate(saved, { operation: "fulfillment", fulfillmentMode: e.target.value })}><option value="">To confirm</option><option value="Pickup">Pickup</option><option value="Shipment">Shipment</option></select></div>
               <div className="relative"><button aria-label={`Actions for ${o.poNumber}`} aria-haspopup="menu" aria-expanded={menu === key} onClick={e => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); setMenuPosition({ left: Math.max(8, Math.min(rect.right - 176, window.innerWidth - 184)), top: rect.bottom + 164 > window.innerHeight ? Math.max(8, rect.top - 160) : rect.bottom + 4 }); setMenu(prev => prev === key ? null : key); }} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"><List className="h-4 w-4" /></button>
-                {menu === key && createPortal(<div role="menu" aria-label={`Actions for ${o.poNumber}`} style={menuPosition} className="fixed z-[9999] w-44 rounded-xl border border-slate-200 bg-white py-1 shadow-xl" onClick={e => e.stopPropagation()}>{([['View details', null], ['Edit PO', 'po'], ['Edit materials', 'materials'], ['Edit next actions', 'actions']] as const).map(([label, tab]) => <button key={label} role="menuitem" className="block w-full px-4 py-2 text-left text-xs hover:bg-violet-50 disabled:opacity-50" disabled={busy} onClick={() => { if (tab) edit(saved, tab); else { setExpanded(prev => new Set(prev).add(key)); setMenu(null); } }}>{label}</button>)}</div>, document.body)}
+                {menu === key && createPortal(<div role="menu" aria-label={`Actions for ${o.poNumber}`} style={menuPosition} className="fixed z-[9999] w-44 rounded-xl border border-slate-200 bg-white py-1 shadow-xl" onClick={e => e.stopPropagation()}>{([['View details', null], ['Edit PO', 'po'], ['Edit materials', 'materials'], ['Edit next actions', 'actions']] as const).map(([label, tab]) => <button key={label} role="menuitem" className="block w-full px-4 py-2 text-left text-xs hover:bg-violet-50 disabled:opacity-50" disabled={busy} onClick={() => { if (tab) edit(saved, tab); else { setExpanded(new Set([key])); setMenu(null); } }}>{label}</button>)}</div>, document.body)}
               </div>
             </div><Timeline order={o} start={range.start} end={end} dayWidth={dayWidth} />
           </div>
           {open && <div id={`order-details-${key}`} className="sticky left-0" style={{ maxWidth: "calc(100vw - 100px)" }}><Details saved={saved} busy={busy} onEdit={tab => edit(saved, tab)} onMaterialStatus={(materialId, status) => void immediate(saved, { operation: "material-status", materialId, status })} onAction={(id, completed) => void immediate(saved, { operation: "complete-action", actionId: id, completed })} /></div>}
         </React.Fragment>; })}
       </div></div>}
-      {range.truncated && <p className="border-t p-3 text-xs text-slate-500">Showing the first 366 days. Use the date range filters to inspect later milestones.</p>}
+      {range.truncated && <p className="border-t p-3 text-xs text-slate-500">Showing the first 366 days. Dates beyond this window remain available in order details.</p>}
     </section>
     {editor && <OrderMonitoringEditor key={`${editor.originalPo || "new"}-${editor.importInfo?.sheet || "manual"}-${importIndex}`} state={editor} saving={saving} error={editorError} onClose={() => { setEditor(null); setImports([]); }} onSave={(o, reviewed, update) => void save(o, reviewed, update)} />}
   </div>;
