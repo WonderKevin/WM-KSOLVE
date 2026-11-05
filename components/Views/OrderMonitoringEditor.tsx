@@ -74,7 +74,7 @@ export default function OrderMonitoringEditor({ state, saving, error, onClose, o
           <div className="sm:col-span-2 lg:col-span-3"><Field label="Notes"><textarea aria-label="Notes" className={inputClass} rows={4} value={order.notes} onChange={e => set("notes", e.target.value)} /></Field></div>
         </div>}
         {tab === "materials" && <div className="space-y-4">
-          <p className="text-xs text-slate-500">Available means stock after reservations. Shortage = max(required − available, 0); incoming stock is not subtracted.</p>
+          <p className="text-xs text-slate-500">Available means stock after reservations. Shortage = max(required − available − incoming, 0).</p>
           {!order.materials.length && <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No materials added yet.</p>}
           {order.materials.map((m, index) => <fieldset key={m.id} className="rounded-2xl border border-slate-200 p-4"><legend className="px-2 text-sm font-semibold text-slate-700">Material {index + 1}</legend>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

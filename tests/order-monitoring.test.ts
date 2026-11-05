@@ -21,7 +21,7 @@ test("section-layout import preserves descriptions, item numbers, units, supplie
   assert.equal(order.productionStart, "2026-11-06"); assert.equal(order.productionFinish, ""); assert.equal(order.coaRequired, true);
   assert.equal(order.materials[0].itemNumber, "ITM-10126"); assert.equal(order.materials[0].description, "Graham Crumbs ITM-10126");
   assert.equal(order.materials[0].supplierPo, "PO-SUPPLIER"); assert.equal(order.materials[0].unit, "LB");
-  assert.equal(calculatedShortage(order.materials[0]), 67.62); assert.equal(shortageDiscrepancy(order.materials[0]), true);
+  assert.equal(calculatedShortage(order.materials[0]), 0); assert.equal(shortageDiscrepancy(order.materials[0]), false);
   assert.equal(order.materials[1].incoming, null); assert.equal(order.materials[1].eta, "");
   assert.equal(order.customer, ""); assert.equal(order.status, ""); assert.equal(order.materials[0].sourceValues?.required, "167.62 LB");
 });
@@ -44,11 +44,11 @@ test("customer metadata populates uploads in vertical and horizontal layouts", (
     assert.equal(horizontal.order.customer, "Factor75 - Lake Zurich");
   }
 });
-test("unknown quantities stay unknown and incoming stock never satisfies a shortage", () => {
+test("unknown quantities stay unknown and incoming stock satisfies a shortage", () => {
   const m = { ...blankMaterial(), description: "Material", required: 100, available: null, incoming: 200 };
   assert.equal(calculatedShortage(m), null);
-  assert.equal(calculatedShortage({ ...m, available: 20 }), 80);
-  assert.equal(calculatedShortage({ ...m, available: -5 }), 105);
+  assert.equal(calculatedShortage({ ...m, available: 20 }), 0);
+  assert.equal(calculatedShortage({ ...m, available: -5 }), 0);
   assert.equal(calculatedShortage({ ...m, available: 120 }), 0);
 });
 test("validation requires order identity and valid quantities, preserves unknown dates, and flags discrepancies", () => {
@@ -71,7 +71,7 @@ test("risk and delivery distinguish PO status, material shortages and required v
 test("scheduled incoming can cover production without becoming available stock", () => {
   const material = { ...blankMaterial(), description: "Lids", required: 100, available: 25, incoming: 75, eta: "2026-11-05" };
   const order = { ...blankOrder(), productionStart: "2026-11-06", materials: [material] };
-  assert.equal(calculatedShortage(material), 75);
+  assert.equal(calculatedShortage(material), 0);
   assert.equal(materialSchedule(material, order.productionStart, "2026-10-30").ready, false);
   assert.equal(materialSchedule(material, order.productionStart, "2026-10-30").covered, true);
   assert.equal(orderHealth(order, "2026-10-30"), "On track");

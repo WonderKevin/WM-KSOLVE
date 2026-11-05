@@ -34,6 +34,11 @@ export function blankMaterial(): Material {
 }
 export function poKey(value: string) { return value.trim().toUpperCase().replace(/\s+/g, ""); }
 export function calculatedShortage(m: Material): number | null {
+  return m.required === null || m.available === null
+    ? null
+    : Math.max(0, Number((m.required - m.available - (m.incoming ?? 0)).toFixed(6)));
+}
+function onHandShortage(m: Material): number | null {
   return m.required === null || m.available === null ? null : Math.max(0, Number((m.required - m.available).toFixed(6)));
 }
 export function shortageDiscrepancy(m: Material) {
@@ -83,8 +88,8 @@ export function businessToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
 export function materialSchedule(m: Material, productionStart: string, today = businessToday()): { ready: boolean; covered: boolean; reason: string } {
-  const shortage = calculatedShortage(m), name = m.description || m.itemNumber || "Material";
-  if (shortage === 0) return { ready: true, covered: true, reason: "Available stock covers required quantity." };
+  const shortage = onHandShortage(m), name = m.description || m.itemNumber || "Material";
+  if (shortage === 0) return { ready: true, covered: true, reason: "Available stock covers the required quantity." };
   if (shortage === null) return { ready: false, covered: false, reason: `${name}: required or available quantity is unknown.` };
   if (m.incoming === null || m.incoming < shortage) return { ready: false, covered: false, reason: `${name}: ${quantityLabel(shortage, m.unit)} short in stock; incoming ${quantityLabel(m.incoming, m.unit)} does not cover it.` };
   if (!m.eta) return { ready: false, covered: false, reason: `${name}: incoming stock covers the shortage, but its ETA is to confirm.` };
@@ -100,7 +105,7 @@ export function orderRiskReasons(o: Order): string[] {
   for (const m of o.materials) {
     // Already-available materials do not depend on a later replenishment.
     // Unknown ETAs stay To confirm; only a known arrival after production flags risk.
-    if (calculatedShortage(m) !== 0 && m.eta && m.eta > o.productionStart) {
+    if (onHandShortage(m) !== 0 && m.eta && m.eta > o.productionStart) {
       reasons.push(`${m.description || m.itemNumber || "Material"}: ETA ${dateLabel(m.eta)} is after the production date ${dateLabel(o.productionStart)}.`);
     }
   }
