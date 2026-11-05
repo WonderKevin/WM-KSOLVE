@@ -22,7 +22,7 @@ test("authenticated storage, exact duplicates, atomic children, status-only patc
     const method = init?.method || "GET", headers = new Headers(init?.headers);
     const object = headers.get("Accept")?.includes("object+json");
     if (method === "GET") {
-      const rows = key?.startsWith("like.") ? [...records.values()] : records.has(key || "") ? [records.get(key || "")] : [];
+      const rows = key?.startsWith("like.") ? [...records.values()].filter(row => String(row.report_key).startsWith(key.slice(5).replace(/%$/, ""))) : records.has(key || "") ? [records.get(key || "")] : [];
       return json(object ? rows[0] || null : rows);
     }
     const body = JSON.parse(String(init?.body));
@@ -71,7 +71,11 @@ test("authenticated storage, exact duplicates, atomic children, status-only patc
     assert.equal(notes.status, 200); const notesResult = await notes.json();
     assert.equal(notesResult.saved.order.actionNotes, "Typed notes"); assert.equal(notesResult.saved.order.materials[0].status, "In transit");
     assert.equal((await PATCH(request("PATCH", { poNumber: order.poNumber, version: notesResult.saved.version, operation: "action-notes", actionNotes: 123 }))).status, 400);
-    const reloaded = await (await GET(request("GET"))).json(); assert.equal(reloaded.orders[0].order.materials[0].status, "In transit");
+    const missingDelete = await PATCH(request("PATCH", { poNumber: order.poNumber, version: notesResult.saved.version, operation: "delete-material", materialId: "missing" })); assert.equal(missingDelete.status, 400);
+    const deleted = await PATCH(request("PATCH", { poNumber: order.poNumber, version: notesResult.saved.version, operation: "delete-material", materialId: "m1" }));
+    assert.equal(deleted.status, 200); const deletedBody = await deleted.json(); assert.equal(deletedBody.saved.order.materials.length, 0); assert.equal(deletedBody.saved.order.actionNotes, "Typed notes");
+    assert.ok([...records.values()].some(row => String(row.report_key).startsWith("order-monitoring-backup:delete-material:")));
+    const reloaded = await (await GET(request("GET"))).json(); assert.equal(reloaded.orders.length, 1); assert.equal(reloaded.orders[0].order.materials.length, 0);
   } finally {
     globalThis.fetch = oldFetch;
     for (const [key, value] of [["NEXT_PUBLIC_SUPABASE_URL", previous.url], ["NEXT_PUBLIC_SUPABASE_ANON_KEY", previous.anon], ["SUPABASE_SERVICE_ROLE_KEY", previous.role]]) if (value === undefined) delete process.env[key!]; else process.env[key!] = value;

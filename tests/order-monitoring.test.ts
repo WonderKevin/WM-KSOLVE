@@ -164,3 +164,8 @@ test("importing PO-10077 material references uses CBF-Sell and appends the delay
   assert.equal(result.order.materials[0].eta, "2026-11-02");
   assert.equal(result.order.actionNotes, "PO-10077 was delayed, Delivery on 11/9.");
 });
+
+test("Supply PO imports references and explanatory footer rows do not become materials", () => {
+  const result = parseOrderWorkbook(workbook([["PO number", "PO-10139"], ["WM material", "Required", "Available - Reserved*", "Incoming*", "Shortage", "Supply PO", "ETA", "Status"], ["Biscoff Crumbs - ITM-10004", 171.89, 86.55, 198, 0, "PO-10101", "10/30/2026", "Delayed"], ["* Available - Reserved includes globally unreserved on-hand"], ["Source: Arctanis PO-10139 material coverage and warehouse availability"]]), "supply.xlsx")[0];
+  assert.deepEqual(result.errors, []); assert.equal(result.order.materials.length, 1); assert.equal(result.order.materials[0].supplierPo, "PO-10101");
+});

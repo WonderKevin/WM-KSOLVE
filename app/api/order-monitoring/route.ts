@@ -92,6 +92,11 @@ export async function PATCH(request: Request) {
     } else if (input.operation === "material-status") {
       if (!ORDER_STATUSES.includes(input.status) || typeof input.materialId !== "string" || !order.materials.some(m => m.id === input.materialId)) throw new HttpError(400, "Invalid material or material status.");
       order = { ...order, materials: order.materials.map(m => m.id === input.materialId ? { ...m, status: input.status } : m) };
+    } else if (input.operation === "delete-material") {
+      if (typeof input.materialId !== "string" || !order.materials.some(m => m.id === input.materialId)) throw new HttpError(400, "Material row no longer exists. Refresh and try again.");
+      const backup = await db.from("report_snapshots").insert({ report_key: "order-monitoring-backup:delete-material:" + key + ":" + input.version, payload: order, version: input.version, updated_at: new Date().toISOString(), updated_by: email });
+      if (backup.error && backup.error.code !== "23505") throw new HttpError(500, "Could not preserve the original record. Material was not deleted.");
+      order = { ...order, materials: order.materials.filter(m => m.id !== input.materialId) };
     } else if (input.operation === "action-notes") {
       if (typeof input.actionNotes !== "string" || input.actionNotes.length > 10000) throw new HttpError(400, "Next action notes must be text of at most 10,000 characters.");
       order = { ...order, actionNotes: input.actionNotes };

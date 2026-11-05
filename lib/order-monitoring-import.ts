@@ -1,4 +1,5 @@
 import { applyCbfSource } from "./order-monitoring-cbf.cjs";
+import { isWorkbookFooter } from "./order-monitoring-material-repair.cjs";
 import productReferences from "./order-monitoring-products.json";
 import * as XLSX from "xlsx";
 import { blankMaterial, blankOrder, validDate, type Order } from "./order-monitoring";
@@ -86,7 +87,7 @@ export function parseOrderWorkbook(workbook: XLSX.WorkBook, sourceFile: string):
     if (!order.product && productReference) order.product = `${productReference.itemNumber} · ${productReference.description}`;
     const headers = rows[headerIndex];
     const index = (names: string[]) => headers.findIndex(h => names.includes(key(h)));
-    const col = { description: index(["wmmaterial"]), required: index(["required"]), available: index(["availablereserved", "availableafterreservations", "available", "availableqty", "availablequantity", "availableminusreserved", "availablereservedqty", "availablereservedquantity"]), incoming: index(["incoming", "incomingqty", "incomingquantity", "incomingstock"]), shortage: index(["shortage"]), supplierPo: index(["po", "supplierpo"]), eta: index(["eta"]), status: index(["status"]), itemNumber: index(["itemnumber", "item", "sku"]), unit: index(["unit", "uom"]) };
+    const col = { description: index(["wmmaterial"]), required: index(["required"]), available: index(["availablereserved", "availableafterreservations", "available", "availableqty", "availablequantity", "availableminusreserved", "availablereservedqty", "availablereservedquantity"]), incoming: index(["incoming", "incomingqty", "incomingquantity", "incomingstock"]), shortage: index(["shortage"]), supplierPo: index(["po", "supplierpo", "supplypo"]), eta: index(["eta"]), status: index(["status"]), itemNumber: index(["itemnumber", "item", "sku"]), unit: index(["unit", "uom"]) };
     for (const [name, i] of Object.entries(col)) if (i < 0 && !["itemNumber", "unit"].includes(name)) errors.push(`Missing material column: ${name}.`);
     for (let r = headerIndex + 1; r < rows.length; r++) {
       const row = rows[r]; if (row.every(v => !text(v))) continue;
@@ -108,6 +109,7 @@ export function parseOrderWorkbook(workbook: XLSX.WorkBook, sourceFile: string):
       m.supplierPo = /^to\s*confirm$/i.test(text(row[col.supplierPo])) ? "" : text(row[col.supplierPo]); m.status = text(row[col.status]);
       const eta = parseExcelDate(row[col.eta], date1904); m.eta = eta.date;
       if (eta.error) errors.push(`Row ${r + 1}, ETA: ${eta.error}`);
+      if (isWorkbookFooter(m)) continue;
       order.materials.push(m);
     }
     results.push({ order: applyCbfSource(order).order, errors, warnings, sheet });
