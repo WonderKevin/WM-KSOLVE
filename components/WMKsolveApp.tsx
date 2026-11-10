@@ -205,6 +205,7 @@ export default function WMKsolveApp() {
   const [invoiceUploadSignal, setInvoiceUploadSignal] = useState(0);
   const [loggingOut, setLoggingOut] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const [hasAppMembership, setHasAppMembership] = useState(false);
   const [permissions, setPermissions] = useState<Permissions | null>(null);
 
   useEffect(() => {
@@ -233,6 +234,7 @@ export default function WMKsolveApp() {
 
       const isAdmin = email.toLowerCase() === "kevin@wondermonday.com";
 
+      setHasAppMembership(Boolean(permissionRow) || isAdmin);
       setPermissions(
         permissionRow || {
           email,
@@ -450,12 +452,10 @@ export default function WMKsolveApp() {
       });
     }
 
-    if (permissions.can_view_user_account || permissions.can_view_admin_automation || userEmail.toLowerCase() === "kevin@wondermonday.com") {
-      items.push({ label: "Order Monitoring", icon: ClipboardList, key: "order-monitoring" });
-    }
+    if (hasAppMembership) items.push({ label: "Order Monitoring", icon: ClipboardList, key: "order-monitoring" });
 
     return items;
-  }, [permissions, userEmail]);
+  }, [permissions, userEmail, hasAppMembership]);
 
   useEffect(() => {
     const activeGroup = sidebarItems.find((item) =>
@@ -501,8 +501,7 @@ export default function WMKsolveApp() {
   const renderContent = (key: string) => {
     switch (key) {
       case "order-monitoring":
-        return permissions?.can_view_user_account || permissions?.can_view_admin_automation || userEmail.toLowerCase() === "kevin@wondermonday.com"
-          ? <OrderMonitoringView /> : <HomeView />;
+        return hasAppMembership ? <OrderMonitoringView /> : <HomeView />;
       case "dashboard-kehe":
         return <KeheDashboardView />;
       case "dashboard-tony":

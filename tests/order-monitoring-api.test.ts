@@ -9,14 +9,15 @@ test("authenticated storage, exact duplicates, atomic children, status-only patc
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://monitoring.example.test";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "isolated-anon";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "isolated-role";
-  let allowed = false, simulateConcurrentChange = false;
+  let authValid = true, approved = true, simulateConcurrentChange = false;
   const records = new Map<string, Record<string, unknown>>();
   const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
   globalThis.fetch = async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     assert.equal(url.host, "monitoring.example.test", "Test must never contact production");
-    if (url.pathname.endsWith("/auth/v1/user")) return json({ id: "00000000-0000-4000-8000-000000000001", email: "qa@example.test", app_metadata: {}, user_metadata: {} });
-    if (url.pathname.endsWith("/rpc/has_app_permission")) return json(allowed);
+    if (url.pathname.endsWith("/auth/v1/user")) return !authValid ? json({ message: "Invalid token", code: "bad_jwt" }, 401) : json({ id: "00000000-0000-4000-8000-000000000001", email: "qa@example.test", app_metadata: {}, user_metadata: {} });
+    if (url.pathname.endsWith("/rpc/has_app_permission")) throw new Error("Order Monitoring must not require Admin permissions.");
+    if (url.pathname.endsWith("/user_permissions")) return json(approved ? [{ email: "qa@example.test" }] : []);
     assert.ok(url.pathname.endsWith("/report_snapshots"));
     const key = url.searchParams.get("report_key")?.replace(/^eq\./, "");
     const method = init?.method || "GET", headers = new Headers(init?.headers);
@@ -40,8 +41,14 @@ test("authenticated storage, exact duplicates, atomic children, status-only patc
   const request = (method: string, body?: unknown, token = true) => new Request("http://localhost/api/order-monitoring", { method, headers: { ...(token ? { Authorization: "Bearer isolated-session" } : {}), "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
   try {
     assert.equal((await GET(request("GET", undefined, false))).status, 401);
+    assert.equal((await POST(request("POST", {}, false))).status, 401);
+    assert.equal((await PATCH(request("PATCH", {}, false))).status, 401);
+    authValid = false;
+    assert.equal((await GET(request("GET"))).status, 401);
+    authValid = true;
+    approved = false;
     assert.equal((await GET(request("GET"))).status, 403);
-    allowed = true;
+    approved = true;
     assert.deepEqual(await (await GET(request("GET"))).json(), { orders: [] });
     const order = { ...blankOrder(), poNumber: "PO-QA-API", customer: "Synthetic QA", cases: 12, materials: [{ ...blankMaterial(), id: "m1", description: "QA material", status: "Ready" }], actions: [{ id: "a1", description: "QA action", owner: "", dueDate: "", completed: false }] };
     const created = await POST(request("POST", { order })); assert.equal(created.status, 201);

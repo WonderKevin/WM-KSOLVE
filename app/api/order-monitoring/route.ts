@@ -13,15 +13,16 @@ async function access(request: Request) {
   const { data, error } = await client.auth.getUser(token);
   if (error || !data.user) throw new HttpError(401, "Your session has expired. Please sign in again.");
   const email = data.user.email || "";
-  if (email.toLowerCase() !== "kevin@wondermonday.com") {
-    const checks = await Promise.all(["can_view_user_account", "can_view_admin_automation"].map(permission_name => client.rpc("has_app_permission", { permission_name })));
-    if (!checks.some(c => !c.error && c.data === true)) throw new HttpError(403, "Order Monitoring requires Admin access.");
-  }
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!serviceKey) throw new HttpError(503, "Order Monitoring storage is not configured. Contact your administrator.");
-  // The existing document store is accessed only after verified application permissions.
+  // The existing document store is accessed only after a verified authenticated application session.
   // Keeping each PO and its child rows together makes saves atomic without partial material/action writes.
   const db = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  if (email.toLowerCase() !== "kevin@wondermonday.com") {
+    const membership = await db.from("user_permissions").select("email").eq("email", email).maybeSingle();
+    if (membership.error) throw membership.error;
+    if (!membership.data) throw new HttpError(403, "Order Monitoring requires a WM application account.");
+  }
   return { db, email };
 }
 function storageKey(poNumber: string) { return PREFIX + encodeURIComponent(poKey(poNumber)); }
